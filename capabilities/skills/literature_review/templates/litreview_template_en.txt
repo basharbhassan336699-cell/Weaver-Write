@@ -1,0 +1,13 @@
+[Review Introduction]
+This review covers the following themes: {themes}
+
+[Theme 1: {theme name}]
+{presentation of relevant studies}
+Agreements: {...}
+Disagreements: {...}
+
+[Theme 2: {theme name}]
+{...}
+
+[Research Gap]
+{what prior studies did not address, and how the current research fills it}

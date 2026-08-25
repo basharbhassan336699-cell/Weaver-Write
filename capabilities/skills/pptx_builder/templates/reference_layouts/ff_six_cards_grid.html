@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Six icon cards grid</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&family=Inter:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors (extracted from Friends & Families deck) === */
+    --bg-dark:      #191A2E;  /* main slide background */
+    --bg-card:      #0F3460;  /* solid blue content card */
+    --bg-card-2:    #1B1F3B;  /* darker outlined card (slide 5 style) */
+    --accent-gold:  #E8A33D;  /* headings / subtitles */
+    --accent-red:   #E84566;  /* crimson rule / top bar / numbered badges */
+    --text-primary: #FFFFFF;
+    --text-body:    #E7E9F1;
+    --text-muted:   #B7BBD1;
+    --deco-maroon:  #4E243C;  /* large decorative circle */
+    --deco-brown:   #4F3D2C;  /* large decorative circle */
+    --deco-navy:    #223257;  /* large decorative circle (overlap) */
+
+    --font-heading: 'Poppins', sans-serif;
+    --font-body:    'Inter', sans-serif;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; font-family:var(--font-body); background:var(--bg-dark); }
+  .slide{ position:relative; width:1280px; height:720px; background:var(--bg-dark); overflow:hidden; text-align:left; color:var(--text-body); }
+
+  .top-bar{ position:absolute; top:0; left:0; right:0; height:6px; background:var(--accent-red); }
+
+  .page-title{ position:absolute; top:44px; left:64px; font-family:var(--font-heading); font-weight:800; font-size:44px; color:var(--text-primary); }
+  .page-subtitle{ position:absolute; top:108px; left:64px; font-family:var(--font-body); font-style:italic; font-weight:400; font-size:18px; color:var(--accent-gold); }
+  .title-rule{ position:absolute; top:150px; left:64px; width:420px; height:3px; background:var(--accent-red); }
+
+  ul.plain{ list-style:none; }
+
+  .grid6{ position:absolute; top:210px; left:64px; right:64px; bottom:40px; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(2,1fr); gap:20px; }
+  .icard{ background:var(--bg-card); padding:20px 24px; }
+  .icard .emoji{ font-size:28px; margin-bottom:12px; }
+  .icard h3{ font-family:var(--font-heading); font-weight:700; font-size:17px; color:var(--accent-gold); margin-bottom:8px; }
+  .icard p{ font-size:13.5px; color:var(--text-body); line-height:1.6; }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="top-bar"></div>
+    <h1 class="page-title">{{TITLE}}</h1>
+    <div class="page-subtitle">{{SUBTITLE}}</div>
+
+    <div class="grid6">
+      <div class="icard"><div class="emoji">{{ICON_1}}</div><h3>{{CARD_TITLE_1}}</h3><p>{{CONTENT_1}}</p></div>
+      <div class="icard"><div class="emoji">{{ICON_2}}</div><h3>{{CARD_TITLE_2}}</h3><p>{{CONTENT_2}}</p></div>
+      <div class="icard"><div class="emoji">{{ICON_3}}</div><h3>{{CARD_TITLE_3}}</h3><p>{{CONTENT_3}}</p></div>
+      <div class="icard"><div class="emoji">{{ICON_4}}</div><h3>{{CARD_TITLE_4}}</h3><p>{{CONTENT_4}}</p></div>
+      <div class="icard"><div class="emoji">{{ICON_5}}</div><h3>{{CARD_TITLE_5}}</h3><p>{{CONTENT_5}}</p></div>
+      <div class="icard"><div class="emoji">{{ICON_6}}</div><h3>{{CARD_TITLE_6}}</h3><p>{{CONTENT_6}}</p></div>
+    </div>
+  </div>
+</body>
+</html>

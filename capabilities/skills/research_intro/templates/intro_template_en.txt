@@ -1,0 +1,17 @@
+[Background]
+{a general lead-in placing the reader in the topic context, with citations}
+
+[Significance]
+{why this topic is worth studying — theoretical and practical importance}
+
+[Research Problem]
+{the knowledge gap or central question the research addresses}
+
+[Objectives]
+This research aims to:
+1. {first objective}
+2. {second objective}
+3. {third objective}
+
+[Brief Methodology]
+{a short pointer to the approach used}

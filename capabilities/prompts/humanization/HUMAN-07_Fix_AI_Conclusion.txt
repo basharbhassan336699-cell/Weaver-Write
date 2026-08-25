@@ -1,0 +1,99 @@
+================================================================
+PROMPT: HUMAN-07 — Fix the AI Conclusion (Targeted Repair)
+DIFFICULTY: 🟢 SIMPLE
+USE CASE: When the rest of the text is acceptable but the conclusion
+          is a dead giveaway of AI authorship
+TARGET: The single most consistently detectable AI pattern
+BEST MODELS: Any model
+================================================================
+
+Read the FINAL PARAGRAPH ONLY of the text below.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — CLASSIFY THE CURRENT CONCLUSION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Identify which type it is:
+
+❌ TYPE AI-A (Neat Summary):
+Begins with: "In conclusion / To summarize / In summary / Overall..."
+Then repeats the main points in different words.
+→ VERDICT: Replace entirely.
+
+❌ TYPE AI-B (Importance Statement):
+Contains: "This underscores the importance of..." / "This highlights the need for..."
+/ "This serves as a testament to..." / "The implications are far-reaching."
+/ "This paves the way for..." / "The possibilities are endless."
+→ VERDICT: Replace entirely.
+
+❌ TYPE AI-C (Future Optimism):
+Ends with a vision of the future / "continued research" / "promising potential"
+/ "as we move forward" / "this will undoubtedly..."
+→ VERDICT: Replace entirely.
+
+✓ TYPE HUMAN-D (Open Question):
+Ends with a genuine question the text did not fully answer.
+→ VERDICT: Keep. Say "CONCLUSION ACCEPTABLE."
+
+✓ TYPE HUMAN-E (Personal Stance):
+Author states their own opinion, disagreement, or lingering doubt.
+→ VERDICT: Keep. Say "CONCLUSION ACCEPTABLE."
+
+✓ TYPE HUMAN-F (Unexpected Observation):
+Ends with something tangential, complicating, or surprising.
+→ VERDICT: Keep. Say "CONCLUSION ACCEPTABLE."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — WRITE THE REPLACEMENT (only if TYPE AI-A, AI-B, or AI-C)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Write a new final paragraph using ONE of these approaches:
+
+APPROACH 1 — THE UNANSWERED QUESTION:
+End with a specific question that the text raised but did not resolve.
+Not a generic "further research is needed" — a real, specific question.
+Example: "What remains less clear is whether this pattern holds
+when the population is not self-selected — a question the current
+data cannot answer."
+
+APPROACH 2 — THE COMPLICATING DETAIL:
+End with one specific fact or observation that makes the main
+argument slightly more complicated or conditional.
+Example: "This assumes, of course, that the baseline measurements
+are accurate — an assumption that at least one 2023 study has
+seriously questioned."
+
+APPROACH 3 — THE PERSONAL REFLECTION:
+End with what the author is left thinking about, not what was concluded.
+First-person is acceptable here.
+Example: "What I find most striking, having worked through this
+material, is not what the evidence confirms but what it still refuses
+to explain."
+
+APPROACH 4 — THE INCOMPLETE THOUGHT:
+End on a note that suggests more could be said — because there always is.
+Example: "There is, naturally, much more to say about the mechanisms
+involved. But that is, perhaps, a question for another time."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OUTPUT FORMAT:
+
+[CURRENT CONCLUSION TYPE]: AI-A / AI-B / AI-C / HUMAN-D / HUMAN-E / HUMAN-F
+
+[ACTION]: Replace / Keep
+
+[NEW CONCLUSION]: (if replacing)
+[full text of the new final paragraph only]
+
+[REASON FOR APPROACH CHOSEN]: one sentence
+
+FULL TEXT TO ANALYZE:
+{{TEXT}}
+
+================================================================
+WHY THIS MATTERS:
+Conclusion analysis alone can correctly identify AI-generated text
+with approximately 80% accuracy. This is because AI models are
+explicitly trained (via RLHF) to produce neat, helpful summaries —
+making the conclusion the most consistently robotic part of any
+AI-generated document.
+================================================================

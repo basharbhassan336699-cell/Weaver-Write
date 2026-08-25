@@ -1,0 +1,119 @@
+================================================================
+PROMPT: HUMAN-04 — Targeted AI Vocabulary Replacement
+DIFFICULTY: 🟡 INTERMEDIATE
+USE CASE: Texts where structure is good but vocabulary triggers detection
+TARGET: Eliminate all statistically flagged AI-marker words
+SOURCE: COLING 2025 (21 focal words) + ICLR 2024 + GPTZero AI Vocabulary
+BEST MODELS: Any model
+================================================================
+
+Your task: Find and replace every AI-signature word/phrase in the text below.
+Do NOT change sentence structure. Do NOT add or remove ideas.
+Replace vocabulary ONLY.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MANDATORY REPLACEMENT DICTIONARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TIER 1 — HIGHEST RISK (COLING 2025 focal words, strongest AI signals):
+delve / delves / delving        → examine / explore / look into / dig into
+showcase / showcasing           → show / present / display / highlight
+underscore / underscores        → show / stress / confirm / point out
+intricate                       → detailed / complex / complicated
+realm                           → area / field / topic / domain
+groundbreaking                  → new / original / novel / first-of-its-kind
+advancements                    → progress / improvements / developments
+aligns / align                  → matches / fits / agrees with / corresponds to
+commendable                     → good / praiseworthy / well done
+meticulous / meticulously       → careful / thorough / precise / closely
+
+TIER 2 — HIGH RISK (overused across all major LLMs):
+robust                          → strong / solid / reliable / sturdy
+seamless / seamlessly           → smooth / effortless / uninterrupted
+transformative                  → significant / major / life-changing
+pivotal                         → key / critical / decisive / turning-point
+crucial                         → key / essential / vital / necessary
+innovative                      → new / fresh / creative / original
+unprecedented                   → unmatched / first-ever / never-before-seen
+vibrant                         → lively / active / energetic / colorful
+dynamic                         → changing / fast-moving / active / shifting
+holistic                        → complete / whole / overall / full
+comprehensive                   → complete / full / thorough / wide-ranging
+nuanced                         → subtle / complex / layered / detailed
+multifaceted                    → complex / many-sided / varied
+
+TIER 3 — POWER VERBS (business-speak, AI favorites):
+leverage                        → use / apply / employ / draw on
+harness                         → use / apply / tap into
+navigate                        → manage / handle / deal with / work through
+foster                          → encourage / support / help grow / build
+facilitate                      → help / allow / enable / make easier
+enhance                         → improve / boost / strengthen / upgrade
+optimize / optimise             → improve / refine / fine-tune / adjust
+streamline                      → simplify / speed up / reduce / cut steps
+empower                         → give / allow / enable / equip
+elevate                         → improve / raise / lift / boost
+unlock                          → enable / open / make available / release
+unpack                          → explain / break down / analyze
+illuminate                      → show / clarify / explain / reveal
+bolster                         → strengthen / support / reinforce / increase
+utilize / utilise               → use / apply / employ
+revolutionize / revolutionise   → transform / overhaul / reshape / change
+
+TIER 4 — TRANSITIONS (AI overuses these at paragraph starts):
+Moreover                        → Also / And / Besides / [delete it]
+Furthermore                     → Also / Besides / [delete it]
+Additionally                    → Also / And / [delete it]
+Notably                         → [state the notable fact directly]
+Importantly                     → [state the important point first]
+Consequently                    → So / As a result / Therefore
+Undoubtedly                     → Clearly / Obviously / Certainly
+Thereby                         → So / Which / As a result
+
+TIER 5 — FULL PHRASES (delete or simplify entirely):
+"It is important to note that"      → [delete, keep the point]
+"It's important to note that"       → [delete, keep the point]
+"It is worth noting that"           → [delete or: "Note that"]
+"It should be noted that"           → [delete or rewrite directly]
+"In today's fast-paced world"       → Today / Currently / [delete]
+"In an ever-evolving landscape"     → As things change / Today / [delete]
+"In conclusion"                     → To summarize / Briefly / [delete]
+"At the end of the day"             → Ultimately / In the end / [delete]
+"The bottom line is"                → Simply put / In short / [delete]
+"The key takeaway is"               → The main point is / [delete]
+"Let's delve into"                  → Let's look at / Here is / [start directly]
+"It's not just X; it's Y"          → [rewrite as single direct claim]
+"Not only X, but also Y"            → [list benefits plainly]
+"A wide range of"                   → [give a number or list the categories]
+"In the realm of"                   → In / Within / Among
+"In the world of"                   → In / Within / In the field of
+tapestry                            → mix / combination / variety / range
+landscape (metaphorical)            → market / field / industry / environment
+paradigm shift                      → major change / fundamental shift
+game-changer                        → major improvement / key development
+catalyst                            → trigger / spark / driver / cause
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROTECTED — DO NOT CHANGE:
+• Citations and references (APA, MLA, Chicago)
+• Technical/scientific terminology specific to the subject matter
+• Proper nouns (names, places, organizations)
+• Dates, statistics, quoted material
+• Domain-specific jargon that has no simpler equivalent
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OUTPUT FORMAT:
+
+---WORDS REPLACED---
+List: [original word] → [replacement used] (X occurrences)
+
+---REWRITTEN TEXT---
+[Full text with all replacements applied]
+
+TEXT TO PROCESS:
+{{TEXT}}
+
+================================================================
+IMPORTANT: Choose the replacement that best fits the specific context.
+The first option in each list is not always the best — read the sentence.
+================================================================

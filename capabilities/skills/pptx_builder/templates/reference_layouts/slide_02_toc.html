@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>محتويات العرض</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors (extracted) === */
+    --bg-dark:        #0a0523;  /* main slide background (dark navy/black) */
+    --bg-primary:     #331263;  /* solid purple panel / divider slides */
+    --bg-card:        #140a33;  /* card fill, slightly lighter than bg-dark */
+    --bg-pill:        #4a1a8a;  /* small label pill fill */
+    --accent-gold:    #d9ac3d;  /* gold rule / border / accent text */
+    --accent-gold-2:  #f2c744;  /* brighter gold for numbers/badges */
+    --accent-purple:  #8b5cf6;  /* bright purple card border */
+    --accent-purple-2:#b28ee0;  /* light purple text / italic tagline */
+    --text-primary:   #ffffff;
+    --text-body:      #eae6f2;
+    --text-muted:     #cfc7e0;
+    --border-gold:    rgba(217,172,61,0.55);
+    --border-purple:  rgba(139,92,246,0.6);
+
+    --font-heading: 'Cairo', 'Tajawal', sans-serif;
+    --font-body:    'Tajawal', 'Cairo', sans-serif;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; font-family:var(--font-body); background:var(--bg-dark); }
+  .slide{ position:relative; width:1280px; height:720px; background:var(--bg-dark); overflow:hidden; direction:rtl; text-align:right; }
+
+  /* breadcrumb / label pill, top-right */
+  .crumb-pill{
+    position:absolute; top:32px; right:56px;
+    background:var(--bg-pill); border:1.5px solid var(--accent-gold);
+    border-radius:24px; padding:10px 26px;
+    font-size:14px; color:var(--accent-gold-2); font-family:var(--font-heading);
+  }
+
+  /* page heading + gold underline */
+  .page-title{
+    position:absolute; top:78px; right:56px; left:56px;
+    font-family:var(--font-heading); font-weight:800; font-size:38px;
+    color:var(--text-primary);
+  }
+  .page-rule{
+    position:absolute; top:150px; right:40px; left:40px;
+    height:2px; background:var(--accent-gold);
+  }
+
+  .page-num{
+    position:absolute; bottom:16px; right:26px;
+    font-family:var(--font-heading); font-weight:700; font-size:15px;
+    color:var(--accent-gold-2);
+  }
+
+  ul.bullets{ list-style:none; }
+  ul.bullets li{ position:relative; padding-right:26px; margin-bottom:14px; font-size:15px; color:var(--text-body); line-height:1.6; }
+  ul.bullets li::before{ content:""; position:absolute; right:0; top:6px; width:11px; height:11px; border-radius:50%; background:var(--accent-gold-2); }
+  ul.bullets.purple li::before{ background:var(--accent-purple-2); }
+
+  .card{ background:var(--bg-card); border:1.5px solid var(--border-gold); border-radius:14px; }
+  .card.purple{ border-color:var(--border-purple); }
+
+  .cards-grid{
+    position:absolute; top:190px; right:56px; left:56px; bottom:60px;
+    display:grid; grid-template-columns:1fr 1fr; grid-template-rows:repeat(3,1fr);
+    gap:22px 30px;
+  }
+  .toc-card{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 28px;
+  }
+  .toc-card .label{ font-size:17px; color:var(--text-primary); font-family:var(--font-heading); font-weight:600; text-align:center; flex:1; }
+  .toc-card .icon{ width:34px; height:34px; display:flex; align-items:center; justify-content:center; color:var(--text-primary); }
+  .toc-card .num-badge{
+    width:52px; height:52px; border-radius:50%; border:2.5px solid var(--accent-gold);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-heading); font-weight:700; font-size:18px; color:var(--text-primary);
+    flex-shrink:0;
+  }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="crumb-pill">{{BREADCRUMB}}</div>
+    <div class="page-title" style="top:40px;">{{TITLE}}</div>
+    <div class="page-rule" style="top:112px;"></div>
+
+    <div class="cards-grid">
+      <div class="card toc-card"><div class="num-badge">{{ITEM_NUM_1}}</div><div class="label">{{ITEM_1}}</div><div class="icon">{{ICON_1}}</div></div>
+      <div class="card toc-card"><div class="num-badge">{{ITEM_NUM_2}}</div><div class="label">{{ITEM_2}}</div><div class="icon">{{ICON_2}}</div></div>
+      <div class="card toc-card"><div class="num-badge">{{ITEM_NUM_3}}</div><div class="label">{{ITEM_3}}</div><div class="icon">{{ICON_3}}</div></div>
+      <div class="card toc-card"><div class="num-badge">{{ITEM_NUM_4}}</div><div class="label">{{ITEM_4}}</div><div class="icon">{{ICON_4}}</div></div>
+      <div class="card toc-card"><div class="num-badge">{{ITEM_NUM_5}}</div><div class="label">{{ITEM_5}}</div><div class="icon">{{ICON_5}}</div></div>
+      <div class="card toc-card"><div class="num-badge">{{ITEM_NUM_6}}</div><div class="label">{{ITEM_6}}</div><div class="icon">{{ICON_6}}</div></div>
+    </div>
+
+    <div class="page-num">{{PAGE_NUM}}</div>
+  </div>
+</body>
+</html>

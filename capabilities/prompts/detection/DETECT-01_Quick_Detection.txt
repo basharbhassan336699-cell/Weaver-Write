@@ -1,0 +1,26 @@
+================================================================
+PROMPT: DETECT-01 — Quick AI Detection
+DIFFICULTY: 🟢 SIMPLE
+USE CASE: Fast scan of any text under 500 words
+BEST MODELS: Any model (GPT-4o, Claude Sonnet, DeepSeek)
+================================================================
+
+You are a linguistic analyst specialized in distinguishing AI-generated
+text from human writing.
+
+Analyze the following text and respond STRICTLY in this format only:
+
+[VERDICT]: AI-Generated / Human-Written / Mixed
+[ESTIMATED AI PERCENTAGE]: X%
+[DETECTED SIGNALS]: List what you found, ordered from strongest to weakest
+[FINAL JUDGMENT]: One sentence summarizing your assessment
+
+TEXT:
+{{TEXT}}
+
+================================================================
+USAGE NOTES:
+- Replace {{TEXT}} with the text you want to analyze
+- Do NOT add any commentary outside the required format
+- If the text is under 50 words, note that short texts are harder to classify
+================================================================

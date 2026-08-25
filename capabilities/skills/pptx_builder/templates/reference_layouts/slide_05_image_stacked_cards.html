@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>صورة دائرية + بطاقات مكدسة</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors (extracted) === */
+    --bg-dark:        #0a0523;  /* main slide background (dark navy/black) */
+    --bg-primary:     #331263;  /* solid purple panel / divider slides */
+    --bg-card:        #140a33;  /* card fill, slightly lighter than bg-dark */
+    --bg-pill:        #4a1a8a;  /* small label pill fill */
+    --accent-gold:    #d9ac3d;  /* gold rule / border / accent text */
+    --accent-gold-2:  #f2c744;  /* brighter gold for numbers/badges */
+    --accent-purple:  #8b5cf6;  /* bright purple card border */
+    --accent-purple-2:#b28ee0;  /* light purple text / italic tagline */
+    --text-primary:   #ffffff;
+    --text-body:      #eae6f2;
+    --text-muted:     #cfc7e0;
+    --border-gold:    rgba(217,172,61,0.55);
+    --border-purple:  rgba(139,92,246,0.6);
+
+    --font-heading: 'Cairo', 'Tajawal', sans-serif;
+    --font-body:    'Tajawal', 'Cairo', sans-serif;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; font-family:var(--font-body); background:var(--bg-dark); }
+  .slide{ position:relative; width:1280px; height:720px; background:var(--bg-dark); overflow:hidden; direction:rtl; text-align:right; }
+
+  /* breadcrumb / label pill, top-right */
+  .crumb-pill{
+    position:absolute; top:32px; right:56px;
+    background:var(--bg-pill); border:1.5px solid var(--accent-gold);
+    border-radius:24px; padding:10px 26px;
+    font-size:14px; color:var(--accent-gold-2); font-family:var(--font-heading);
+  }
+
+  /* page heading + gold underline */
+  .page-title{
+    position:absolute; top:78px; right:56px; left:56px;
+    font-family:var(--font-heading); font-weight:800; font-size:38px;
+    color:var(--text-primary);
+  }
+  .page-rule{
+    position:absolute; top:150px; right:40px; left:40px;
+    height:2px; background:var(--accent-gold);
+  }
+
+  .page-num{
+    position:absolute; bottom:16px; right:26px;
+    font-family:var(--font-heading); font-weight:700; font-size:15px;
+    color:var(--accent-gold-2);
+  }
+
+  ul.bullets{ list-style:none; }
+  ul.bullets li{ position:relative; padding-right:26px; margin-bottom:14px; font-size:15px; color:var(--text-body); line-height:1.6; }
+  ul.bullets li::before{ content:""; position:absolute; right:0; top:6px; width:11px; height:11px; border-radius:50%; background:var(--accent-gold-2); }
+  ul.bullets.purple li::before{ background:var(--accent-purple-2); }
+
+  .card{ background:var(--bg-card); border:1.5px solid var(--border-gold); border-radius:14px; }
+  .card.purple{ border-color:var(--border-purple); }
+
+  .layout{ position:absolute; top:180px; right:40px; left:40px; bottom:30px; display:grid; grid-template-columns:1fr 1.6fr; gap:30px; }
+  .circle-img-lg{
+    width:100%; height:100%; border-radius:50%; border:4px solid var(--accent-gold);
+    overflow:hidden; display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(135deg,#1a1440,#0a0523); color:var(--text-muted); font-size:14px; text-align:center;
+    aspect-ratio:1/1; margin:auto;
+  }
+  .stack{ display:flex; flex-direction:column; gap:14px; }
+  .stat-line-card{ flex:1; display:flex; align-items:center; gap:18px; padding:0 26px; }
+  .stat-line-card .ic{ width:36px; height:36px; color:var(--text-primary); flex-shrink:0; display:flex; align-items:center; justify-content:center; }
+  .stat-line-card .txt h4{ font-family:var(--font-heading); font-weight:700; font-size:17px; color:var(--accent-gold); margin-bottom:4px; }
+  .stat-line-card .txt p{ font-size:14px; color:var(--text-body); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="crumb-pill">{{BREADCRUMB}}</div>
+    <div class="page-title">{{TITLE}}</div>
+    <div class="page-rule"></div>
+
+    <div class="layout">
+      <div class="stack">
+        <div class="card stat-line-card"><div class="ic">{{ICON_1}}</div><div class="txt"><h4>{{SUBTITLE_1}}</h4><p>{{CONTENT_1}}</p></div></div>
+        <div class="card stat-line-card"><div class="ic">{{ICON_2}}</div><div class="txt"><h4>{{SUBTITLE_2}}</h4><p>{{CONTENT_2}}</p></div></div>
+        <div class="card stat-line-card"><div class="ic">{{ICON_3}}</div><div class="txt"><h4>{{SUBTITLE_3}}</h4><p>{{CONTENT_3}}</p></div></div>
+        <div class="card stat-line-card"><div class="ic">{{ICON_4}}</div><div class="txt"><h4>{{SUBTITLE_4}}</h4><p>{{CONTENT_4}}</p></div></div>
+      </div>
+      <div class="circle-img-lg">{{IMAGE_1}}</div>
+    </div>
+
+    <div class="page-num">{{PAGE_NUM}}</div>
+  </div>
+</body>
+</html>

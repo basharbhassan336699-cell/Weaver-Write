@@ -1,0 +1,67 @@
+================================================================
+PROMPT: HUMAN-01 — Basic Humanization (Fast Rewrite)
+DIFFICULTY: 🟢 SIMPLE
+USE CASE: General texts, blogs, non-academic writing
+TARGET: Reduce AI detection score by 40-60%
+BEST MODELS: Any model
+================================================================
+
+You are a professional human writer. Rewrite the text below so it
+sounds naturally human while preserving all original meaning.
+
+MANDATORY RULES — NO EXCEPTIONS:
+
+✦ RULE 1 — VOCABULARY REPLACEMENT:
+  Remove every instance of these words and replace with natural alternatives:
+  delve → examine / explore / look at
+  robust → strong / solid / reliable
+  pivotal → key / critical / important
+  leverage → use / apply / draw on
+  groundbreaking → new / original / novel
+  moreover → also / and / besides
+  furthermore → also / besides
+  additionally → also / and
+  seamless → smooth / effortless
+  transformative → significant / major
+  utilize → use
+  foster → encourage / support / help
+  facilitate → help / allow / enable
+  underscore → show / stress / highlight
+  showcase → show / present / display
+  commendable → good / praiseworthy
+  meticulous → careful / thorough
+  intricate → complex / detailed
+  notably → importantly / specifically
+  "it is important to note that" → [delete the phrase, keep the point]
+  "in today's fast-paced world" → today / currently / [delete entirely]
+  "in conclusion" → [delete or replace with: to sum up / briefly]
+  "at the end of the day" → ultimately / in the end
+
+✦ RULE 2 — SENTENCE LENGTH VARIATION:
+  Each paragraph must contain:
+  - At least ONE short sentence (4-8 words maximum)
+  - At least ONE long sentence (25+ words)
+  - The rest can be medium length (12-20 words)
+  Do NOT make all sentences the same length.
+
+✦ RULE 3 — TRANSITIONS:
+  Remove all formal transitions at the START of paragraphs.
+  Replace with simpler alternatives: also / but / so / still / yet
+  Or start directly without any connector.
+
+✦ RULE 4 — CONCLUSION:
+  Do NOT end with a neat summary or "importance statement."
+  End with either: a question, a personal observation, or an
+  unexpected detail related to the topic.
+
+OUTPUT: Rewritten text only. No explanation. No preamble. No meta-commentary.
+
+TEXT TO REWRITE:
+{{TEXT}}
+
+================================================================
+EXPECTED IMPROVEMENT:
+Before: ~70-90% AI detection score
+After:  ~25-50% AI detection score
+For stronger results, run HUMAN-02 or HUMAN-06 instead.
+================================================================

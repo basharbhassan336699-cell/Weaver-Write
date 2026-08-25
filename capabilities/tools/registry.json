@@ -1,0 +1,406 @@
+{
+  "_description": "Tool registry for Weaver Write — each tool has a unified run() interface",
+  "_note": "The system reads this registry and matches triggers against the task, exactly as Claude reads its tool descriptions. Triggers are bilingual (AR+EN).",
+  "tools": [
+    {
+      "name": "academic_search",
+      "description": "Academic RAG search with page-accurate citations via PaperQA2. Fetches studies from Semantic Scholar/CrossRef/OpenAlex/arXiv and answers with (Author, Year, p. X) citations.",
+      "triggers": [
+        "بحث علمي",
+        "مراجع أكاديمية",
+        "دراسات سابقة",
+        "استشهاد",
+        "توثيق",
+        "صفحة",
+        "literature review",
+        "academic search",
+        "references",
+        "citation",
+        "arXiv",
+        "DOI",
+        "Semantic Scholar",
+        "page",
+        "بحث",
+        "بحثاً",
+        "ابحث",
+        "research",
+        "study",
+        "أبحاث"
+      ],
+      "layers": [
+        4,
+        7
+      ],
+      "module": "capabilities.tools.tool_academic_search"
+    },
+    {
+      "name": "web_extract",
+      "description": "Clean web page text extraction via Trafilatura/UniWeb. Strips ads and menus, returns the article text only.",
+      "triggers": [
+        "استخرج من موقع",
+        "محتوى صفحة",
+        "مقال من الإنترنت",
+        "رابط",
+        "web scraping",
+        "web extract",
+        "URL",
+        "article from web"
+      ],
+      "layers": [
+        2,
+        4
+      ],
+      "module": "capabilities.tools.tool_web_extract"
+    },
+    {
+      "name": "doc_read",
+      "description": "Read and extract text from PDF/DOCX/image files with page numbers, plus OCR for scanned files via UniDoc/Tesseract.",
+      "triggers": [
+        "اقرأ ملف",
+        "استخرج نص",
+        "ملف ممسوح",
+        "صورة نص",
+        "read file",
+        "extract text",
+        "PDF",
+        "OCR",
+        "scanned"
+      ],
+      "layers": [
+        2
+      ],
+      "module": "capabilities.tools.tool_doc_read"
+    },
+    {
+      "name": "credibility_check",
+      "description": "Assess academic source credibility via PaperQA2 clients: journal quality, retraction status, author metadata.",
+      "triggers": [
+        "مصداقية",
+        "جودة المصدر",
+        "مجلة محكمة",
+        "تراجع",
+        "credibility",
+        "source quality",
+        "peer reviewed",
+        "retraction"
+      ],
+      "layers": [
+        5
+      ],
+      "module": "capabilities.tools.tool_credibility_check"
+    },
+    {
+      "name": "memory_store",
+      "description": "Store and retrieve task references in isolated memory via UniMemory with truth-check.",
+      "triggers": [
+        "احفظ",
+        "استرجع",
+        "ذاكرة",
+        "store",
+        "retrieve",
+        "memory",
+        "context"
+      ],
+      "layers": [
+        0,
+        4,
+        7
+      ],
+      "module": "capabilities.tools.tool_memory_store"
+    },
+    {
+      "name": "doc_export",
+      "description": "Generate the final file as DOCX/PPTX/XLSX/PDF with Arabic RTL support and citations.",
+      "triggers": [
+        "أخرج",
+        "ولّد ملف",
+        "تصدير",
+        "export",
+        "generate file",
+        "DOCX",
+        "PPTX",
+        "XLSX",
+        "PDF"
+      ],
+      "layers": [
+        8
+      ],
+      "module": "capabilities.tools.tool_doc_export"
+    },
+    {
+      "name": "word",
+      "description": "Build or read Word (.docx) files with RTL support. Build via docx/python-docx, read via markitdown/pandoc/mammoth.",
+      "triggers": [
+        "Word",
+        "DOCX",
+        "مستند وورد",
+        "ملف Word",
+        "اقرأ وورد",
+        "word document",
+        "read docx",
+        "build docx",
+        "معادلة",
+        "صيغة رياضية",
+        "equation",
+        "formula",
+        "math",
+        "بحث",
+        "تقرير",
+        "مقال",
+        "وثيقة",
+        "اكتب",
+        "report",
+        "essay",
+        "write"
+      ],
+      "layers": [
+        8
+      ],
+      "module": "capabilities.tools.tool_word"
+    },
+    {
+      "name": "powerpoint",
+      "description": "Build or read PowerPoint (.pptx) files. Build via pptxgenjs/python-pptx, read via markitdown.",
+      "triggers": [
+        "PowerPoint",
+        "PPTX",
+        "عرض تقديمي",
+        "شرائح",
+        "بوربوينت",
+        "presentation",
+        "slides",
+        "read pptx",
+        "build slides"
+      ],
+      "layers": [
+        8
+      ],
+      "module": "capabilities.tools.tool_powerpoint"
+    },
+    {
+      "name": "excel",
+      "description": "Build, read, or edit Excel (.xlsx) files with formulas and formatting via openpyxl/pandas.",
+      "triggers": [
+        "Excel",
+        "XLSX",
+        "جدول بيانات",
+        "شيت",
+        "صيغ",
+        "spreadsheet",
+        "formulas",
+        "read excel",
+        "build excel",
+        "إكسل",
+        "بيانات",
+        "حسابات"
+      ],
+      "layers": [
+        8
+      ],
+      "module": "capabilities.tools.tool_excel"
+    },
+    {
+      "name": "pdf",
+      "description": "Read PDF text/tables, OCR scanned PDFs (no GPU), or build/merge PDFs. Via pdfplumber/pdf2image/pytesseract/pypdf.",
+      "triggers": [
+        "PDF",
+        "ملف PDF",
+        "جداول PDF",
+        "ملف ممسوح",
+        "OCR",
+        "pdf tables",
+        "scanned pdf",
+        "read pdf",
+        "merge pdf"
+      ],
+      "layers": [
+        2,
+        8
+      ],
+      "module": "capabilities.tools.tool_pdf"
+    },
+    {
+      "name": "web_search",
+      "description": "Search the web via a SearXNG meta-search instance; returns ranked results from many engines. Discovers sources (vs web_extract which reads one URL).",
+      "triggers": [
+        "ابحث في الإنترنت",
+        "بحث ويب",
+        "ابحث عن",
+        "مصادر عن",
+        "web search",
+        "search the web",
+        "find sources",
+        "look up"
+      ],
+      "layers": [
+        4
+      ],
+      "module": "capabilities.tools.tool_web_search"
+    },
+    {
+      "name": "diagram",
+      "description": "Render a diagram (flowchart, sequence, gantt, ER, mindmap) from Mermaid syntax to SVG/PNG.",
+      "triggers": [
+        "رسم بياني",
+        "مخطط",
+        "فلوشارت",
+        "رسم توضيحي",
+        "مخطط انسيابي",
+        "diagram",
+        "flowchart",
+        "mermaid",
+        "chart",
+        "sequence diagram"
+      ],
+      "layers": [
+        6,
+        8
+      ],
+      "module": "capabilities.tools.tool_diagram"
+    },
+    {
+      "name": "mcp_connector",
+      "description": "Access bundled MCP servers: filesystem (sandboxed files), git (versioning), time (timezone timestamps).",
+      "triggers": [
+        "ملفات المهمة",
+        "نظام الملفات",
+        "git",
+        "إصدارات",
+        "الوقت",
+        "توقيت",
+        "filesystem",
+        "version control",
+        "commit",
+        "time",
+        "timestamp"
+      ],
+      "layers": [
+        0,
+        1,
+        8
+      ],
+      "module": "capabilities.tools.tool_mcp_connector"
+    },
+    {
+      "name": "csv",
+      "description": "Read, write, and clean CSV/TSV data files for research datasets and tables.",
+      "triggers": [
+        "CSV",
+        "TSV",
+        "بيانات جدولية",
+        "ملف بيانات",
+        "قراءة CSV",
+        "csv file",
+        "tabular data",
+        "dataset",
+        "parse csv"
+      ],
+      "layers": [
+        2,
+        8
+      ],
+      "module": "capabilities.tools.tool_csv"
+    },
+    {
+      "name": "calendar",
+      "description": "Create or read iCalendar (.ics) files for research timelines, deadlines, and milestones.",
+      "triggers": [
+        "تقويم",
+        "موعد",
+        "جدول زمني",
+        "تسليم",
+        "ملف ics",
+        "مواعيد",
+        "calendar",
+        "deadline",
+        "schedule",
+        "ics file",
+        "milestone",
+        "event"
+      ],
+      "layers": [
+        8
+      ],
+      "module": "capabilities.tools.tool_calendar"
+    },
+    {
+      "name": "scheduler",
+      "description": "Schedule tasks to run later or on an interval (deferred generation, periodic re-checks).",
+      "triggers": [
+        "جدولة مهمة",
+        "مهمة مؤجلة",
+        "شغّل لاحقاً",
+        "مهمة دورية",
+        "مؤقت",
+        "schedule task",
+        "defer",
+        "run later",
+        "periodic",
+        "interval",
+        "cron"
+      ],
+      "layers": [
+        0,
+        1
+      ],
+      "module": "capabilities.tools.tool_scheduler"
+    },
+    {
+      "name": "chart",
+      "description": "Render themed statistical charts (12 types) and embed them into Word/PowerPoint files.",
+      "triggers": [
+        "رسم بياني",
+        "مخطط بياني",
+        "رسم إحصائي",
+        "أعمدة",
+        "منحنى",
+        "دائري",
+        "chart",
+        "plot",
+        "bar chart",
+        "line chart",
+        "scatter",
+        "histogram",
+        "graph data",
+        "أضف رسم للتقرير",
+        "رسم في الوورد",
+        "رسم في العرض",
+        "embed chart",
+        "chart in document",
+        "مخطط",
+        "graph",
+        "رسوم"
+      ],
+      "layers": [
+        6,
+        8
+      ],
+      "module": "capabilities.tools.tool_chart"
+    },
+    {
+      "name": "web_document",
+      "description": "Download a document from a URL and read it (HTML/PDF/scanned-PDF/image) with automatic OCR. Bridges web discovery to document reading.",
+      "triggers": [
+        "نزّل واقرأ",
+        "اقرأ رابط ملف",
+        "مرجع من الإنترنت",
+        "ملف من رابط",
+        "PDF من الإنترنت",
+        "download and read",
+        "read url file",
+        "remote pdf",
+        "fetch document",
+        "online reference",
+        "رابط",
+        "من الإنترنت",
+        "من رابط",
+        "url"
+      ],
+      "layers": [
+        2,
+        4
+      ],
+      "module": "capabilities.tools.tool_web_document"
+    }
+  ]
+}

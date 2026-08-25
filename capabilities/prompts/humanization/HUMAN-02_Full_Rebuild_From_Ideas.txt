@@ -1,0 +1,74 @@
+================================================================
+PROMPT: HUMAN-02 — Full Rebuild From Core Ideas (Strongest Method)
+DIFFICULTY: 🔴 ADVANCED
+USE CASE: Any text that must pass strict AI detection
+TARGET: Reduce AI detection score by 70-90%
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+WHY IT WORKS: Forces the model to forget the original phrasing entirely
+              and rebuild from ideas — the single most effective technique.
+================================================================
+
+Execute the following two-stage process in order:
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STAGE 1 — IDEA EXTRACTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Read the original text. Extract its 4-6 core ideas in plain bullet points.
+Use your own words entirely — do NOT copy any phrasing from the original.
+These bullet points are your only reference going forward.
+
+Format:
+• [Idea 1]
+• [Idea 2]
+• [Idea 3]
+...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STAGE 2 — WRITE FROM SCRATCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Now forget the original text completely.
+Write a new text based ONLY on your extracted bullet points,
+as if you are explaining these ideas for the first time in your own voice.
+
+HARD CONSTRAINTS on the new text:
+
+✦ ZERO sentences copied (even partially) from the original
+✦ Every paragraph must START differently:
+   - Para 1: start with a time/place reference or context
+   - Para 2: start with an observation or fact
+   - Para 3: start with a short sentence (under 8 words)
+   - Para 4+: vary freely, never repeat the same opening pattern twice
+✦ Include at least ONE rhetorical question embedded in the body
+✦ Include at least ONE sentence with a parenthetical aside (use dashes or brackets)
+✦ Shortest sentence in the text: 7 words or fewer
+✦ Longest sentence in the text: 28 words or more
+✦ Do NOT use any word from this banned list:
+   delve, robust, pivotal, leverage, groundbreaking, moreover, furthermore,
+   additionally, seamless, transformative, utilize, foster, facilitate,
+   underscore, showcase, commendable, meticulous, intricate, realm, tapestry,
+   landscape, holistic, paradigm, catalyst, empower, elevate, unlock, unpack,
+   illuminate, revolutionize, bolster, align, optimize, streamline,
+   "it is important to note", "in conclusion", "in today's fast-paced world",
+   "it's worth noting", "the bottom line is", "at the end of the day"
+✦ Conclusion must NOT be a summary. End with one of:
+   - An unanswered question
+   - A personal observation
+   - A detail that complicates the main point
+   - Something unexpected but relevant
+
+OUTPUT FORMAT:
+---STAGE 1: EXTRACTED IDEAS---
+[your bullet points]
+
+---STAGE 2: REWRITTEN TEXT---
+[your new text]
+
+ORIGINAL TEXT:
+{{TEXT}}
+
+================================================================
+TEMPERATURE RECOMMENDATION: 0.85-0.92 for maximum variation
+EXPECTED IMPROVEMENT:
+Before: ~75-95% AI detection score
+After:  ~10-30% AI detection score
+================================================================

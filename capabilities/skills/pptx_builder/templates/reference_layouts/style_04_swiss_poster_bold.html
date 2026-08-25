@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Swiss Poster Bold</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;700;800;900&family=Tajawal:wght@400;500;700&display=swap');
+
+  :root{
+    --cream:   #FCF6F5;
+    --cherry:  #990011;
+    --navy:    #2F3C7E;
+    --ink:     #17130F;
+    --font-heading: 'Cairo', sans-serif;
+    --font-body:    'Tajawal', sans-serif;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; background:var(--cream); font-family:var(--font-body); color:var(--ink); }
+  .slide{ position:relative; width:1280px; height:720px; direction:rtl; text-align:right; }
+
+  /* signature motif: hard geometric color blocks, Swiss grid */
+  .block-cherry{ position:absolute; top:0; left:0; width:340px; height:720px; background:var(--cherry); }
+  .block-navy{ position:absolute; bottom:0; left:340px; width:180px; height:130px; background:var(--navy); }
+  .circle-cream{ position:absolute; top:60px; left:70px; width:200px; height:200px; border-radius:50%; border:6px solid var(--cream); }
+
+  .side-label{
+    position:absolute; bottom:40px; left:40px; width:260px;
+    font-family:var(--font-heading); font-weight:700; font-size:14px; color:var(--cream); line-height:1.6;
+  }
+
+  .kicker{
+    position:absolute; top:56px; right:70px;
+    font-family:var(--font-heading); font-weight:800; font-size:15px; letter-spacing:3px; color:var(--cherry);
+  }
+
+  .title{
+    position:absolute; top:92px; right:70px; width:820px;
+    font-family:var(--font-heading); font-weight:900; font-size:74px; line-height:0.98; color:var(--ink);
+    text-transform:uppercase;
+  }
+
+  .rule-block{ position:absolute; top:300px; right:70px; width:90px; height:14px; background:var(--navy); }
+
+  .lede{ position:absolute; top:340px; right:70px; width:560px; font-size:17px; line-height:1.85; color:#3a342c; }
+
+  .stat-strip{
+    position:absolute; bottom:0; right:340px; left:0; height:150px;
+    background:var(--ink); display:grid; grid-template-columns:repeat(3,1fr);
+  }
+  .stat-strip .stat{ display:flex; flex-direction:column; align-items:center; justify-content:center; border-right:1px solid rgba(255,255,255,0.12); }
+  .stat-strip .stat:last-child{ border-right:none; }
+  .stat-strip .num{ font-family:var(--font-heading); font-weight:900; font-size:40px; color:var(--cream); }
+  .stat-strip .label{ font-size:13px; color:#c9c2b8; margin-top:6px; }
+
+  .page-num{ position:absolute; top:24px; left:24px; font-family:var(--font-heading); font-weight:900; font-size:16px; color:var(--cream); z-index:3; }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="block-cherry"></div>
+    <div class="circle-cream"></div>
+    <div class="side-label">{{FOOTER_LABEL}}</div>
+    <div class="block-navy"></div>
+    <div class="page-num">{{PAGE_NUM}}</div>
+
+    <div class="kicker">{{KICKER}}</div>
+    <h1 class="title">{{TITLE}}</h1>
+    <div class="rule-block"></div>
+    <p class="lede">{{CONTENT_1}}</p>
+
+    <div class="stat-strip">
+      <div class="stat"><div class="num">{{STAT_1}}</div><div class="label">{{STAT_LABEL_1}}</div></div>
+      <div class="stat"><div class="num">{{STAT_2}}</div><div class="label">{{STAT_LABEL_2}}</div></div>
+      <div class="stat"><div class="num">{{STAT_3}}</div><div class="label">{{STAT_LABEL_3}}</div></div>
+    </div>
+  </div>
+</body>
+</html>

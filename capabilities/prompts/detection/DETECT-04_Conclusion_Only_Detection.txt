@@ -1,0 +1,62 @@
+================================================================
+PROMPT: DETECT-04 — AI Detection via Conclusion Analysis Only
+DIFFICULTY: 🟡 INTERMEDIATE
+USE CASE: Quick pre-screen using only the conclusion paragraph
+INSIGHT: AI conclusions follow a highly predictable template that is
+         detectable with ~80% accuracy on its own.
+BEST MODELS: Any model
+================================================================
+
+Read ONLY the final paragraph of the text below.
+Based solely on that paragraph, classify the conclusion type:
+
+CONCLUSION TYPE CLASSIFICATION:
+
+TYPE A — NEAT SUMMARY (Strong AI indicator):
+"In conclusion / To summarize / In summary / Overall..."
+followed by repetition of main points + reference to importance/future.
+→ AI PROBABILITY: Very High (85-95%)
+
+TYPE B — IMPORTANCE STATEMENT (Moderate AI indicator):
+"This underscores the importance of..." / "This highlights the need for..."
+/ "This serves as a testament to..." / "The implications are far-reaching."
+/ "The possibilities are endless." / "This paves the way for..."
+→ AI PROBABILITY: High (70-85%)
+
+TYPE C — BALANCED WRAP-UP (Weak AI indicator):
+Restates the thesis in different words, balanced and neutral tone.
+→ AI PROBABILITY: Moderate (50-65%)
+
+TYPE D — OPEN QUESTION (Human indicator):
+Ends with a question the text did not answer.
+→ AI PROBABILITY: Low (20-35%)
+
+TYPE E — PERSONAL STANCE (Strong human indicator):
+Author directly states their opinion, doubt, or disagreement.
+→ AI PROBABILITY: Very Low (10-25%)
+
+TYPE F — TANGENTIAL OBSERVATION (Very strong human indicator):
+Ends with something loosely related but not the main point,
+or an incomplete thought, or something unexpected.
+→ AI PROBABILITY: Minimal (5-15%)
+
+---
+
+YOUR RESPONSE FORMAT:
+
+[CONCLUSION TYPE]: A / B / C / D / E / F
+[KEY PHRASE THAT DETERMINED THIS]: quote the exact phrase
+[AI PROBABILITY]: X%
+[CONFIDENCE IN THIS ASSESSMENT]: X%
+[ONE-LINE VERDICT]: AI-generated / Human-written / Inconclusive
+
+FULL TEXT (I will read only the last paragraph):
+{{TEXT}}
+
+================================================================
+USAGE TIP:
+This prompt is extremely fast and surprisingly accurate.
+Use it as a first-pass filter before running full detection.
+If TYPE A or B → run DETECT-02 for full analysis.
+If TYPE D, E, or F → text is likely human, but verify with DETECT-01.
+================================================================
