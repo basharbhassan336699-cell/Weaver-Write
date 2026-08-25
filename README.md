@@ -13,23 +13,23 @@ Runs on a **single AI API key**. Works on Termux (Android), Windows
 
 ### Termux (Android) / Linux / macOS
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_USERNAME/weaver-write/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/basharbhassan336699-cell/Weaver-Write/main/install.sh | bash
 ```
 or manually:
 ```bash
-git clone https://github.com/YOUR_USERNAME/weaver-write.git
-cd weaver-write
+git clone https://github.com/basharbhassan336699-cell/Weaver-Write.git
+cd Weaver-Write
 bash install.sh
 ```
 
 ### Windows (PowerShell)
 ```powershell
-irm https://raw.githubusercontent.com/YOUR_USERNAME/weaver-write/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/basharbhassan336699-cell/Weaver-Write/main/install.ps1 | iex
 ```
 or manually:
 ```powershell
-git clone https://github.com/YOUR_USERNAME/weaver-write.git
-cd weaver-write
+git clone https://github.com/basharbhassan336699-cell/Weaver-Write.git
+cd Weaver-Write
 .\install.ps1
 ```
 

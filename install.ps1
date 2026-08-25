@@ -3,7 +3,7 @@
 # ═══════════════════════════════════════════════════════════
 $ErrorActionPreference = "Stop"
 
-$Repo = "https://github.com/YOUR_USERNAME/weaver-write.git"
+$Repo = "https://github.com/basharbhassan336699-cell/Weaver-Write.git"
 $InstallDir = if ($env:WEAVER_HOME) { $env:WEAVER_HOME } else { "$HOME\weaver-write" }
 
 Write-Host "═══════════════════════════════════════"

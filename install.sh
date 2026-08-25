@@ -4,7 +4,7 @@
 # ═══════════════════════════════════════════════════════════
 set -e
 
-REPO="https://github.com/YOUR_USERNAME/weaver-write.git"
+REPO="https://github.com/basharbhassan336699-cell/Weaver-Write.git"
 INSTALL_DIR="${WEAVER_HOME:-$HOME/weaver-write}"
 
 echo "═══════════════════════════════════════"
