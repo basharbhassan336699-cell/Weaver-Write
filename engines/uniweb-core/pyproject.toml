@@ -1,0 +1,38 @@
+[project]
+name = "uniweb"
+version = "1.0.0"
+description = "أداة ويب موحّدة — تجمع curl-impersonate + autoscraper + firecrawl + browser-use + agent-reach بتوجيه ذكي"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+
+# الأساس: التوجيه فقط
+dependencies = []
+
+[project.optional-dependencies]
+# curl_impersonate — جلب مع انتحال بصمة
+curl = ["curl_cffi>=0.6.0"]
+# autoscraper — استخلاص متعلَّم
+scrape = ["autoscraper", "beautifulsoup4"]
+# firecrawl — scraping ذكي
+firecrawl = ["firecrawl-py"]
+# browser_use — متصفح آلي
+browser = ["browser-use", "playwright"]
+# agent_reach — منصات
+platforms = ["agent-reach"]
+# كل شيء
+all = [
+    "curl_cffi>=0.6.0",
+    "autoscraper",
+    "beautifulsoup4",
+    "firecrawl-py",
+]
+
+[project.scripts]
+uniweb = "uniweb.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["uniweb*"]

@@ -1,0 +1,4 @@
+# Static charts (available on Termux via pip)
+matplotlib>=3.7
+# langgraph is vendored; its runtime deps if used standalone:
+# langgraph-checkpoint, langchain-core (install if running full pipeline graph)
