@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════════════════════
+# Weaver Write — unified Python requirements
+# ═══════════════════════════════════════════════════════════
+
+# ── Document generation ──
+python-docx>=1.1.0
+python-pptx>=0.6.23
+openpyxl>=3.1.0
+reportlab>=4.0.0
+
+# ── PDF reading/processing ──
+pdfplumber>=0.10.0
+pymupdf4llm>=0.0.5
+
+# ── Charts & visualization ──
+matplotlib>=3.7.0
+
+# ── Arabic text shaping (RTL) ──
+arabic-reshaper>=3.0.0
+python-bidi>=0.4.2
+
+# ── Statistical analysis ──
+pandas>=2.0.0
+scipy>=1.10.0
+
+# ── Academic RAG search (PaperQA) ──
+paper-qa>=5.0.0
+sentence-transformers>=2.2.0
+
+# ── Calendar/scheduling ──
+icalendar>=5.0.0
+tzlocal>=5.0
+
+# ── Utilities ──
+attrs>=23.0.0
+requests>=2.31.0
+
+# ── Optional (fuller statistical output) ──
+# statsmodels>=0.14
+# pingouin>=0.5
+# seaborn>=0.12
+
+# ── Optional (full LaTeX math) ──
+# latex2mathml>=3.77
