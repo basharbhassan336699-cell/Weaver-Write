@@ -1,0 +1,93 @@
+================================================================
+PROMPT: HUMAN-05 — Inject Personal Voice and Human Hesitation
+DIFFICULTY: 🟡 INTERMEDIATE
+USE CASE: Texts that sound clean but feel robotic and impersonal
+TARGET: Add the four human-voice markers that AI consistently lacks
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+================================================================
+
+The text below reads as technically correct but lacks a human voice.
+Your task: inject the four human-voice elements listed below.
+Do NOT change meaning. Do NOT alter structure significantly.
+Add these elements naturally where they fit best.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ELEMENT 1 — GENUINE UNCERTAINTY (add exactly ONE instance)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Insert a real expression of doubt or hedging where the argument
+is complex or contested. Do NOT use performative hedging.
+Real uncertainty sounds like:
+
+✓ "I'm not entirely convinced this holds in every case."
+✓ "That said, I'm not sure this fully explains the pattern."
+✓ "In my reading — though others might disagree —"
+✓ "Whether this is the right interpretation remains unclear to me."
+✓ "There's probably more going on here than this explanation covers."
+
+✗ NOT: "It may be argued that" (too formal, still AI-sounding)
+✗ NOT: "Some might suggest" (vague attribution, also AI pattern)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ELEMENT 2 — DIRECT PERSONAL STANCE (add exactly ONE instance)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Insert one sentence where the author takes a clear position.
+AI writing is always perfectly balanced — human writing has an opinion.
+
+✓ "Frankly, I find this approach more interesting than the alternatives."
+✓ "What strikes me most here is not the data but the implication."
+✓ "I'll admit I was skeptical of this claim before seeing the evidence."
+✓ "This is, in my view, the stronger of the two arguments."
+
+The stance should be genuine, not just diplomatic acknowledgment.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ELEMENT 3 — PARENTHETICAL ASIDE (add exactly ONE instance)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Insert one aside using em-dashes (—) or parentheses ( ).
+The aside should be relevant but not essential to the main argument.
+It shows the author's mind working, making connections, digressing slightly.
+
+✓ "The results — while impressive on paper — raise more questions than they answer."
+✓ "This distinction (subtle as it may seem) turns out to matter enormously."
+✓ "The team behind this research, as I later discovered, had been working on
+   it for nearly a decade."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ELEMENT 4 — OPEN-ENDED CONCLUSION (replace existing conclusion)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+If the current conclusion is a neat summary with "importance" language,
+replace it entirely. Choose one of:
+
+OPTION A — Unanswered question:
+End with a question the text didn't fully resolve.
+
+OPTION B — Complicating detail:
+End with a fact or observation that slightly complicates the main argument.
+
+OPTION C — Incomplete thought:
+End mid-thought, as if there's more to say but this is where you'll stop.
+
+OPTION D — Personal reflection:
+End with what the author is left thinking about, not what was concluded.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OUTPUT FORMAT:
+
+---ELEMENTS ADDED---
+Element 1 (Uncertainty): [quote what you added, location in text]
+Element 2 (Personal Stance): [quote what you added, location in text]
+Element 3 (Aside): [quote what you added, location in text]
+Element 4 (Conclusion): [note if replaced or kept, brief reason]
+
+---REWRITTEN TEXT---
+[Full text with all four elements integrated]
+
+TEXT TO PROCESS:
+{{TEXT}}
+
+================================================================
+NOTE: These four elements represent what AI writing consistently lacks.
+Their presence alone can shift detection scores significantly because
+they require a subjective "author" to exist behind the text.
+================================================================

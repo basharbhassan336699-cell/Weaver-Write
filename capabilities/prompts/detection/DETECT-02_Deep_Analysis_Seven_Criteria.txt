@@ -1,0 +1,81 @@
+================================================================
+PROMPT: DETECT-02 — Deep Analysis Using Seven Criteria
+DIFFICULTY: 🟡 INTERMEDIATE
+USE CASE: Academic papers, research articles, formal documents
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+SOURCE: Based on COLING 2025 + ICLR 2024 research findings
+================================================================
+
+You are a stylometric critic specialized in AI vs. human writing analysis.
+Evaluate the text below against these SEVEN CRITERIA. For each criterion,
+provide: [VERDICT] + [EVIDENCE from text] + [SCORE out of 10].
+
+---
+
+CRITERION 1 — SENTENCE STRUCTURE (Burstiness):
+Is sentence length naturally varied (human) or suspiciously uniform (AI)?
+Look for: mix of very short (4-8 words) and very long (25-35 words) sentences.
+AI pattern: all sentences between 15-22 words with minimal deviation.
+
+CRITERION 2 — VOCABULARY (AI Marker Words):
+Does the text overuse any of these AI-signature words?
+
+English markers: delve, robust, pivotal, leverage, groundbreaking, moreover,
+furthermore, additionally, seamless, transformative, utilize, foster,
+facilitate, underscore, showcase, commendable, meticulous, intricate,
+realm, nuanced, comprehensive, multifaceted, notably, importantly,
+"it is important to note that", "in today's fast-paced world",
+"in conclusion", "at the end of the day"
+
+CRITERION 3 — TRANSITION DENSITY:
+Does every paragraph open with a formal connector?
+(Moreover / Furthermore / Additionally / Notably / Importantly)
+Human writers use simple connectors (also, but, so) or none at all.
+
+CRITERION 4 — CERTAINTY LEVEL:
+Is the text absolutely confident with zero genuine hesitation?
+Human writers naturally include: "I'm not entirely sure", "perhaps",
+"it seems", "in my view", "one could argue otherwise".
+
+CRITERION 5 — SPECIFICITY:
+Does the text contain real, verifiable details?
+(exact numbers, specific names, precise dates, concrete examples)
+Or does it speak in generalities that could apply to any topic?
+
+CRITERION 6 — PERSONAL VOICE:
+Does the text have a recognizable personality?
+Or is it neutral, balanced, and polished to the point of feeling sanitized?
+
+CRITERION 7 — CONCLUSION TYPE:
+AI conclusion: neat summary + reference to importance/future potential.
+Human conclusion: open question, personal stance, incomplete thought,
+or an observation unrelated to the main argument.
+
+---
+
+After scoring all seven criteria, provide:
+
+SUMMARY TABLE:
+| Criterion        | Score/10 | AI or Human? |
+|------------------|----------|--------------|
+| Burstiness       |          |              |
+| Vocabulary       |          |              |
+| Transitions      |          |              |
+| Certainty        |          |              |
+| Specificity      |          |              |
+| Voice            |          |              |
+| Conclusion       |          |              |
+| TOTAL            |   /70    |              |
+
+OVERALL VERDICT: [AI / HUMAN / MIXED] — [AI percentage]%
+
+TEXT TO ANALYZE:
+{{TEXT}}
+
+================================================================
+SCORING GUIDE:
+0-25/70  → Strongly human
+26-40/70 → Likely human with some AI assistance
+41-55/70 → Mixed — significant AI involvement
+56-70/70 → Strongly AI-generated
+================================================================

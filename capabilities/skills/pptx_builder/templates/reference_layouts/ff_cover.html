@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Cover</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&family=Inter:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors (extracted from Friends & Families deck) === */
+    --bg-dark:      #191A2E;  /* main slide background */
+    --bg-card:      #0F3460;  /* solid blue content card */
+    --bg-card-2:    #1B1F3B;  /* darker outlined card (slide 5 style) */
+    --accent-gold:  #E8A33D;  /* headings / subtitles */
+    --accent-red:   #E84566;  /* crimson rule / top bar / numbered badges */
+    --text-primary: #FFFFFF;
+    --text-body:    #E7E9F1;
+    --text-muted:   #B7BBD1;
+    --deco-maroon:  #4E243C;  /* large decorative circle */
+    --deco-brown:   #4F3D2C;  /* large decorative circle */
+    --deco-navy:    #223257;  /* large decorative circle (overlap) */
+
+    --font-heading: 'Poppins', sans-serif;
+    --font-body:    'Inter', sans-serif;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; font-family:var(--font-body); background:var(--bg-dark); }
+  .slide{ position:relative; width:1280px; height:720px; background:var(--bg-dark); overflow:hidden; text-align:left; color:var(--text-body); }
+
+  .top-bar{ position:absolute; top:0; left:0; right:0; height:6px; background:var(--accent-red); }
+
+  .page-title{ position:absolute; top:44px; left:64px; font-family:var(--font-heading); font-weight:800; font-size:44px; color:var(--text-primary); }
+  .page-subtitle{ position:absolute; top:108px; left:64px; font-family:var(--font-body); font-style:italic; font-weight:400; font-size:18px; color:var(--accent-gold); }
+  .title-rule{ position:absolute; top:150px; left:64px; width:420px; height:3px; background:var(--accent-red); }
+
+  ul.plain{ list-style:none; }
+
+  .deco-circle{ position:absolute; border-radius:50%; }
+  .deco-1{ width:520px; height:520px; top:-160px; right:-140px; background:var(--deco-maroon); }
+  .deco-2{ width:340px; height:340px; bottom:-160px; left:-120px; background:var(--deco-brown); }
+
+  .cover-title{ position:absolute; top:180px; left:64px; font-family:var(--font-heading); font-weight:800; font-size:64px; color:var(--text-primary); }
+  .cover-subtitle{ position:absolute; top:280px; left:64px; font-size:20px; color:var(--accent-gold); }
+  .cover-rule{ position:absolute; top:330px; left:64px; width:460px; height:4px; background:var(--accent-red); }
+
+  .info-card{
+    position:absolute; top:362px; left:64px; width:614px;
+    background:var(--bg-card); padding:26px 32px; display:flex; flex-direction:column; gap:12px;
+  }
+  .info-card .row{ font-size:16px; color:var(--text-body); }
+  .info-card .row b{ color:var(--accent-gold); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="deco-circle deco-1"></div>
+    <div class="deco-circle deco-2"></div>
+
+    <h1 class="cover-title">{{TITLE}}</h1>
+    <div class="cover-subtitle">{{SUBTITLE}}</div>
+    <div class="cover-rule"></div>
+
+    <div class="info-card">
+      <div class="row"><b>{{LABEL_1}}:</b> {{VALUE_1}}</div>
+      <div class="row"><b>{{LABEL_2}}:</b> {{VALUE_2}}</div>
+      <div class="row"><b>{{LABEL_3}}:</b> {{VALUE_3}}</div>
+      <div class="row"><b>{{LABEL_4}}:</b> {{VALUE_4}}</div>
+    </div>
+  </div>
+</body>
+</html>

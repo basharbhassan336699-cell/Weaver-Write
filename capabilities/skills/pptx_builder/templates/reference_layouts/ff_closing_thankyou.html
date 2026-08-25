@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<title>Closing thank you slide</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700;800&family=Inter:ital,wght@0,300;0,400;0,500;0,600;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors (extracted from Friends & Families deck) === */
+    --bg-dark:      #191A2E;  /* main slide background */
+    --bg-card:      #0F3460;  /* solid blue content card */
+    --bg-card-2:    #1B1F3B;  /* darker outlined card (slide 5 style) */
+    --accent-gold:  #E8A33D;  /* headings / subtitles */
+    --accent-red:   #E84566;  /* crimson rule / top bar / numbered badges */
+    --text-primary: #FFFFFF;
+    --text-body:    #E7E9F1;
+    --text-muted:   #B7BBD1;
+    --deco-maroon:  #4E243C;  /* large decorative circle */
+    --deco-brown:   #4F3D2C;  /* large decorative circle */
+    --deco-navy:    #223257;  /* large decorative circle (overlap) */
+
+    --font-heading: 'Poppins', sans-serif;
+    --font-body:    'Inter', sans-serif;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; font-family:var(--font-body); background:var(--bg-dark); }
+  .slide{ position:relative; width:1280px; height:720px; background:var(--bg-dark); overflow:hidden; text-align:left; color:var(--text-body); }
+
+  .top-bar{ position:absolute; top:0; left:0; right:0; height:6px; background:var(--accent-red); }
+
+  .page-title{ position:absolute; top:44px; left:64px; font-family:var(--font-heading); font-weight:800; font-size:44px; color:var(--text-primary); }
+  .page-subtitle{ position:absolute; top:108px; left:64px; font-family:var(--font-body); font-style:italic; font-weight:400; font-size:18px; color:var(--accent-gold); }
+  .title-rule{ position:absolute; top:150px; left:64px; width:420px; height:3px; background:var(--accent-red); }
+
+  ul.plain{ list-style:none; }
+
+  .deco-circle{ position:absolute; border-radius:50%; }
+  .deco-1{ width:560px; height:560px; top:-100px; right:-160px; background:var(--deco-maroon); }
+  .deco-2{ width:340px; height:340px; bottom:-140px; right:60px; background:var(--deco-navy); opacity:0.85; }
+  .deco-3{ width:340px; height:340px; bottom:-200px; left:-140px; background:var(--deco-brown); }
+
+  .emoji-lg{ position:absolute; top:100px; left:64px; font-size:56px; }
+  .closing-title{ position:absolute; top:210px; left:64px; font-family:var(--font-heading); font-weight:800; font-size:64px; color:var(--text-primary); }
+  .closing-subtitle{ position:absolute; top:315px; left:64px; font-size:20px; font-style:italic; color:var(--accent-gold); }
+  .closing-rule{ position:absolute; top:360px; left:64px; width:390px; height:4px; background:var(--accent-red); }
+
+  .question-row{ position:absolute; top:410px; left:64px; display:flex; align-items:center; gap:16px; }
+  .question-row .q-icon{ font-size:34px; color:var(--accent-red); font-weight:800; }
+  .question-row .q-text{ font-family:var(--font-heading); font-weight:600; font-size:26px; color:var(--text-primary); }
+  .sub-note{ position:absolute; top:470px; left:64px; font-size:16px; font-style:italic; color:var(--text-muted); }
+
+  .footer-meta{ position:absolute; bottom:36px; left:0; right:0; text-align:center; font-size:14px; color:var(--text-muted); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="deco-circle deco-1"></div>
+    <div class="deco-circle deco-2"></div>
+    <div class="deco-circle deco-3"></div>
+
+    <div class="emoji-lg">{{ICON_MAIN}}</div>
+    <h1 class="closing-title">{{TITLE}}</h1>
+    <div class="closing-subtitle">{{SUBTITLE}}</div>
+    <div class="closing-rule"></div>
+
+    <div class="question-row"><span class="q-icon">?</span><span class="q-text">{{PROMPT}}</span></div>
+    <div class="sub-note">{{CONTENT_1}}</div>
+
+    <div class="footer-meta">{{FOOTER_LABEL}}</div>
+  </div>
+</body>
+</html>

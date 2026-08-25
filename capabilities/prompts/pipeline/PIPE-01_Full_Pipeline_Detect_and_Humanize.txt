@@ -1,0 +1,92 @@
+================================================================
+PROMPT: PIPE-01 — Full Pipeline: Detect → Humanize → Verify
+DIFFICULTY: 🔴 ADVANCED
+USE CASE: Complete end-to-end processing in a single prompt
+TARGET: Maximum efficiency — detection + rewriting + quality check
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+NOTE: Longer processing time. Use when you want everything in one pass.
+================================================================
+
+You are a complete AI text processing system. Execute ALL three stages
+in order. Do not skip any stage. Do not combine stages.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STAGE 1 — DETECTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Analyze the input text. Output exactly:
+
+AI_SCORE: [0-100]%
+TOP_SIGNALS:
+  1. [strongest detected AI signal + example from text]
+  2. [second strongest signal + example]
+  3. [third strongest signal + example]
+VERDICT: AI-Generated / Human-Written / Mixed
+PROCEED_TO_STAGE_2: YES (if AI_SCORE > 40%) / NO (if AI_SCORE ≤ 40%)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STAGE 2 — HUMANIZATION (execute ONLY if PROCEED = YES)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Rewrite the text applying ALL fixes in this exact order:
+
+[FIX-1] VOCABULARY: Replace every AI-marker word found in TOP_SIGNALS
+and any others from this list: delve, robust, pivotal, leverage,
+groundbreaking, moreover, furthermore, additionally, seamless,
+transformative, utilize, foster, facilitate, underscore, showcase,
+commendable, meticulous, intricate, realm, notably, importantly,
+"it is important to note that", "in today's fast-paced world", "in conclusion"
+
+[FIX-2] BURSTINESS: Break sentence uniformity.
+Add at minimum: 2 sentences under 8 words + 1 sentence over 28 words
+per every 150 words of text.
+
+[FIX-3] TRANSITIONS: Remove all formal paragraph-opening transitions
+(Moreover / Furthermore / Additionally / Notably / Importantly).
+Replace with: simple connectors (also, but, so, still) or none.
+
+[FIX-4] VOICE: Add exactly ONE expression of genuine uncertainty
+and ONE direct personal stance anywhere in the body.
+
+[FIX-5] CONCLUSION: If current conclusion is a neat summary or
+importance statement, replace with an open question or
+complicating observation.
+
+[FIX-6] PROTECT: Do not change citations, references,
+technical terminology, proper nouns, statistics, or direct quotes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STAGE 3 — VERIFICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+After rewriting, assess the new text:
+
+NEW_AI_SCORE: [estimated 0-100]%
+IMPROVEMENT: [original score] → [new score] = [X point reduction]
+FIXES_APPLIED: [list which FIX-1 through FIX-6 were applied]
+REMAINING_RISKS: [any AI signals that could not be fully removed]
+RECOMMENDATION: READY TO USE / NEEDS FURTHER REVIEW / RUN HUMAN-02
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OUTPUT FORMAT (use these exact headers):
+
+---STAGE 1: DETECTION---
+[detection output]
+
+---STAGE 2: REWRITTEN TEXT---
+[humanized text only — no meta-commentary inside this section]
+
+---STAGE 3: VERIFICATION---
+[verification output]
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+INPUT TEXT:
+{{TEXT}}
+
+================================================================
+API SETTINGS RECOMMENDATION:
+temperature: 0.88
+top_p: 0.92
+frequency_penalty: 0.6  (OpenAI-compatible APIs only)
+presence_penalty: 0.5   (OpenAI-compatible APIs only)
+max_tokens: 4096
+================================================================

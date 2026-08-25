@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>إحصائيات + عمودين قوائم</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors (extracted) === */
+    --bg-dark:        #0a0523;  /* main slide background (dark navy/black) */
+    --bg-primary:     #331263;  /* solid purple panel / divider slides */
+    --bg-card:        #140a33;  /* card fill, slightly lighter than bg-dark */
+    --bg-pill:        #4a1a8a;  /* small label pill fill */
+    --accent-gold:    #d9ac3d;  /* gold rule / border / accent text */
+    --accent-gold-2:  #f2c744;  /* brighter gold for numbers/badges */
+    --accent-purple:  #8b5cf6;  /* bright purple card border */
+    --accent-purple-2:#b28ee0;  /* light purple text / italic tagline */
+    --text-primary:   #ffffff;
+    --text-body:      #eae6f2;
+    --text-muted:     #cfc7e0;
+    --border-gold:    rgba(217,172,61,0.55);
+    --border-purple:  rgba(139,92,246,0.6);
+
+    --font-heading: 'Cairo', 'Tajawal', sans-serif;
+    --font-body:    'Tajawal', 'Cairo', sans-serif;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; font-family:var(--font-body); background:var(--bg-dark); }
+  .slide{ position:relative; width:1280px; height:720px; background:var(--bg-dark); overflow:hidden; direction:rtl; text-align:right; }
+
+  /* breadcrumb / label pill, top-right */
+  .crumb-pill{
+    position:absolute; top:32px; right:56px;
+    background:var(--bg-pill); border:1.5px solid var(--accent-gold);
+    border-radius:24px; padding:10px 26px;
+    font-size:14px; color:var(--accent-gold-2); font-family:var(--font-heading);
+  }
+
+  /* page heading + gold underline */
+  .page-title{
+    position:absolute; top:78px; right:56px; left:56px;
+    font-family:var(--font-heading); font-weight:800; font-size:38px;
+    color:var(--text-primary);
+  }
+  .page-rule{
+    position:absolute; top:150px; right:40px; left:40px;
+    height:2px; background:var(--accent-gold);
+  }
+
+  .page-num{
+    position:absolute; bottom:16px; right:26px;
+    font-family:var(--font-heading); font-weight:700; font-size:15px;
+    color:var(--accent-gold-2);
+  }
+
+  ul.bullets{ list-style:none; }
+  ul.bullets li{ position:relative; padding-right:26px; margin-bottom:14px; font-size:15px; color:var(--text-body); line-height:1.6; }
+  ul.bullets li::before{ content:""; position:absolute; right:0; top:6px; width:11px; height:11px; border-radius:50%; background:var(--accent-gold-2); }
+  ul.bullets.purple li::before{ background:var(--accent-purple-2); }
+
+  .card{ background:var(--bg-card); border:1.5px solid var(--border-gold); border-radius:14px; }
+  .card.purple{ border-color:var(--border-purple); }
+
+  .stat-row{ position:absolute; top:170px; right:40px; left:40px; display:grid; grid-template-columns:repeat(4,1fr); gap:16px; height:100px; }
+  .stat-card{ display:flex; flex-direction:column; align-items:center; justify-content:center; }
+  .stat-card .num{ font-family:var(--font-heading); font-weight:800; font-size:30px; color:var(--accent-gold); }
+  .stat-card .label{ font-size:13px; color:var(--text-body); margin-top:4px; }
+
+  .cols2{ position:absolute; top:295px; right:40px; left:40px; bottom:30px; display:grid; grid-template-columns:1fr 1fr; gap:26px; }
+  .panel{ padding:24px 30px; }
+  .panel h3{ font-family:var(--font-heading); font-weight:700; font-size:18px; margin-bottom:16px; color:var(--accent-purple-2); }
+  .panel.gold h3{ color:var(--accent-gold); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="crumb-pill">{{BREADCRUMB}}</div>
+    <div class="page-title">{{TITLE}}</div>
+    <div class="page-rule"></div>
+
+    <div class="stat-row">
+      <div class="card stat-card"><div class="num">{{STAT_1}}</div><div class="label">{{STAT_LABEL_1}}</div></div>
+      <div class="card stat-card"><div class="num">{{STAT_2}}</div><div class="label">{{STAT_LABEL_2}}</div></div>
+      <div class="card stat-card"><div class="num">{{STAT_3}}</div><div class="label">{{STAT_LABEL_3}}</div></div>
+      <div class="card stat-card"><div class="num">{{STAT_4}}</div><div class="label">{{STAT_LABEL_4}}</div></div>
+    </div>
+
+    <div class="cols2">
+      <div class="card purple panel">
+        <h3>{{SUBTITLE_1}}</h3>
+        <ul class="bullets purple">
+          <li>{{ITEM_1}}</li>
+          <li>{{ITEM_2}}</li>
+          <li>{{ITEM_3}}</li>
+          <li>{{ITEM_4}}</li>
+        </ul>
+      </div>
+      <div class="card gold panel">
+        <h3>{{SUBTITLE_2}}</h3>
+        <ul class="bullets">
+          <li>{{ITEM_5}}</li>
+          <li>{{ITEM_6}}</li>
+          <li>{{ITEM_7}}</li>
+          <li>{{ITEM_8}}</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="page-num">{{PAGE_NUM}}</div>
+  </div>
+</body>
+</html>

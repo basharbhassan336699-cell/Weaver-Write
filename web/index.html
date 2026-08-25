@@ -1,0 +1,3070 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weaver Write</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #111111;
+    --surface: #1C1C1C;
+    --surface-hover: #242424;
+    --border: #2A2A2A;
+    --text: #E8E8E8;
+    --text-muted: #888888;
+    --text-dim: #555555;
+    --accent: #C97A5A;
+    --accent-blue: #5B8DEF;
+    --sidebar-w: 240px;
+    --radius: 12px;
+    --input-radius: 16px;
+  }
+
+  /* Light theme overrides */
+  body.theme-light {
+    --bg: #FFFFFF;
+    --surface: #F4F4F4;
+    --surface-hover: #EAEAEA;
+    --border: #DDDDDD;
+    --text: #1A1A1A;
+    --text-muted: #666666;
+    --text-dim: #999999;
+  }
+  body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after {
+    animation-duration: 0.001s !important;
+    transition-duration: 0.001s !important;
+  }
+
+  /* ── RTL adjustments (Arabic) ───────────────── */
+  [dir="rtl"] .sidebar {
+    border-right: none;
+    border-left: 1px solid var(--border);
+  }
+  [dir="rtl"] .msg.user { align-self: flex-start; }
+  [dir="rtl"] .msg.user .bubble { border-radius: 16px 16px 16px 4px; }
+  [dir="rtl"] .msg.ai { align-self: flex-end; }
+  [dir="rtl"] .toggle-sidebar-btn { left: auto; right: 14px; }
+  [dir="rtl"] .settings-close { right: auto; left: 20px; }
+  [dir="rtl"] .settings-nav {
+    border-right: none;
+    border-left: 1px solid var(--border);
+  }
+  @media (max-width: 768px) {
+    [dir="rtl"] .sidebar { left: auto; right: 0; box-shadow: -4px 0 24px rgba(0,0,0,0.5); }
+    [dir="rtl"] .sidebar.collapsed { transform: translateX(100%); }
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans Arabic', 'Noto Sans', Roboto, Helvetica, Arial, system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow: hidden;
+  }
+
+  /* ── LAYOUT ─────────────────────────────────── */
+  .app {
+    display: flex;
+    height: 100vh;
+    height: 100dvh;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ── SIDEBAR ─────────────────────────────────── */
+  .sidebar {
+    width: var(--sidebar-w);
+    height: 100vh;
+    height: 100dvh;
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    transform: translateX(0);
+    transition: transform 0.22s ease, width 0.22s ease;
+    overflow: hidden;
+  }
+
+  .sidebar.collapsed {
+    width: 0;
+    border-right: none;
+  }
+
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 16px 8px;
+    flex-shrink: 0;
+  }
+
+  .sidebar-logo {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+  }
+
+  .sidebar-icons {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .icon-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+  .icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+  .sidebar-nav {
+    padding: 4px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 14px;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    position: relative;
+    user-select: none;
+  }
+  .nav-item:hover { background: var(--surface-hover); color: var(--text); }
+  .nav-item.active { background: var(--surface); color: var(--text); }
+
+  .nav-item .nav-badge {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--accent-blue);
+    font-weight: 500;
+  }
+
+  .nav-icon { width: 16px; height: 16px; flex-shrink: 0; }
+
+  .sidebar-section {
+    padding: 16px 8px 4px;
+    flex-shrink: 0;
+  }
+
+  .sidebar-section-label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 10px 6px;
+    color: var(--text-dim);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .chat-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 13px;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .chat-item:hover { background: var(--surface-hover); color: var(--text); }
+  .chat-item.active { background: var(--surface); color: var(--text); }
+  .chat-item.active .chat-dot { background: var(--accent); border-color: var(--accent); }
+
+  .chat-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    border: 1px solid var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .chat-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+  }
+
+  .chat-tag {
+    font-size: 11px;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+
+  .sidebar-footer {
+    margin-top: auto;
+    padding: 8px;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  .footer-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 13px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .footer-item:hover { background: var(--surface-hover); color: var(--text); }
+
+  .user-avatar {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #3A4A6B;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #A0B8E8;
+    flex-shrink: 0;
+    letter-spacing: 0.02em;
+  }
+
+  .user-info { flex: 1; overflow: hidden; }
+  .user-name { font-size: 13px; color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .user-plan { font-size: 11px; color: var(--text-muted); }
+
+  .footer-actions {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+    align-items: center;
+  }
+
+  .notification-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent-blue);
+    flex-shrink: 0;
+  }
+
+  /* ── MAIN ─────────────────────────────────── */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+  }
+
+  /* Top bar */
+  .top-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 20px;
+    z-index: 10;
+  }
+
+  .top-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .plan-info {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+  }
+
+  .plan-label { color: var(--text-muted); }
+  .plan-sep { color: var(--text-dim); }
+
+  .plan-upgrade {
+    color: var(--accent-blue);
+    cursor: pointer;
+    font-weight: 500;
+    transition: opacity 0.15s;
+  }
+  .plan-upgrade:hover { opacity: 0.8; text-decoration: underline; }
+
+  .share-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .share-btn:hover { background: var(--surface-hover); }
+
+  .top-right {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .top-center {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    display: none;
+  }
+  .main.chat-mode .top-center { display: flex; }
+
+  .chat-title-btn {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    padding: 5px 10px;
+    border-radius: 8px;
+    transition: background 0.15s;
+    max-width: 260px;
+  }
+  .chat-title-btn:hover { background: var(--surface-hover); }
+  .chat-title-btn span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Center hero */
+  .hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 680px;
+    padding: 0 24px;
+    gap: 24px;
+  }
+
+  .hero-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 32px;
+    font-weight: 300;
+    color: var(--text);
+    letter-spacing: -0.02em;
+    user-select: none;
+  }
+
+  /* Asterisk / snowflake logo */
+  .logo-mark {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+  }
+
+  /* ── Chat mode: messages + docked input ────── */
+  .messages {
+    display: none;
+    flex-direction: column;
+    gap: 18px;
+    width: 100%;
+    max-width: 680px;
+    padding: 24px 24px 140px;
+    margin: 0 auto;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .msg {
+    display: flex;
+    max-width: 85%;
+    font-size: 15px;
+    line-height: 1.55;
+    animation: msgIn 0.25s ease;
+  }
+  @keyframes msgIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .msg.user { align-self: flex-end; }
+  .msg.user .bubble {
+    background: var(--surface-hover);
+    color: var(--text);
+    padding: 10px 15px;
+    border-radius: 16px 16px 4px 16px;
+  }
+  .msg.ai { align-self: flex-start; gap: 10px; }
+  .msg.ai .bubble { color: var(--text); padding: 4px 0; }
+  .msg.ai .msg-logo { flex-shrink: 0; margin-top: 2px; }
+
+  /* ── AI message actions bar ─────────────────── */
+  .msg-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .msg-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 4px 0 2px;
+    opacity: 1;
+  }
+  .msg-time {
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-right: 6px;
+    white-space: nowrap;
+    user-select: none;
+  }
+  [dir="rtl"] .msg-time { margin-right: 0; margin-left: 6px; }
+  .msg-action-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+  .msg-action-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .msg-action-btn svg { width: 15px; height: 15px; stroke-width: 1.6; }
+
+  /* When chatting: hide hero decorations, dock the input */
+  .main.chat-mode { justify-content: flex-start; overflow: hidden; }
+  .main.chat-mode .top-bar { position: absolute; }
+  .main.chat-mode .hero-title,
+  .main.chat-mode .prompt-chips { display: none; }
+  .main.chat-mode .messages { display: flex; }
+  .main.chat-mode .hero {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    justify-content: flex-start;
+    animation: none;
+  }
+  /* messages scroll area fills space above the docked input */
+  .main.chat-mode .messages {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 70px 20px 20px;
+  }
+  /* input docked at bottom of the MAIN column (not the whole screen) */
+  .main.chat-mode .input-card {
+    position: relative;
+    flex-shrink: 0;
+    width: calc(100% - 32px);
+    max-width: 720px;
+    margin: 0 auto 16px;
+    background: var(--surface);
+    box-shadow: 0 -2px 20px rgba(0,0,0,0.4);
+    z-index: 5;
+  }
+
+  /* Input area */
+  .input-card {
+    position: relative;
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--input-radius);
+    padding: 16px 16px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+  }
+
+  .input-field {
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    width: 100%;
+    min-height: 22px;
+    line-height: 1.5;
+  }
+  .input-field::placeholder { color: var(--text-muted); }
+
+  .input-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .toolbar-add {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 300;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+  .toolbar-add:hover { background: var(--surface-hover); color: var(--text); }
+
+  .mode-btns {
+    display: flex;
+    gap: 4px;
+  }
+
+  .mode-btn {
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: none;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .mode-btn.active {
+    background: var(--surface-hover);
+    color: var(--text);
+  }
+
+  .mode-btn.inactive {
+    background: transparent;
+    color: var(--text-muted);
+  }
+  .mode-btn.inactive:hover { background: var(--surface-hover); color: var(--text); }
+
+  .toolbar-right {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .model-selector {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: background 0.15s;
+    user-select: none;
+  }
+  .model-selector:hover { background: var(--surface-hover); }
+
+  .model-name { color: var(--text); font-weight: 500; }
+
+  .send-btn {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: none;
+    background: var(--text);
+    color: var(--surface);
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  .send-btn svg { width: 16px; height: 16px; }
+  .send-btn:hover { opacity: 0.85; }
+  .send-btn:active { transform: scale(0.92); }
+  .send-btn.visible { display: flex; }
+
+  /* ── Attach ("+") menu ──────────────────────── */
+  .attach-wrap { position: relative; }
+  .attach-menu {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    width: 288px;
+    max-width: calc(100vw - 48px);
+    max-height: min(420px, calc(100vh - 120px));
+    max-height: min(420px, calc(100dvh - 120px));
+    overflow-y: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+    padding: 10px;
+    z-index: 60;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(6px) scale(0.98);
+    transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+    scrollbar-width: none;
+  }
+  .attach-menu::-webkit-scrollbar { display: none; }
+  .attach-menu.show { opacity: 1; visibility: visible; transform: translateY(0) scale(1); }
+  [dir="rtl"] .attach-menu { left: auto; right: 0; }
+
+  @media (max-height: 700px) {
+    .attach-menu { max-height: min(340px, calc(100vh - 100px)); max-height: min(340px, calc(100dvh - 100px)); }
+    .attach-quick-btn { padding: 10px 4px 8px; gap: 5px; }
+    .attach-row, .attach-nav-row { padding: 6px 8px; }
+  }
+
+  .attach-quick { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+  .attach-quick-btn {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 7px; padding: 14px 4px 11px; border-radius: 12px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    cursor: pointer; font-size: 11.5px; font-family: inherit; transition: background 0.15s, border-color 0.15s;
+  }
+  .attach-quick-btn:hover { background: var(--surface-hover); border-color: #3A3A3A; }
+  .attach-quick-btn svg { width: 20px; height: 20px; color: var(--text-muted); }
+
+  .attach-divider { height: 1px; background: var(--border); margin: 6px 2px; }
+
+  .attach-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 8px; border-radius: 10px; }
+  .attach-row-label { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--text); }
+  .attach-row-label svg { width: 17px; height: 17px; color: var(--text-muted); flex-shrink: 0; }
+  .attach-badge { font-size: 9px; font-weight: 700; letter-spacing: 0.3px; padding: 2px 6px; border-radius: 5px; background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+
+  .attach-nav-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 8px; border-radius: 10px; cursor: pointer; background: none; border: none;
+    width: 100%; font-family: inherit; text-align: left; color: var(--text);
+  }
+  [dir="rtl"] .attach-nav-row { text-align: right; }
+  .attach-nav-row:hover { background: var(--surface-hover); }
+  .attach-nav-value { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 12.5px; flex-shrink: 0; }
+  .attach-nav-value svg { width: 13px; height: 13px; transition: transform 0.15s; }
+  .attach-nav-value svg.rot { transform: rotate(90deg); }
+  [dir="rtl"] .attach-nav-value svg { transform: scaleX(-1); }
+  [dir="rtl"] .attach-nav-value svg.rot { transform: scaleX(-1) rotate(90deg); }
+
+  .attach-sub-panel {
+    display: none; padding: 4px 8px 8px 33px; font-size: 12.5px; color: var(--text-muted); line-height: 1.5;
+  }
+  [dir="rtl"] .attach-sub-panel { padding: 4px 33px 8px 8px; }
+  .attach-sub-panel.show { display: block; }
+  .attach-sub-link { color: var(--accent-blue); cursor: pointer; text-decoration: none; }
+  .attach-sub-link:hover { text-decoration: underline; }
+
+  /* attached file cards above the textarea (matches native attach UI) */
+  .attach-chips {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overflow-y: visible;
+    scrollbar-width: none;
+    padding: 10px 10px 2px;
+  }
+  .attach-chips::-webkit-scrollbar { display: none; }
+  .attach-chips:empty { display: none; }
+
+  .attach-file-card {
+    position: relative;
+    flex-shrink: 0;
+    width: 108px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 8px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 78px;
+    gap: 8px;
+  }
+  .attach-file-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: var(--surface-hover);
+    color: var(--text-muted);
+    border: 1px solid var(--border);
+  }
+  [dir="rtl"] .attach-file-badge { right: auto; left: 8px; }
+
+  .attach-file-remove {
+    position: absolute;
+    top: -8px;
+    left: -8px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    color: #111;
+    border: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+    padding: 0;
+  }
+  .attach-file-remove svg { width: 12px; height: 12px; }
+  [dir="rtl"] .attach-file-remove { left: auto; right: -8px; }
+
+  .attach-file-name {
+    font-size: 11.5px;
+    color: var(--text);
+    text-align: center;
+    line-height: 1.3;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+    max-height: 2.6em;
+  }
+
+  .chevron {
+    width: 14px;
+    height: 14px;
+    opacity: 0.5;
+  }
+
+  .mic-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mic-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+  .wave-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .wave-btn:hover { background: var(--surface-hover); color: var(--text); }
+
+  /* Prompt chips */
+  .prompt-chips {
+    display: flex;
+    gap: 7px;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 620px;
+  }
+
+  .chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 13px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .chip:hover { background: var(--surface); color: var(--text); border-color: #3A3A3A; }
+
+  .chip-icon { width: 14px; height: 14px; opacity: 0.7; flex-shrink: 0; }
+
+  /* Toggle sidebar btn (collapsed state) */
+  .toggle-sidebar-btn {
+    position: absolute;
+    top: 14px;
+    left: 14px;
+    z-index: 20;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .toggle-sidebar-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .toggle-sidebar-btn.hidden { display: none; }
+
+  /* Scrollable chats list */
+  .chats-list {
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .chats-list::-webkit-scrollbar { display: none; }
+
+  /* ── ANIMATIONS ──────────────────────────────── */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .hero { animation: fadeIn 0.4s ease both; }
+
+  /* Plan info centered when sidebar collapsed */
+  .plan-centered { justify-content: center; }
+
+  /* ── Username modal ────────────────────────── */
+  .name-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(6px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 24px;
+  }
+  .name-overlay.show { display: flex; }
+  .name-modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px 28px;
+    width: 100%;
+    max-width: 380px;
+    text-align: center;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+    animation: fadeIn 0.3s ease both;
+  }
+  .name-modal-logo { display: flex; justify-content: center; margin-bottom: 16px; }
+  .name-modal-title { font-size: 20px; font-weight: 600; color: var(--text); margin: 0 0 6px; }
+  .name-modal-sub { font-size: 14px; color: var(--text-muted); margin: 0 0 22px; }
+  .name-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 13px 16px;
+    color: var(--text);
+    font-size: 15px;
+    font-family: inherit;
+    outline: none;
+    text-align: center;
+    transition: border-color 0.15s;
+    box-sizing: border-box;
+  }
+  .name-input:focus { border-color: var(--accent); }
+  .name-submit {
+    width: 100%;
+    margin-top: 16px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 12px;
+    padding: 13px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: opacity 0.15s, transform 0.1s;
+  }
+  .name-submit:hover { opacity: 0.9; }
+  .name-submit:active { transform: scale(0.98); }
+
+  /* ── Settings modal ────────────────────────── */
+  .settings-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 90;
+    padding: 20px;
+  }
+  .settings-overlay.show { display: flex; }
+  .settings-modal {
+    background: rgba(28, 28, 30, 0.30);
+    backdrop-filter: blur(44px) saturate(200%);
+    -webkit-backdrop-filter: blur(44px) saturate(200%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 20px;
+    width: 100%;
+    max-width: 880px;
+    height: min(88vh, 680px);
+    display: flex;
+    overflow: hidden;
+    box-shadow:
+      0 24px 80px rgba(0,0,0,0.5),
+      inset 0 1px 0 rgba(255,255,255,0.20),
+      inset 0 0 40px rgba(255,255,255,0.03);
+    animation: fadeIn 0.25s ease both;
+  }
+  /* subtle glass sheen on top edge */
+  .settings-modal::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0) 40%);
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* left nav */
+  .settings-nav {
+    width: 210px;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.03);
+    border-right: 1px solid rgba(255, 255, 255, 0.10);
+    padding: 16px 12px;
+    overflow-y: auto;
+    position: relative;
+    z-index: 2;
+  }
+  .settings-content { position: relative; z-index: 2; }
+  .settings-search {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    padding: 9px 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    margin-bottom: 14px;
+    box-sizing: border-box;
+  }
+  .settings-group-label {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: none;
+    padding: 8px 10px 6px;
+    letter-spacing: 0.02em;
+  }
+  .settings-nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 10px;
+    border-radius: 8px;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    user-select: none;
+  }
+  .settings-nav-item:hover { background: var(--surface-hover); color: var(--text); }
+  .settings-nav-item.active { background: rgba(255,255,255,0.1); color: var(--text); }
+  .settings-nav-item svg { width: 17px; height: 17px; flex-shrink: 0; }
+
+  /* Glass-friendly inner surfaces */
+  .settings-modal .settings-text-input,
+  .settings-modal .settings-select,
+  .settings-modal .org-id-box,
+  .settings-modal .cap-egress-box,
+  .settings-modal .mem-add-box,
+  .settings-modal textarea.settings-text-input {
+    background: rgba(255,255,255,0.05) !important;
+    border-color: rgba(255,255,255,0.12) !important;
+  }
+  .settings-modal .seg {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(255,255,255,0.12);
+  }
+  .settings-modal .acct-btn {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.14);
+  }
+  .settings-modal .settings-row { border-bottom-color: rgba(255,255,255,0.08); }
+  /* Light theme: use dark translucency instead */
+  body.theme-light .settings-modal {
+    background: rgba(255,255,255,0.6);
+    border-color: rgba(0,0,0,0.1);
+  }
+  body.theme-light .settings-nav {
+    background: rgba(0,0,0,0.03);
+    border-right-color: rgba(0,0,0,0.08);
+  }
+  body.theme-light .settings-modal .settings-text-input,
+  body.theme-light .settings-modal .settings-select,
+  body.theme-light .settings-modal .org-id-box,
+  body.theme-light .settings-modal .cap-egress-box,
+  body.theme-light .settings-modal .mem-add-box,
+  body.theme-light .settings-modal .seg,
+  body.theme-light .settings-modal .acct-btn {
+    background: rgba(0,0,0,0.04) !important;
+    border-color: rgba(0,0,0,0.1) !important;
+  }
+
+  /* ── Chat search modal ─────────────────────────── */
+  .csearch-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.3);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 95;
+    padding: 20px;
+  }
+  .csearch-overlay.show { display: flex; }
+  .csearch-modal {
+    background: rgba(28, 28, 30, 0.92);
+    backdrop-filter: blur(44px) saturate(200%);
+    -webkit-backdrop-filter: blur(44px) saturate(200%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 16px;
+    width: 100%;
+    max-width: 560px;
+    max-height: min(78vh, 640px);
+    max-height: min(78dvh, 640px);
+    margin-top: 6vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15);
+    animation: fadeIn 0.2s ease both;
+  }
+  body.theme-light .csearch-modal {
+    background: rgba(255,255,255,0.96);
+    border-color: rgba(0,0,0,0.1);
+  }
+  .csearch-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .csearch-header svg { width: 17px; height: 17px; color: var(--text-muted); flex-shrink: 0; }
+  .csearch-header input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 15px;
+    font-family: inherit;
+  }
+  .csearch-header input::placeholder { color: var(--text-dim); }
+  .csearch-close {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    display: flex;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .csearch-close:hover { color: var(--text); background: var(--surface-hover); }
+  .csearch-close svg { width: 16px; height: 16px; }
+  .csearch-list { overflow-y: auto; padding: 8px; scrollbar-width: none; }
+  .csearch-list::-webkit-scrollbar { display: none; }
+  .csearch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 13.5px;
+    color: var(--text);
+  }
+  .csearch-row:hover, .csearch-row.active { background: var(--surface-hover); }
+  .csearch-row svg { width: 16px; height: 16px; color: var(--text-muted); flex-shrink: 0; }
+  .csearch-row-title {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .csearch-row-time { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  .csearch-empty { padding: 30px 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+  @media (max-width: 768px) {
+    .csearch-modal { margin-top: 3vh; max-height: min(88vh, 640px); max-height: min(88dvh, 640px); }
+  }
+
+  /* right content */
+  .settings-content {
+    flex: 1;
+    padding: 22px 28px;
+    overflow-y: auto;
+    position: relative;
+    min-width: 0;
+  }
+  .settings-close {
+    position: absolute;
+    top: 18px;
+    right: 20px;
+    width: 30px;
+    height: 30px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .settings-close:hover { background: var(--surface-hover); color: var(--text); }
+
+  .settings-panel { display: none; }
+  .settings-panel.active { display: block; }
+  .settings-section-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 18px;
+  }
+  .settings-section-title.sub { font-size: 15px; margin-top: 28px; }
+  .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .settings-row:last-child { border-bottom: none; }
+  .settings-row-label { font-size: 14px; color: var(--text); }
+  .settings-row-desc { font-size: 12.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
+  .settings-row-main { min-width: 0; }
+
+  .settings-text-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 13px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+    outline: none;
+    min-width: 200px;
+    transition: border-color 0.15s;
+  }
+  .settings-text-input:focus { border-color: var(--accent); }
+
+  /* toggle switch */
+  .switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch-slider {
+    position: absolute;
+    inset: 0;
+    background: var(--border);
+    border-radius: 22px;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .switch-slider::before {
+    content: "";
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 3px;
+    top: 3px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .switch input:checked + .switch-slider { background: var(--accent-blue); }
+  .switch input:checked + .switch-slider::before { transform: translateX(18px); }
+
+  /* segmented control (appearance) */
+  .seg {
+    display: inline-flex;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 2px;
+    gap: 2px;
+  }
+  .seg button {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    padding: 6px 12px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .seg button svg { width: 16px; height: 16px; }
+  .seg button.active { background: var(--surface-hover); color: var(--text); }
+
+  /* select dropdown */
+  .settings-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+  }
+  .settings-avatar {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: #3A4A6B;
+    color: #A0B8E8;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+  .settings-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 30px 0;
+  }
+  .plugin-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 0; border-bottom: 1px solid var(--border);
+    font-size: 14px; color: var(--text);
+  }
+
+  /* Account section */
+  .acct-btn {
+    background: var(--surface-hover);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 8px 16px;
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+  }
+  .acct-btn:hover { background: var(--border); }
+  .acct-btn.danger {
+    background: transparent;
+    border-color: #5a2a2a;
+    color: #e06060;
+  }
+  .acct-btn.danger:hover { background: rgba(224,96,96,0.1); border-color: #7a3a3a; }
+
+  .org-id-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 6px 8px 6px 12px;
+    font-family: 'Noto Sans Mono', ui-monospace, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .org-id-box span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .org-copy-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px;
+    border-radius: 6px;
+    display: flex;
+    flex-shrink: 0;
+    transition: background 0.15s, color 0.15s;
+  }
+  .org-copy-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .org-copy-btn svg { width: 15px; height: 15px; }
+
+  .acct-table-head {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .acct-table-head.sessions, .acct-table-row.sessions {
+    display: grid;
+    grid-template-columns: 1.3fr 1.3fr 1.3fr 24px;
+    gap: 8px;
+    align-items: center;
+  }
+  .acct-table-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .session-current {
+    background: var(--accent-blue);
+    color: #fff;
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 5px;
+    margin-inline-start: 6px;
+  }
+  .session-more { color: var(--text-muted); cursor: pointer; text-align: center; }
+
+  /* Capabilities egress box */
+  .cap-egress-box {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    margin-top: 14px;
+  }
+
+  /* Plugins */
+  .plugins-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    padding-right: 40px;
+  }
+  [dir="rtl"] .plugins-header { padding-right: 0; padding-left: 40px; }
+  .plugins-actions { display: flex; gap: 8px; }
+  .plugins-table-head {
+    display: grid;
+    grid-template-columns: 2fr 2fr 0.8fr 1.2fr 30px;
+    gap: 8px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .plugin-item {
+    display: grid;
+    grid-template-columns: 2fr 2fr 0.8fr 1.2fr 30px;
+    gap: 8px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text);
+  }
+  .plugin-item .p-name { font-weight: 500; }
+  .plugin-del {
+    background: transparent; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 4px; border-radius: 6px; display: flex; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .plugin-del:hover { background: var(--surface-hover); color: #e06060; }
+  .plugin-del svg { width: 15px; height: 15px; }
+
+  /* Memory rows */
+  .mem-item {
+    display: grid;
+    grid-template-columns: 1fr 1.6fr auto auto auto;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .mem-item .m-title { color: var(--text); font-weight: 500; }
+  .mem-item .m-desc { color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mem-item .m-date { color: var(--text-dim); font-size: 12px; white-space: nowrap; }
+  .mem-icon-btn {
+    background: transparent; border: none; color: var(--text-muted);
+    cursor: pointer; padding: 4px; border-radius: 6px; display: flex;
+    transition: background 0.15s, color 0.15s;
+  }
+  .mem-icon-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .mem-icon-btn.del:hover { color: #e06060; }
+  .mem-icon-btn svg { width: 15px; height: 15px; }
+  .mem-add-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 6px 6px 6px 14px;
+    margin-top: 20px;
+  }
+  .mem-add-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    color: var(--text);
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .mem-add-btn {
+    width: 32px; height: 32px; border-radius: 50%;
+    background: var(--surface-hover); color: var(--text);
+    border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: background 0.15s;
+  }
+  .mem-add-btn:hover { background: var(--border); }
+  .mem-add-btn svg { width: 16px; height: 16px; }
+
+  @media (max-width: 768px) {
+    .plugins-table-head, .plugin-item { grid-template-columns: 1.5fr 1fr 40px 30px; }
+    .plugins-table-head span:nth-child(4), .plugin-item span:nth-child(4) { display: none; }
+    .mem-item { grid-template-columns: 1fr auto auto; }
+    .mem-item .m-desc, .mem-item .m-date { display: none; }
+    .cap-egress-box { flex-direction: column; gap: 12px; }
+  }
+  @media (max-width: 768px) {
+    .acct-table-head.sessions, .acct-table-row.sessions {
+      grid-template-columns: 1fr 1fr;
+      font-size: 12px;
+    }
+    .acct-table-head.sessions span:nth-child(2),
+    .acct-table-row.sessions span:nth-child(2) { display: none; }
+  }
+
+  @media (max-width: 768px) {
+    .settings-modal { flex-direction: column; height: 90vh; max-width: 100%; }
+    .settings-nav {
+      width: 100%;
+      display: flex;
+      overflow-x: auto;
+      gap: 4px;
+      padding: 10px;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-search, .settings-group-label { display: none; }
+    .settings-nav-item { white-space: nowrap; padding: 8px 12px; }
+    .settings-nav-item span { display: none; }
+    .settings-nav-item svg { width: 20px; height: 20px; }
+    .settings-content { padding: 18px 16px; }
+    .settings-text-input { min-width: 130px; }
+  }
+
+  /* ── Responsive: phones & tablets ──────────── */
+  @media (max-width: 768px) {
+    /* Sidebar becomes an overlay drawer instead of pushing content */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 60;
+      width: min(82vw, 300px);
+      box-shadow: 4px 0 24px rgba(0,0,0,0.5);
+    }
+    .sidebar.collapsed {
+      width: min(82vw, 300px);
+      transform: translateX(-100%);
+      border-right: 1px solid var(--border);
+    }
+    .sidebar-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 55;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.22s ease;
+    }
+    .sidebar-backdrop.show { opacity: 1; pointer-events: auto; }
+
+    .hero { max-width: 100%; padding: 0 16px; }
+    .hero-title { font-size: 26px; }
+    .logo-mark { width: 30px; height: 30px; }
+    .prompt-chips { max-width: 100%; }
+    .main.chat-mode .input-card { width: calc(100% - 24px); margin-bottom: 12px; }
+    .main.chat-mode .messages { padding: 62px 14px 16px; }
+    .msg { max-width: 92%; }
+  }
+  @media (max-width: 480px) {
+    .hero-title { font-size: 23px; gap: 8px; }
+    .logo-mark { width: 26px; height: 26px; }
+    .input-field { font-size: 16px; } /* prevents iOS zoom-on-focus */
+    .chip { font-size: 12px; padding: 6px 11px; }
+    .name-modal { padding: 26px 20px; }
+  }
+  @media (min-width: 1200px) {
+    .hero { max-width: 760px; }
+    .main.chat-mode .messages { max-width: 800px; }
+    .main.chat-mode .input-card { max-width: 800px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+
+  <!-- Sidebar backdrop (mobile) -->
+  <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="toggleSidebar()"></div>
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-logo">Weaver Write</span>
+      <div class="sidebar-icons">
+        <button class="icon-btn" title="Search" onclick="openChatSearch()">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle cx="6.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="10" y1="10" x2="14" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="icon-btn" title="Collapse sidebar" onclick="toggleSidebar()">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="3" width="5" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="9" y1="3" x2="9" y2="13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <line x1="11" y1="5" x2="14" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <line x1="11" y1="11" x2="14" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <div class="nav-item active">
+        <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="12" y1="8" x2="12" y2="16"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+        </svg>
+        <span data-i18n="new">New</span>
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon lucide lucide-message-circle-icon lucide-message-circle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/>
+        </svg>
+        <span data-i18n="chats">Chats</span>
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon lucide lucide-tool-case-icon lucide-tool-case" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M10 15h4"/>
+          <path d="m14.817 10.995-.971-1.45 1.034-1.232a2 2 0 0 0-2.025-3.238l-1.82.364L9.91 3.885a2 2 0 0 0-3.625.748L6.141 6.55l-1.725.426a2 2 0 0 0-.19 3.756l.657.27"/>
+          <path d="m18.822 10.995 2.26-5.38a1 1 0 0 0-.557-1.318L16.954 2.9a1 1 0 0 0-1.281.533l-.924 2.122"/>
+          <path d="M4 12.006A1 1 0 0 1 4.994 11H19a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>
+        </svg>
+        <span data-i18n="artifacts">Artifacts</span>
+      </div>
+      <div class="nav-item">
+        <svg class="nav-icon lucide lucide-gallery-vertical-end-icon lucide-gallery-vertical-end" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M7 2h10"/>
+          <path d="M5 6h14"/>
+          <rect width="18" height="12" x="3" y="10" rx="2"/>
+        </svg>
+        <span data-i18n="projects">Projects</span>
+      </div>
+      <!-- Windows icon -->
+      <div class="nav-item">
+        <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="16" rx="2"/>
+          <path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/>
+        </svg>
+        <span data-i18n="windows">Windows</span>
+      </div>
+      <!-- Artifacts → Calendar icon -->
+      <div class="nav-item">
+        <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2v3"/><path d="M16 2v3"/>
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M3 9h18"/>
+          <path d="M8 13h.01"/><path d="M12 13h.01"/><path d="M16 13h.01"/>
+          <path d="M8 17h.01"/><path d="M12 17h.01"/><path d="M16 17h.01"/>
+        </svg>
+        <span data-i18n="calendar">Calendar</span>
+      </div>
+      <!-- Connect's icon -->
+      <div class="nav-item">
+        <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 19a1 1 0 0 1-1-1v-2a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2a1 1 0 0 1-1 1z"/>
+          <path d="M17 21v-2"/><path d="M19 14V6.5a1 1 0 0 0-7 0v11a1 1 0 0 1-7 0V10"/>
+          <path d="M21 21v-2"/><path d="M3 5V3"/>
+          <path d="M4 10a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2a2 2 0 0 1-2 2z"/>
+          <path d="M7 5V3"/>
+        </svg>
+        <span data-i18n="connects">Connect's</span>
+      </div>
+      <!-- Keys icon -->
+      <div class="nav-item">
+        <svg class="nav-icon lucide lucide-key-icon lucide-key" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/>
+          <path d="m21 2-9.6 9.6"/>
+          <circle cx="7.5" cy="15.5" r="5.5"/>
+        </svg>
+        <span data-i18n="keys">Keys</span>
+      </div>
+    </nav>
+
+    <div class="sidebar-section">
+      <div class="sidebar-section-label">
+        <span data-i18n="chats_tasks">Chats and tasks</span>
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M2 4h10M2 7h7M2 10h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="chats-list"></div>
+
+    <div class="sidebar-footer">
+      <!-- User row -->
+      <div class="footer-item" style="gap:8px;">
+        <div class="user-avatar" id="userAvatar">BH</div>
+        <div class="user-info">
+          <div class="user-name" id="userNameLabel">Bashar Hassan</div>
+          <div class="user-plan">Free</div>
+        </div>
+        <div class="footer-actions">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M3 4.5L6 7.5L9 4.5" stroke="#888" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="notification-dot"></div>
+          <button class="icon-btn" style="width:22px;height:22px;" title="Settings" onclick="openSettings()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/>
+              <circle cx="12" cy="12" r="3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN CONTENT -->
+  <main class="main" id="mainContent">
+
+    <!-- Toggle btn (only visible when sidebar is collapsed) -->
+    <button class="toggle-sidebar-btn hidden" id="toggleBtn" onclick="toggleSidebar()" title="Open sidebar">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+        <rect x="2" y="3" width="5" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+        <line x1="9" y1="3" x2="9" y2="13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <line x1="14" y1="5" x2="11" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <line x1="14" y1="11" x2="11" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+      </svg>
+    </button>
+
+    <!-- Top bar -->
+    <div class="top-bar" id="topBar">
+      <div class="top-left" id="topLeft">
+        <!-- sidebar toggle inside topbar when open -->
+        <button class="icon-btn" id="inlineToggle" onclick="toggleSidebar()" title="Toggle sidebar" style="display:none;">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <rect x="2" y="3" width="5" height="10" rx="1.5" stroke="currentColor" stroke-width="1.4"/>
+            <line x1="9" y1="3" x2="9" y2="13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="top-center" id="topCenter">
+        <button class="chat-title-btn" id="chatTitleBtn" onclick="void(0)">
+          <span id="chatTitleText">New chat</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+            <path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="top-right">
+        <button class="icon-btn" title="Export" onclick="void(0)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="9" y1="13" x2="15" y2="13"/>
+            <line x1="9" y1="17" x2="13" y2="17"/>
+          </svg>
+        </button>
+        <button class="share-btn" id="shareBtn" onclick="void(0)" title="Share">Share</button>
+      </div>
+    </div>
+
+    <!-- Hero -->
+    <div class="hero">
+      <div class="hero-title">
+        <!-- Woven asterisk SVG -->
+        <svg class="logo-mark" viewBox="0 0 256 256" fill="#C97A5A" xmlns="http://www.w3.org/2000/svg">
+          <path d="M119 235 C120 235 120 233 120 232 C120 221 166 204 191 205 C203 206 204 207 210 214 C214 219 217 221 218 218 C218 218 216 215 214 212 C203 199 207 152 222 133 C223 131 225 129 225 128 C225 128 227 127 230 127 C234 126 250 122 253 121 C262 118 238 120 224 124 C223 124 222 123 217 115 C205 95 203 88 203 61 L203 51 L208 46 C217 37 214 36 205 44 C201 47 197 51 195 52 C189 56 161 54 152 49 C149 48 143 46 139 44 C135 42 130 40 128 39 L124 38 L124 30 C124 20 122 17 122 25 C120 39 120 39 115 44 C104 54 85 61 66 61 C54 61 53 60 44 53 C38 48 32 45 38 51 C39 52 43 55 45 57 L50 62 L50 71 C50 86 44 105 33 119 L31 122 L16 121 C6 121 2 121 3 122 C4 122 7 123 9 123 C17 123 27 124 26 125 C26 126 28 129 31 132 C44 145 53 175 48 189 C47 192 45 196 36 204 C24 217 24 219 37 207 L45 199 L51 199 C81 199 116 218 116 233 C116 237 118 239 119 235 Z  M120 217 C120 195 136 184 171 181 L177 180 L187 190 C199 202 199 200 186 201 C163 201 137 209 124 221 L120 225 L120 217 Z  M114 218 C107 208 82 197 62 196 C50 196 50 195 56 189 C70 173 114 191 116 214 C117 222 117 222 114 218 Z  M119 193 C119 178 133 167 153 165 L160 165 L166 170 L172 176 L167 176 C148 179 133 186 123 196 L119 200 L119 193 Z  M112 195 C103 186 90 181 76 181 L65 180 L70 176 L75 170 L84 171 C100 171 112 175 114 182 C116 185 117 199 116 199 C115 199 114 197 112 195 Z  M192 189 C187 184 182 179 182 178 C181 177 181 176 180 176 C177 176 180 157 184 149 C189 137 196 132 209 130 C220 129 221 129 218 133 C207 148 198 186 202 198 C203 201 201 199 192 189 Z  M54 178 C54 163 45 141 35 131 C29 125 29 125 34 125 C41 125 42 126 47 133 C60 152 65 179 57 184 L54 186 L54 178 Z  M119 173 C119 164 126 158 142 156 L149 155 L152 158 L156 161 L150 162 C142 163 131 169 124 175 L119 179 L119 173 Z  M64 173 C63 170 63 166 62 163 C61 152 56 141 48 130 L44 125 L47 125 C56 125 71 146 72 161 L72 170 L68 173 L64 177 L64 173 Z  M113 174 C110 171 94 168 86 168 L79 168 L84 163 C91 155 106 158 115 169 C117 172 116 176 113 174 Z  M169 168 C163 162 162 160 162 152 C162 137 166 132 182 132 L193 132 L188 137 C181 145 175 159 175 169 C175 173 174 173 169 168 Z  M76 164 C76 164 75 162 75 160 C74 147 69 138 58 129 L52 125 L55 125 C57 125 62 125 65 126 L72 126 L77 133 C81 140 85 150 85 155 C85 159 77 167 76 164 Z  M114 162 C112 160 100 156 95 156 C91 156 91 156 92 154 C94 154 96 152 98 150 C103 145 112 146 115 151 C116 154 116 164 114 162 Z  M119 158 C119 145 131 139 141 147 L144 151 L139 152 C134 153 124 158 121 161 C119 162 119 162 119 158 Z  M155 155 C148 148 152 132 160 131 C166 131 166 132 164 135 C160 139 159 144 159 152 C160 160 159 160 155 155 Z  M89 152 C88 151 88 148 87 146 C85 140 83 135 79 131 C75 126 75 126 80 126 C92 126 101 142 93 150 C90 152 89 153 89 152 Z  M144 146 C139 141 139 139 144 133 C148 128 151 129 149 136 C148 139 148 141 149 145 C150 151 150 151 144 146 Z  M115 146 C114 145 111 145 109 144 L105 144 L111 138 L117 132 L117 139 C117 144 117 147 117 147 C117 147 116 146 115 146 Z  M119 140 C119 128 119 128 127 135 L133 140 L129 142 C127 142 124 144 122 145 L119 147 L119 140 Z  M99 140 C99 137 97 133 93 130 L90 127 L96 127 C99 127 105 127 108 128 L115 128 L108 136 C100 144 99 144 99 140 Z  M130 134 L124 129 L133 130 C143 130 142 130 140 135 C137 141 138 141 130 134 Z  M156 127 C153 125 151 117 151 107 L150 98 L155 94 C161 88 161 88 160 97 C160 109 166 123 173 127 C175 128 174 128 166 128 C162 128 157 128 156 127 Z  M175 122 C163 109 159 91 167 83 C174 75 179 71 179 74 C175 87 183 121 191 125 C193 127 192 128 186 128 L180 128 L175 122 Z  M132 126 C123 126 123 125 131 117 L138 111 L138 114 C138 116 139 120 140 122 C141 126 141 127 140 127 C140 127 136 126 132 126 Z  M145 125 C140 119 138 110 143 106 L146 103 L146 107 C146 112 150 124 151 125 C153 126 152 127 150 127 C148 127 146 126 145 125 Z  M195 124 C186 115 181 98 182 81 L183 68 L187 64 C200 53 200 53 200 71 C200 91 202 101 213 117 L217 124 L214 125 C205 128 199 127 195 124 Z  M108 124 C108 124 103 124 98 124 C87 123 87 123 91 118 C92 115 93 111 94 109 L94 104 L105 114 C110 120 115 124 115 125 C115 125 110 125 108 124 Z  M61 115 C69 104 74 86 70 81 C69 78 72 81 77 86 L82 92 L81 99 C80 107 78 113 73 119 L70 123 L63 123 L56 123 L61 115 Z  M74 123 C74 122 75 121 77 119 C81 115 84 108 85 101 L86 96 L89 98 C93 102 91 113 86 121 C85 123 74 124 74 123 Z  M120 114 C120 100 120 99 124 103 C126 105 128 107 130 108 C134 110 134 110 126 117 L120 123 L120 114 Z  M37 119 C41 114 50 97 52 93 C53 90 53 83 54 77 L54 65 L58 68 C64 73 62 83 51 107 C45 121 44 122 39 122 L35 122 L37 119 Z  M47 121 C58 100 64 83 63 76 L62 72 L66 75 L69 78 L69 87 C68 101 57 122 49 122 C48 122 47 122 47 121 Z  M106 111 C97 103 96 101 99 102 C102 103 111 103 116 101 C118 101 118 101 118 110 C118 123 118 123 106 111 Z  M130 105 C124 102 122 98 121 92 L121 87 L127 92 C131 96 135 98 137 99 C143 101 143 101 139 104 C136 108 135 108 130 105 Z  M103 100 C102 100 100 100 98 100 C96 99 93 98 91 97 L89 94 L97 94 C104 94 106 93 112 90 L119 86 L119 91 C119 97 111 102 103 100 Z  M136 95 C134 94 130 91 127 88 L121 83 L121 75 C121 65 121 65 126 70 C132 76 147 85 153 86 L157 86 L152 92 C146 98 143 98 136 95 Z  M80 85 C76 82 74 79 76 79 C86 83 106 79 117 71 L120 69 L120 75 C119 78 119 81 119 81 C106 89 101 91 93 92 L86 92 L80 85 Z  M142 77 C131 72 122 63 122 59 C122 55 123 55 127 57 C133 63 158 71 169 71 C173 71 173 72 167 77 C159 84 155 84 142 77 Z  M73 77 C71 77 69 76 67 74 L65 71 L73 71 C78 71 82 71 83 71 C83 70 87 69 91 69 C99 67 112 62 116 59 C120 56 120 57 120 60 C120 71 93 81 73 77 Z  M61 68 C59 66 61 66 71 66 C87 65 93 63 108 56 C117 51 120 50 120 51 C120 59 69 74 61 68 Z  M162 66 C130 60 123 56 124 47 C124 44 124 42 124 42 C125 42 131 45 139 49 C153 55 160 57 179 59 L186 59 L182 63 C179 67 171 68 162 66 Z" fill-rule="evenodd"/>
+        </svg>
+        <span id="greetingText">Evening thoughts</span>
+      </div>
+
+      <!-- Messages (chat mode) -->
+      <div class="messages" id="messages"></div>
+
+      <!-- Input card -->
+      <div class="input-card">
+        <div class="attach-chips" id="attachChips"></div>
+
+        <textarea
+          class="input-field"
+          placeholder="How can I help you today?"
+          rows="1"
+          id="mainInput"
+          oninput="autoResize(this)"
+        ></textarea>
+
+        <div class="input-toolbar">
+          <div class="attach-wrap">
+            <button class="toolbar-add" title="Attach" id="attachBtn" onclick="toggleAttachMenu(event)">+</button>
+
+            <!-- Attach menu popover -->
+            <div class="attach-menu" id="attachMenu">
+              <div class="attach-quick">
+                <button class="attach-quick-btn" onclick="triggerAttach('files')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="4" x2="9" y2="1"/></svg>
+                  <span data-i18n="attach_files">Files</span>
+                </button>
+                <button class="attach-quick-btn" onclick="triggerAttach('photos')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  <span data-i18n="attach_photos">Photos</span>
+                </button>
+                <button class="attach-quick-btn" onclick="triggerAttach('camera')">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                  <span data-i18n="attach_camera">Camera</span>
+                </button>
+              </div>
+
+              <div class="attach-divider"></div>
+
+              <div class="attach-row">
+                <div class="attach-row-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><polyline points="8 11 10 13 14 9"/></svg>
+                  <span data-i18n="attach_research">Research</span>
+                </div>
+                <label class="switch"><input type="checkbox" id="attachResearch" onchange="saveField('weaver_attach_research', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+              </div>
+
+              <div class="attach-row">
+                <div class="attach-row-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15 15 0 0 1 0 20 15 15 0 0 1 0-20z"/></svg>
+                  <span data-i18n="attach_websearch">Web search</span>
+                </div>
+                <label class="switch"><input type="checkbox" id="attachWebSearch" checked onchange="saveField('weaver_attach_websearch', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+              </div>
+
+              <div class="attach-row">
+                <div class="attach-row-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M19.414 14.414C21 12.828 22 11.5 22 9.5a5.5 5.5 0 0 0-9.591-3.676.6.6 0 0 1-.818.001A5.5 5.5 0 0 0 2 9.5c0 2.3 1.5 4 3 5.5l5.535 5.362a2 2 0 0 0 2.879.052 2.12 2.12 0 0 0-.004-3 2.124 2.124 0 1 0 3-3 2.124 2.124 0 0 0 3.004 0 2 2 0 0 0 0-2.828l-1.881-1.882a2.41 2.41 0 0 0-3.409 0l-1.71 1.71a2 2 0 0 1-2.828 0 2 2 0 0 1 0-2.828l2.823-2.762"/></svg>
+                  <span data-i18n="attach_health">Health</span>
+                  <span class="attach-badge">BETA</span>
+                </div>
+                <label class="switch"><input type="checkbox" id="attachHealth" onchange="saveField('weaver_attach_health', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+              </div>
+
+              <div class="attach-divider"></div>
+
+              <button class="attach-nav-row" onclick="toggleAttachSub('toolaccess', event)">
+                <div class="attach-row-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>
+                  <span data-i18n="attach_toolaccess">Tool access</span>
+                </div>
+                <div class="attach-nav-value">
+                  <span id="toolAccessValue" data-i18n="attach_auto">Auto</span>
+                  <svg id="toolAccessChevron" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </button>
+              <div class="attach-sub-panel" id="toolAccessSub">
+                <div style="display:flex;flex-direction:column;gap:2px;">
+                  <div class="attach-row" style="padding:6px 0;"><span data-i18n="attach_mode_auto">Auto</span><input type="radio" name="toolAccessMode" data-mode="Auto" checked onchange="setToolAccess('Auto')"></div>
+                  <div class="attach-row" style="padding:6px 0;"><span data-i18n="attach_mode_all">All tools</span><input type="radio" name="toolAccessMode" data-mode="All" onchange="setToolAccess('All')"></div>
+                  <div class="attach-row" style="padding:6px 0;"><span data-i18n="attach_mode_none">No tools</span><input type="radio" name="toolAccessMode" data-mode="None" onchange="setToolAccess('None')"></div>
+                </div>
+              </div>
+
+              <button class="attach-nav-row" onclick="toggleAttachSub('connectors', event)">
+                <div class="attach-row-label">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 22V7a1 1 0 0 0-1-1H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5a1 1 0 0 0-1-1H2"/><rect x="14" y="2" width="8" height="8" rx="1"/></svg>
+                  <span data-i18n="attach_connectors">Connectors</span>
+                </div>
+                <div class="attach-nav-value">
+                  <svg id="connectorsChevron" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+              </button>
+              <div class="attach-sub-panel" id="connectorsSub">
+                <span data-i18n="attach_no_connectors">No connectors connected.</span>
+                <span class="attach-sub-link" onclick="openConnectorSettings()" data-i18n="attach_browse_connectors"> Browse connectors</span>
+              </div>
+            </div>
+          </div>
+
+          <input type="file" id="attachFilesInput" multiple style="display:none" onchange="handleAttachFiles(this.files)">
+          <input type="file" id="attachPhotosInput" accept="image/*" multiple style="display:none" onchange="handleAttachFiles(this.files)">
+          <input type="file" id="attachCameraInput" accept="image/*" capture="environment" style="display:none" onchange="handleAttachFiles(this.files)">
+
+          <button class="toolbar-add" title="New chat" onclick="newChat()">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+              <line x1="12" y1="8" x2="12" y2="14"/>
+              <line x1="9" y1="11" x2="15" y2="11"/>
+            </svg>
+          </button>
+
+          <div class="toolbar-right">
+            <div class="model-selector" onclick="void(0)">
+              <span class="model-name">Sonnet 4.6</span>
+              <span style="color:var(--text-muted);font-size:13px;">Medium</span>
+              <svg class="chevron" viewBox="0 0 14 14" fill="none">
+                <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+
+            <button class="send-btn" id="sendBtn" title="Send" onclick="sendMessage()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="19" x2="12" y2="5"/>
+                <polyline points="5 12 12 5 19 12"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Prompt chips -->
+      <div class="prompt-chips">
+        <!-- 1. Writing / كتابة -->
+        <button class="chip" onclick="insertPrompt('Help me write something')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <path d="M2 10.5l1.5-4.5 8-8 3 3-8 8-4.5 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+          </svg>
+          <span data-i18n="c_writing">Writing</span>
+        </button>
+        <!-- 2. Assignment / واجب -->
+        <button class="chip" onclick="insertPrompt('Help me with my assignment')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <rect x="2" y="1.5" width="10" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="4.5" y1="5" x2="9.5" y2="5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="4.5" y1="7.5" x2="9.5" y2="7.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="4.5" y1="10" x2="7" y2="10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          <span data-i18n="c_assignment">Assignment</span>
+        </button>
+        <!-- 3. Research / بحث -->
+        <button class="chip" onclick="insertPrompt('Help me research a topic')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="9" y1="9" x2="12.5" y2="12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          <span data-i18n="c_research">Research</span>
+        </button>
+        <!-- 4. Report / تقرير -->
+        <button class="chip" onclick="insertPrompt('Help me write a report')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <rect x="1.5" y="1.5" width="11" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <line x1="4" y1="4.5" x2="10" y2="4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="4" y1="7" x2="10" y2="7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <polyline points="4,9.5 6,9.5 8,8 10,9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span data-i18n="c_report">Report</span>
+        </button>
+        <!-- 5. Project / مشروع -->
+        <button class="chip" onclick="insertPrompt('Help me plan or build a project')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <rect x="1.5" y="4" width="5" height="8.5" rx="1" stroke="currentColor" stroke-width="1.3"/>
+            <rect x="7.5" y="1.5" width="5" height="11" rx="1" stroke="currentColor" stroke-width="1.3"/>
+          </svg>
+          <span data-i18n="c_project">Project</span>
+        </button>
+        <!-- 6. Graduation Research / بحث تخرج -->
+        <button class="chip" onclick="insertPrompt('Help me with my graduation research')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1.5L1.5 4.5l5.5 3 5.5-3L7 1.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>
+            <path d="M3.5 6v3.5c0 1 1.6 2 3.5 2s3.5-1 3.5-2V6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+            <line x1="12.5" y1="4.5" x2="12.5" y2="8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+          <span data-i18n="grad_research">Graduation Research</span>
+        </button>
+        <!-- 7. Master's / Doctoral Thesis / رسالة ماجستير / أطروحة دكتوراه -->
+        <button class="chip" onclick="insertPrompt('Help me with my master\'s thesis or doctoral dissertation')">
+          <svg class="chip-icon" viewBox="0 0 14 14" fill="none">
+            <rect x="2" y="1.5" width="10" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+            <path d="M7 4l.8 2.5H10L8.1 8l.7 2.5L7 9l-1.8 1.5.7-2.5L4 6.5h2.2z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>
+          </svg>
+          <span data-i18n="thesis">Master's / Doctoral Thesis</span>
+        </button>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+  <!-- Username modal (first launch) -->
+  <div class="name-overlay" id="nameOverlay">
+    <div class="name-modal">
+      <div class="name-modal-logo">
+        <svg viewBox="0 0 256 256" fill="#C97A5A" width="40" height="40">
+          <path d="M119 235 C120 235 120 233 120 232 C120 221 166 204 191 205 C203 206 204 207 210 214 C214 219 217 221 218 218 C218 218 216 215 214 212 C203 199 207 152 222 133 C223 131 225 129 225 128 C225 128 227 127 230 127 C234 126 250 122 253 121 C262 118 238 120 224 124 C223 124 222 123 217 115 C205 95 203 88 203 61 L203 51 L208 46 C217 37 214 36 205 44 C201 47 197 51 195 52 C189 56 161 54 152 49 C149 48 143 46 139 44 C135 42 130 40 128 39 L124 38 L124 30 C124 20 122 17 122 25 C120 39 120 39 115 44 C104 54 85 61 66 61 C54 61 53 60 44 53 C38 48 32 45 38 51 C39 52 43 55 45 57 L50 62 L50 71 C50 86 44 105 33 119 L31 122 L16 121 C6 121 2 121 3 122 C4 122 7 123 9 123 C17 123 27 124 26 125 C26 126 28 129 31 132 C44 145 53 175 48 189 C47 192 45 196 36 204 C24 217 24 219 37 207 L45 199 L51 199 C81 199 116 218 116 233 C116 237 118 239 119 235 Z  M120 217 C120 195 136 184 171 181 L177 180 L187 190 C199 202 199 200 186 201 C163 201 137 209 124 221 L120 225 L120 217 Z  M114 218 C107 208 82 197 62 196 C50 196 50 195 56 189 C70 173 114 191 116 214 C117 222 117 222 114 218 Z  M119 193 C119 178 133 167 153 165 L160 165 L166 170 L172 176 L167 176 C148 179 133 186 123 196 L119 200 L119 193 Z  M112 195 C103 186 90 181 76 181 L65 180 L70 176 L75 170 L84 171 C100 171 112 175 114 182 C116 185 117 199 116 199 C115 199 114 197 112 195 Z  M192 189 C187 184 182 179 182 178 C181 177 181 176 180 176 C177 176 180 157 184 149 C189 137 196 132 209 130 C220 129 221 129 218 133 C207 148 198 186 202 198 C203 201 201 199 192 189 Z  M54 178 C54 163 45 141 35 131 C29 125 29 125 34 125 C41 125 42 126 47 133 C60 152 65 179 57 184 L54 186 L54 178 Z  M119 173 C119 164 126 158 142 156 L149 155 L152 158 L156 161 L150 162 C142 163 131 169 124 175 L119 179 L119 173 Z  M64 173 C63 170 63 166 62 163 C61 152 56 141 48 130 L44 125 L47 125 C56 125 71 146 72 161 L72 170 L68 173 L64 177 L64 173 Z  M113 174 C110 171 94 168 86 168 L79 168 L84 163 C91 155 106 158 115 169 C117 172 116 176 113 174 Z  M169 168 C163 162 162 160 162 152 C162 137 166 132 182 132 L193 132 L188 137 C181 145 175 159 175 169 C175 173 174 173 169 168 Z  M76 164 C76 164 75 162 75 160 C74 147 69 138 58 129 L52 125 L55 125 C57 125 62 125 65 126 L72 126 L77 133 C81 140 85 150 85 155 C85 159 77 167 76 164 Z  M114 162 C112 160 100 156 95 156 C91 156 91 156 92 154 C94 154 96 152 98 150 C103 145 112 146 115 151 C116 154 116 164 114 162 Z  M119 158 C119 145 131 139 141 147 L144 151 L139 152 C134 153 124 158 121 161 C119 162 119 162 119 158 Z  M155 155 C148 148 152 132 160 131 C166 131 166 132 164 135 C160 139 159 144 159 152 C160 160 159 160 155 155 Z  M89 152 C88 151 88 148 87 146 C85 140 83 135 79 131 C75 126 75 126 80 126 C92 126 101 142 93 150 C90 152 89 153 89 152 Z  M144 146 C139 141 139 139 144 133 C148 128 151 129 149 136 C148 139 148 141 149 145 C150 151 150 151 144 146 Z  M115 146 C114 145 111 145 109 144 L105 144 L111 138 L117 132 L117 139 C117 144 117 147 117 147 C117 147 116 146 115 146 Z  M119 140 C119 128 119 128 127 135 L133 140 L129 142 C127 142 124 144 122 145 L119 147 L119 140 Z  M99 140 C99 137 97 133 93 130 L90 127 L96 127 C99 127 105 127 108 128 L115 128 L108 136 C100 144 99 144 99 140 Z  M130 134 L124 129 L133 130 C143 130 142 130 140 135 C137 141 138 141 130 134 Z  M156 127 C153 125 151 117 151 107 L150 98 L155 94 C161 88 161 88 160 97 C160 109 166 123 173 127 C175 128 174 128 166 128 C162 128 157 128 156 127 Z  M175 122 C163 109 159 91 167 83 C174 75 179 71 179 74 C175 87 183 121 191 125 C193 127 192 128 186 128 L180 128 L175 122 Z  M132 126 C123 126 123 125 131 117 L138 111 L138 114 C138 116 139 120 140 122 C141 126 141 127 140 127 C140 127 136 126 132 126 Z  M145 125 C140 119 138 110 143 106 L146 103 L146 107 C146 112 150 124 151 125 C153 126 152 127 150 127 C148 127 146 126 145 125 Z  M195 124 C186 115 181 98 182 81 L183 68 L187 64 C200 53 200 53 200 71 C200 91 202 101 213 117 L217 124 L214 125 C205 128 199 127 195 124 Z  M108 124 C108 124 103 124 98 124 C87 123 87 123 91 118 C92 115 93 111 94 109 L94 104 L105 114 C110 120 115 124 115 125 C115 125 110 125 108 124 Z  M61 115 C69 104 74 86 70 81 C69 78 72 81 77 86 L82 92 L81 99 C80 107 78 113 73 119 L70 123 L63 123 L56 123 L61 115 Z  M74 123 C74 122 75 121 77 119 C81 115 84 108 85 101 L86 96 L89 98 C93 102 91 113 86 121 C85 123 74 124 74 123 Z  M120 114 C120 100 120 99 124 103 C126 105 128 107 130 108 C134 110 134 110 126 117 L120 123 L120 114 Z  M37 119 C41 114 50 97 52 93 C53 90 53 83 54 77 L54 65 L58 68 C64 73 62 83 51 107 C45 121 44 122 39 122 L35 122 L37 119 Z  M47 121 C58 100 64 83 63 76 L62 72 L66 75 L69 78 L69 87 C68 101 57 122 49 122 C48 122 47 122 47 121 Z  M106 111 C97 103 96 101 99 102 C102 103 111 103 116 101 C118 101 118 101 118 110 C118 123 118 123 106 111 Z  M130 105 C124 102 122 98 121 92 L121 87 L127 92 C131 96 135 98 137 99 C143 101 143 101 139 104 C136 108 135 108 130 105 Z  M103 100 C102 100 100 100 98 100 C96 99 93 98 91 97 L89 94 L97 94 C104 94 106 93 112 90 L119 86 L119 91 C119 97 111 102 103 100 Z  M136 95 C134 94 130 91 127 88 L121 83 L121 75 C121 65 121 65 126 70 C132 76 147 85 153 86 L157 86 L152 92 C146 98 143 98 136 95 Z  M80 85 C76 82 74 79 76 79 C86 83 106 79 117 71 L120 69 L120 75 C119 78 119 81 119 81 C106 89 101 91 93 92 L86 92 L80 85 Z  M142 77 C131 72 122 63 122 59 C122 55 123 55 127 57 C133 63 158 71 169 71 C173 71 173 72 167 77 C159 84 155 84 142 77 Z  M73 77 C71 77 69 76 67 74 L65 71 L73 71 C78 71 82 71 83 71 C83 70 87 69 91 69 C99 67 112 62 116 59 C120 56 120 57 120 60 C120 71 93 81 73 77 Z  M61 68 C59 66 61 66 71 66 C87 65 93 63 108 56 C117 51 120 50 120 51 C120 59 69 74 61 68 Z  M162 66 C130 60 123 56 124 47 C124 44 124 42 124 42 C125 42 131 45 139 49 C153 55 160 57 179 59 L186 59 L182 63 C179 67 171 68 162 66 Z" fill-rule="evenodd"/>
+        </svg>
+      </div>
+      <h2 class="name-modal-title">مرحباً بك في Weaver Write</h2>
+      <p class="name-modal-sub">أدخل اسمك للمتابعة</p>
+      <input type="text" class="name-input" id="nameInput" placeholder="اسمك" maxlength="40" autocomplete="off" />
+      <button class="name-submit" id="nameSubmit" onclick="saveUserName()">متابعة</button>
+    </div>
+  </div>
+
+  <!-- Chat search modal -->
+  <div class="csearch-overlay" id="csearchOverlay">
+    <div class="csearch-modal">
+      <div class="csearch-header">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="csearchInput" data-i18n-ph="csearch_placeholder" placeholder="Search chats and projects" oninput="filterChatSearch(this.value)" autocomplete="off" />
+        <button class="csearch-close" onclick="closeChatSearch()" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="csearch-list" id="csearchList"></div>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="settings-overlay" id="settingsOverlay">
+    <div class="settings-modal">
+      <!-- Left nav -->
+      <nav class="settings-nav">
+        <input type="text" class="settings-search" placeholder="Search" oninput="filterSettings(this.value)" />
+        <div class="settings-group-label" data-i18n="s_settings">Settings</div>
+        <div class="settings-nav-item active" data-panel="general" onclick="showSettingsPanel('general', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span data-i18n="s_general">General</span>
+        </div>
+        <div class="settings-nav-item" data-panel="account" onclick="showSettingsPanel('account', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.5-6 8-6s8 2 8 6"/></svg>
+          <span data-i18n="s_account">Account</span>
+        </div>
+        <div class="settings-nav-item" data-panel="capabilities" onclick="showSettingsPanel('capabilities', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          <span data-i18n="s_capabilities">Capabilities</span>
+        </div>
+        <div class="settings-group-label" data-i18n="s_customize">Customize</div>
+        <div class="settings-nav-item" data-panel="plugins" onclick="showSettingsPanel('plugins', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m19 5 3-3"/><path d="m2 22 3-3"/><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z"/></svg>
+          <span data-i18n="s_plugins">Plugins</span>
+        </div>
+        <div class="settings-nav-item" data-panel="memory" onclick="showSettingsPanel('memory', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>
+          <span data-i18n="s_memory">Memory</span>
+        </div>
+      </nav>
+
+      <!-- Right content -->
+      <div class="settings-content">
+        <button class="settings-close" onclick="closeSettings()" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+
+        <!-- GENERAL -->
+        <div class="settings-panel active" id="panel-general">
+          <h2 class="settings-section-title">Profile</h2>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Avatar</div></div>
+            <div class="settings-avatar" id="genAvatar">BH</div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Full name</div></div>
+            <input type="text" class="settings-text-input" id="genFullName" placeholder="اسمك" oninput="onGeneralName(this.value)">
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">What should we call you?</div></div>
+            <input type="text" class="settings-text-input" id="genCallName" placeholder="اسمك" oninput="saveField('weaver_callname', this.value)">
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">What best describes your work?</div></div>
+            <select class="settings-select" id="genWork" onchange="saveField('weaver_work', this.value)">
+              <option value="">Select</option>
+              <option value="student">طالب / Student</option>
+              <option value="developer">مطوّر / Developer</option>
+              <option value="researcher">باحث / Researcher</option>
+              <option value="writer">كاتب / Writer</option>
+              <option value="other">أخرى / Other</option>
+            </select>
+          </div>
+          <div class="settings-row" style="flex-direction:column;align-items:stretch;gap:10px;">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Instructions</div>
+              <div class="settings-row-desc">Will be kept in mind across chats.</div>
+            </div>
+            <textarea id="genInstructions" class="settings-text-input" style="width:100%;min-height:80px;resize:vertical;box-sizing:border-box;"
+              placeholder="مثال: اسأل أسئلة توضيحية قبل الإجابة التفصيلية"
+              oninput="saveField('weaver_instructions', this.value)"></textarea>
+          </div>
+
+          <h2 class="settings-section-title sub">Preferences</h2>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Appearance</div></div>
+            <div class="seg" id="segAppearance">
+              <button data-mode="system" class="active" onclick="setAppearance('system', this)" title="System">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>
+              </button>
+              <button data-mode="light" onclick="setAppearance('light', this)" title="Light">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2m-3-7l-1.5 1.5M6.5 17.5L5 19m0-14l1.5 1.5m11 11L19 19"/></svg>
+              </button>
+              <button data-mode="dark" onclick="setAppearance('dark', this)" title="Dark">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Chat font</div></div>
+            <select class="settings-select" id="chatFont" onchange="setChatFont(this.value)">
+              <option value="sans">Sans-serif</option>
+              <option value="serif">Serif</option>
+              <option value="mono">Monospace</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Motion</div>
+              <div class="settings-row-desc">Reduce animation in interface elements.</div>
+            </div>
+            <div class="seg" id="segMotion">
+              <button class="active" data-motion="system" onclick="setMotion('system', this)">System</button>
+              <button data-motion="reduced" onclick="setMotion('reduced', this)">Reduced</button>
+            </div>
+          </div>
+
+          <h2 class="settings-section-title sub">Voice</h2>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label" data-i18n="v_language">Language</div></div>
+            <select class="settings-select" id="voiceLang" onchange="setLanguage(this.value)">
+              <option value="en">English</option>
+              <option value="ar">العربية</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Style</div></div>
+            <select class="settings-select" id="voiceStyle" onchange="saveField('weaver_voice_style', this.value)">
+              <option value="buttery">Buttery</option>
+              <option value="crisp">Crisp</option>
+              <option value="warm">Warm</option>
+            </select>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Speed</div></div>
+            <select class="settings-select" id="voiceSpeed" onchange="saveField('weaver_voice_speed', this.value)">
+              <option value="slow">Slow</option>
+              <option value="normal">Normal</option>
+              <option value="fast">Fast</option>
+            </select>
+          </div>
+
+          <h2 class="settings-section-title sub">Notifications</h2>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Response completions</div>
+              <div class="settings-row-desc">Get notified when a response is finished.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="notifToggle" checked onchange="saveField('weaver_notif', this.checked ? '1':'0')"><span class="switch-slider"></span></label>
+          </div>
+        </div>
+
+        <!-- ACCOUNT -->
+        <div class="settings-panel" id="panel-account">
+          <h2 class="settings-section-title">Account</h2>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Log out of all devices</div></div>
+            <button class="acct-btn" onclick="logoutAllDevices()">Log out</button>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main"><div class="settings-row-label">Delete your account</div></div>
+            <button class="acct-btn danger" onclick="deleteAccount()">Delete account</button>
+          </div>
+          <h2 class="settings-section-title sub">Trusted devices</h2>
+          <div class="settings-row-desc" style="margin:-10px 0 6px;">Devices that can control your local machine through remote sessions.</div>
+          <div class="acct-table-head">
+            <span>Device</span><span>Added</span>
+          </div>
+          <div id="trustedDevices"></div>
+          <div class="settings-empty" id="trustedEmpty">No trusted devices.</div>
+
+          <h2 class="settings-section-title sub">Active sessions</h2>
+          <div class="acct-table-head sessions">
+            <span>Device</span><span>Created</span><span>Updated</span><span></span>
+          </div>
+          <div id="activeSessions"></div>
+        </div>
+
+        <!-- CAPABILITIES -->
+        <div class="settings-panel" id="panel-capabilities">
+          <h2 class="settings-section-title">Visuals</h2>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Artifacts</div>
+              <div class="settings-row-desc">Generate code, documents, and designs in a dedicated window alongside your conversation.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="capArtifacts" checked onchange="saveField('weaver_cap_artifacts', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">AI-powered artifacts</div>
+              <div class="settings-row-desc">Build apps and interactive documents that use AI inside the artifact.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="capAiArtifacts" onchange="saveField('weaver_cap_ai_artifacts', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Inline visualizations</div>
+              <div class="settings-row-desc">Allow interactive visualizations, charts, and diagrams directly in the conversation.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="capInline" checked onchange="saveField('weaver_cap_inline', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+          </div>
+
+          <h2 class="settings-section-title sub">Code execution and file creation</h2>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Code execution and file creation</div>
+              <div class="settings-row-desc">Execute code and create and edit docs, spreadsheets, presentations, PDFs, and data reports. Required for skills.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="capCode" checked onchange="onCodeExecToggle(this.checked)"><span class="switch-slider"></span></label>
+          </div>
+          <div class="cap-egress-box" id="egressBox">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Allow network egress</div>
+              <div class="settings-row-desc">Allow access to common package managers to install packages and libraries for data analysis, visualizations, and file processing. Monitor chats closely as this comes with security risks.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="capEgress" checked onchange="saveField('weaver_cap_egress', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+          </div>
+        </div>
+
+        <!-- PLUGINS -->
+        <div class="settings-panel" id="panel-plugins">
+          <div class="plugins-header">
+            <h2 class="settings-section-title" style="margin:0;">Plugins</h2>
+            <div class="plugins-actions">
+              <button class="acct-btn" onclick="browsePlugins()">Browse</button>
+              <button class="acct-btn" onclick="addPlugin()">Add +</button>
+            </div>
+          </div>
+          <div class="plugins-table-head">
+            <span>Plugin</span><span>Author</span><span>Skills</span><span>Last updated</span><span></span>
+          </div>
+          <div id="pluginsList"></div>
+          <div class="settings-empty" id="pluginsEmpty" style="display:none;">No plugins installed.</div>
+        </div>
+
+        <!-- MEMORY -->
+        <div class="settings-panel" id="panel-memory">
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Generate memory from chats</div>
+              <div class="settings-row-desc">Allow generating memory from your chats.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="memGenerate" checked onchange="saveField('weaver_mem_generate', this.checked?'1':'0')"><span class="switch-slider"></span></label>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Import memory from other AI providers</div>
+              <div class="settings-row-desc">Bring relevant context and data from another AI provider.</div>
+            </div>
+            <button class="acct-btn" onclick="startImport()">Start import</button>
+          </div>
+
+          <h2 class="settings-section-title sub">You</h2>
+          <div id="memYou"></div>
+
+          <h2 class="settings-section-title sub">Topics</h2>
+          <div id="memTopics"></div>
+
+          <h2 class="settings-section-title sub">Areas</h2>
+          <div id="memAreas"></div>
+
+          <div class="mem-add-box">
+            <input type="text" class="mem-add-input" id="memAddInput" placeholder="أضف ذاكرة جديدة..." onkeydown="if(event.key==='Enter')addMemory()">
+            <button class="mem-add-btn" onclick="addMemory()" title="Add">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ── Greeting based on time of day ──────────────
+  // ── i18n translation dictionary ────────────────
+  const I18N = {
+    en: {
+      new: "New", chats: "Chats", artifacts: "Artifacts", projects: "Projects", windows: "Windows", calendar: "Calendar",
+      connects: "Connect's", keys: "Keys", chats_tasks: "Chats and tasks",
+      free_plan: "Free plan", upgrade: "Upgrade",
+      c_writing: "Writing", c_assignment: "Assignment", c_research: "Research",
+      c_report: "Report", c_project: "Project",
+      grad_research: "Graduation Research", thesis: "Master's / Doctoral Thesis",
+      s_settings: "Settings", s_customize: "Customize",
+      s_general: "General", s_account: "Account", s_capabilities: "Capabilities",
+      s_plugins: "Plugins", s_memory: "Memory", v_language: "Language",
+      placeholder: "How can I help you today?",
+      greet_morning: "Morning thoughts", greet_afternoon: "Afternoon thoughts", greet_evening: "Evening thoughts",
+      attach_files: "Files", attach_photos: "Photos", attach_camera: "Camera",
+      attach_research: "Research", attach_websearch: "Web search", attach_health: "Health",
+      attach_toolaccess: "Tool access", attach_auto: "Auto", attach_connectors: "Connectors",
+      attach_no_connectors: "No connectors connected.", attach_browse_connectors: " Browse connectors",
+      attach_mode_auto: "Auto", attach_mode_all: "All tools", attach_mode_none: "No tools",
+      csearch_placeholder: "Search chats and projects", csearch_no_results: "No chats or projects found.",
+      group_today: "Today", group_week: "Past week", group_month: "Past month", group_year: "Past year"
+    },
+    ar: {
+      new: "جديد", chats: "المحادثات", artifacts: "الأعمال", projects: "المشاريع", windows: "النوافذ", calendar: "التقويم",
+      connects: "الاتصالات", keys: "المفاتيح", chats_tasks: "المحادثات والمهام",
+      free_plan: "الخطة المجانية", upgrade: "ترقية",
+      c_writing: "كتابة", c_assignment: "واجب", c_research: "بحث",
+      c_report: "تقرير", c_project: "مشروع",
+      grad_research: "بحث تخرّج", thesis: "رسالة ماجستير / أطروحة دكتوراه",
+      s_settings: "الإعدادات", s_customize: "تخصيص",
+      s_general: "عام", s_account: "الحساب", s_capabilities: "القدرات",
+      s_plugins: "الإضافات", s_memory: "الذاكرة", v_language: "اللغة",
+      placeholder: "كيف يمكنني مساعدتك اليوم؟",
+      greet_morning: "أفكار الصباح", greet_afternoon: "أفكار الظهيرة", greet_evening: "أفكار المساء",
+      attach_files: "الملفات", attach_photos: "الصور", attach_camera: "الكاميرا",
+      attach_research: "البحث", attach_websearch: "البحث عبر الويب", attach_health: "الصحة",
+      attach_toolaccess: "الوصول للأدوات", attach_auto: "تلقائي", attach_connectors: "الموصلات",
+      attach_no_connectors: "لا توجد موصلات متصلة.", attach_browse_connectors: " تصفح الموصلات",
+      attach_mode_auto: "تلقائي", attach_mode_all: "كل الأدوات", attach_mode_none: "بدون أدوات",
+      csearch_placeholder: "ابحث في المحادثات والمشاريع", csearch_no_results: "لا توجد محادثات أو مشاريع.",
+      group_today: "اليوم", group_week: "الأسبوع الماضي", group_month: "الشهر الماضي", group_year: "السنة الماضية"
+    }
+  };
+  let currentLang = 'en';
+
+  function setLanguage(lang) {
+    currentLang = (lang === 'ar') ? 'ar' : 'en';
+    const dict = I18N[currentLang];
+    // direction
+    document.documentElement.setAttribute('dir', currentLang === 'ar' ? 'rtl' : 'ltr');
+    document.documentElement.setAttribute('lang', currentLang);
+    // translate every tagged element
+    document.querySelectorAll('[data-i18n]').forEach(el => {
+      const key = el.getAttribute('data-i18n');
+      if (dict[key] !== undefined) el.textContent = dict[key];
+    });
+    // input placeholder
+    const inp = document.getElementById('mainInput');
+    if (inp) inp.setAttribute('placeholder', dict.placeholder);
+    // other placeholder-tagged inputs
+    document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+      const key = el.getAttribute('data-i18n-ph');
+      if (dict[key] !== undefined) el.setAttribute('placeholder', dict[key]);
+    });
+    // refresh chat search list (titles/time labels are language-aware)
+    if (document.getElementById('csearchList')) renderChatSearchList(document.getElementById('csearchInput').value);
+    // greeting
+    updateGreeting();
+    saveField('weaver_voice_lang', currentLang);
+  }
+
+  // ── Greeting based on time of day (language-aware) ─
+  function updateGreeting() {
+    const h = new Date().getHours();
+    const el = document.getElementById('greetingText');
+    const dict = I18N[currentLang];
+    if (h >= 5 && h < 12)  el.textContent = dict.greet_morning;
+    else if (h >= 12 && h < 17) el.textContent = dict.greet_afternoon;
+    else el.textContent = dict.greet_evening;
+  }
+  updateGreeting();
+
+  // ── Username (first-launch, saved locally) ─────
+  function getInitials(name) {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  function applyUserName(name) {
+    document.getElementById('userNameLabel').textContent = name;
+    document.getElementById('userAvatar').textContent = getInitials(name);
+  }
+
+  function saveUserName() {
+    const val = document.getElementById('nameInput').value.trim();
+    if (!val) {
+      document.getElementById('nameInput').focus();
+      return;
+    }
+    try { localStorage.setItem('weaver_username', val); } catch (e) {}
+    applyUserName(val);
+    document.getElementById('nameOverlay').classList.remove('show');
+  }
+
+  function openSettings() {
+    // Sync current name into General fields + avatar
+    let current = '';
+    try { current = localStorage.getItem('weaver_username') || ''; } catch (e) {}
+    const ini = getInitials(current || '?');
+    document.getElementById('genFullName').value = current;
+    document.getElementById('genAvatar').textContent = ini;
+    renderAccountTables();
+    renderPlugins();
+    renderMemory();
+    document.getElementById('settingsOverlay').classList.add('show');
+  }
+
+  function closeSettings() {
+    document.getElementById('settingsOverlay').classList.remove('show');
+  }
+
+  // ── Chat search modal ──────────────────────────
+  const chatIconSvg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></svg>';
+
+  function chatTimeGroup(ts) {
+    const dict = I18N[currentLang];
+    const diffDays = (Date.now() - ts) / 86400000;
+    if (diffDays < 1) return dict.group_today;
+    if (diffDays < 7) return dict.group_week;
+    if (diffDays < 30) return dict.group_month;
+    return dict.group_year;
+  }
+
+  function openChatSearch() {
+    const overlay = document.getElementById('csearchOverlay');
+    const input = document.getElementById('csearchInput');
+    input.value = '';
+    renderChatSearchList('');
+    overlay.classList.add('show');
+    setTimeout(() => input.focus(), 30);
+  }
+
+  function closeChatSearch() {
+    document.getElementById('csearchOverlay').classList.remove('show');
+  }
+
+  function filterChatSearch(query) {
+    renderChatSearchList(query);
+  }
+
+  function renderChatSearchList(query) {
+    const list = document.getElementById('csearchList');
+    if (!list) return;
+    const q = (query || '').trim().toLowerCase();
+    const dict = I18N[currentLang];
+    const chats = loadChats();
+    const filtered = chats.filter(c => !q || c.title.toLowerCase().includes(q));
+
+    if (filtered.length === 0) {
+      list.innerHTML = `<div class="csearch-empty">${dict.csearch_no_results}</div>`;
+      return;
+    }
+
+    list.innerHTML = filtered.map((c, i) =>
+      `<div class="csearch-row${c.id === currentChatId ? ' active' : ''}" onclick="selectChat('${c.id}'); closeChatSearch();">
+        ${chatIconSvg}
+        <span class="csearch-row-title">${c.title}</span>
+        <span class="csearch-row-time">${chatTimeGroup(c.ts)}</span>
+      </div>`
+    ).join('');
+  }
+
+  document.getElementById('csearchOverlay').addEventListener('click', function (e) {
+    if (e.target === this) closeChatSearch();
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeChatSearch();
+  });
+
+  // ── Account actions ───────────────────────────
+  function logoutAllDevices() {
+    if (confirm('تسجيل الخروج من جميع الأجهزة؟')) {
+      try { localStorage.removeItem('weaver_username'); localStorage.removeItem('weaver_callname'); } catch (e) {}
+      alert('تم تسجيل الخروج من جميع الأجهزة (تجريبي).');
+    }
+  }
+
+  function deleteAccount() {
+    if (confirm('حذف حسابك نهائياً؟ لا يمكن التراجع.')) {
+      if (confirm('هل أنت متأكد تماماً؟ سيتم مسح كل بياناتك المحلية.')) {
+        try { localStorage.clear(); } catch (e) {}
+        alert('تم حذف الحساب (تجريبي). سيتم إعادة التحميل.');
+        location.reload();
+      }
+    }
+  }
+
+  // Render trusted devices + active sessions tables
+  function renderAccountTables() {
+    // trusted devices (empty by default)
+    const trusted = [];
+    const td = document.getElementById('trustedDevices');
+    const te = document.getElementById('trustedEmpty');
+    td.innerHTML = '';
+    if (trusted.length === 0) { te.style.display = 'block'; }
+    else {
+      te.style.display = 'none';
+      trusted.forEach(d => {
+        const row = document.createElement('div');
+        row.className = 'acct-table-row';
+        row.innerHTML = `<span>${d.device}</span><span>${d.added}</span>`;
+        td.appendChild(row);
+      });
+    }
+
+    // active sessions (current session shown)
+    const sessions = [{
+      device: 'Chrome',
+      current: true,
+      created: 'Jun 18, 2026, 9:13 PM',
+      updated: new Date().toLocaleString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' })
+    }];
+    const as = document.getElementById('activeSessions');
+    as.innerHTML = '';
+    sessions.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'acct-table-row sessions';
+      row.innerHTML =
+        `<span>${s.device} ${s.current ? '<span class="session-current">Current</span>' : ''}</span>` +
+        `<span>${s.created}</span><span>${s.updated}</span>` +
+        `<span class="session-more">⋮</span>`;
+      as.appendChild(row);
+    });
+  }
+
+  // ── Capabilities ──────────────────────────────
+  function onCodeExecToggle(checked) {
+    saveField('weaver_cap_code', checked ? '1' : '0');
+    // network egress depends on code execution
+    document.getElementById('egressBox').style.opacity = checked ? '1' : '0.5';
+    document.getElementById('capEgress').disabled = !checked;
+  }
+
+  // ── Plugins ───────────────────────────────────
+  function getPlugins() {
+    try { return JSON.parse(localStorage.getItem('weaver_plugins') || 'null') || defaultPlugins(); }
+    catch (e) { return defaultPlugins(); }
+  }
+  function defaultPlugins() {
+    return [{ name: 'Desktop Commander', author: 'Desktop Commander', skills: 6, updated: '8/13/26' }];
+  }
+  function savePlugins(list) { saveField('weaver_plugins', JSON.stringify(list)); }
+  function renderPlugins() {
+    const list = getPlugins();
+    const cont = document.getElementById('pluginsList');
+    const empty = document.getElementById('pluginsEmpty');
+    cont.innerHTML = '';
+    empty.style.display = list.length ? 'none' : 'block';
+    list.forEach((p, i) => {
+      const row = document.createElement('div');
+      row.className = 'plugin-item';
+      row.innerHTML =
+        `<span class="p-name">${p.name}</span>` +
+        `<span style="color:var(--text-muted);">${p.author}</span>` +
+        `<span>${p.skills}</span>` +
+        `<span style="color:var(--text-muted);">${p.updated}</span>` +
+        `<button class="plugin-del" title="Remove"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
+      row.querySelector('.plugin-del').onclick = () => { removePlugin(i); };
+      cont.appendChild(row);
+    });
+  }
+  function removePlugin(i) {
+    if (!confirm('إزالة هذه الإضافة؟')) return;
+    const list = getPlugins(); list.splice(i, 1); savePlugins(list); renderPlugins();
+  }
+  function addPlugin() {
+    const name = prompt('اسم الإضافة:');
+    if (!name) return;
+    const list = getPlugins();
+    const today = new Date().toLocaleDateString('en-US', { month:'numeric', day:'numeric', year:'2-digit' });
+    list.push({ name: name.trim(), author: name.trim(), skills: 0, updated: today });
+    savePlugins(list); renderPlugins();
+  }
+  function browsePlugins() { alert('تصفح دليل الإضافات (تجريبي).'); }
+
+  // ── Memory ────────────────────────────────────
+  function getMemory() {
+    try { return JSON.parse(localStorage.getItem('weaver_memory') || 'null') || defaultMemory(); }
+    catch (e) { return defaultMemory(); }
+  }
+  function defaultMemory() {
+    const d = 'Jul 18';
+    return {
+      you: [
+        { title: 'Preferences', desc: 'How Bashar wants deliverables…', date: 'Updated ' + d },
+        { title: 'Profile', desc: 'Who Bashar is — student…', date: 'Updated ' + d }
+      ],
+      topics: [
+        { title: 'Ai Tooling', desc: "Bashar's AI agent frameworks…", date: 'Updated ' + d },
+        { title: 'Language', desc: 'Languages Bashar works in', date: 'Updated ' + d },
+        { title: 'Recent Work', desc: 'Academic assignments and co…', date: 'Updated ' + d }
+      ],
+      areas: [
+        { title: 'Cobweaverclaw', desc: 'Personal GitHub project explor…', date: 'Updated Jul 30' }
+      ]
+    };
+  }
+  function saveMemory(mem) { saveField('weaver_memory', JSON.stringify(mem)); }
+  function renderMemory() {
+    const mem = getMemory();
+    ['you', 'topics', 'areas'].forEach(section => {
+      const cont = document.getElementById('mem' + section.charAt(0).toUpperCase() + section.slice(1));
+      cont.innerHTML = '';
+      mem[section].forEach((item, i) => {
+        const row = document.createElement('div');
+        row.className = 'mem-item';
+        row.innerHTML =
+          `<span class="m-title">${item.title}</span>` +
+          `<span class="m-desc">${item.desc}</span>` +
+          `<span class="m-date">${item.date}</span>` +
+          `<button class="mem-icon-btn edit" title="Edit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/></svg></button>` +
+          `<button class="mem-icon-btn del" title="Delete"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>`;
+        row.querySelector('.edit').onclick = () => editMemory(section, i);
+        row.querySelector('.del').onclick = () => deleteMemory(section, i);
+        cont.appendChild(row);
+      });
+    });
+  }
+  function editMemory(section, i) {
+    const mem = getMemory();
+    const cur = mem[section][i];
+    const nv = prompt('تعديل الذاكرة:', cur.desc);
+    if (nv === null) return;
+    cur.desc = nv.trim();
+    cur.date = 'Updated ' + new Date().toLocaleDateString('en-US', { month:'short', day:'numeric' });
+    saveMemory(mem); renderMemory();
+  }
+  function deleteMemory(section, i) {
+    if (!confirm('حذف هذه الذاكرة؟')) return;
+    const mem = getMemory();
+    mem[section].splice(i, 1);
+    saveMemory(mem); renderMemory();
+  }
+  function addMemory() {
+    const inp = document.getElementById('memAddInput');
+    const val = inp.value.trim();
+    if (!val) return;
+    const mem = getMemory();
+    mem.topics.push({
+      title: val.length > 20 ? val.slice(0, 20) + '…' : val,
+      desc: val,
+      date: 'Updated ' + new Date().toLocaleDateString('en-US', { month:'short', day:'numeric' })
+    });
+    saveMemory(mem); renderMemory();
+    inp.value = '';
+  }
+  function startImport() { alert('استيراد الذاكرة من مزوّد آخر (تجريبي).'); }
+
+  // Close on backdrop click
+  document.getElementById('settingsOverlay').addEventListener('click', function (e) {
+    if (e.target === this) closeSettings();
+  });
+
+  function showSettingsPanel(name, el) {
+    document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + name).classList.add('active');
+    document.querySelectorAll('.settings-nav-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+  }
+
+  function filterSettings(q) {
+    q = q.toLowerCase();
+    document.querySelectorAll('.settings-nav-item').forEach(i => {
+      const t = i.textContent.toLowerCase();
+      i.style.display = t.includes(q) ? '' : 'none';
+    });
+  }
+
+  // ── Generic field persistence ─────────────────
+  function saveField(key, val) {
+    try { localStorage.setItem(key, val); } catch (e) {}
+  }
+  function loadField(key, def) {
+    try { const v = localStorage.getItem(key); return v === null ? def : v; } catch (e) { return def; }
+  }
+
+  // Name typed in General → updates sidebar, avatars, storage
+  function onGeneralName(val) {
+    val = val.trim();
+    if (!val) return;
+    saveField('weaver_username', val);
+    applyUserName(val);
+    document.getElementById('genAvatar').textContent = getInitials(val);
+  }
+
+  // Appearance → applies a real theme
+  function setAppearance(mode, btn) {
+    document.querySelectorAll('#segAppearance button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    applyTheme(mode);
+    saveField('weaver_theme', mode);
+  }
+  function applyTheme(mode) {
+    let effective = mode;
+    if (mode === 'system') {
+      effective = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+    }
+    document.body.classList.toggle('theme-light', effective === 'light');
+  }
+
+  // Motion → toggles reduced animations
+  function setMotion(mode, btn) {
+    btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.body.classList.toggle('reduce-motion', mode === 'reduced');
+    saveField('weaver_motion', mode);
+  }
+
+  // Chat font — applies live to the whole app
+  function setChatFont(kind) {
+    const map = {
+      sans:  "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans Arabic', 'Noto Sans', Roboto, Helvetica, Arial, system-ui, sans-serif",
+      serif: "'Noto Naskh Arabic', Georgia, 'Times New Roman', serif",
+      mono:  "'Noto Sans Mono', ui-monospace, 'Courier New', monospace"
+    };
+    document.body.style.fontFamily = map[kind] || map.sans;
+    saveField('weaver_font', kind);
+  }
+
+  // Load ALL saved General settings on startup
+  (function loadGeneralSettings() {
+    const name = loadField('weaver_username', '');
+    if (name) {
+      document.getElementById('genFullName').value = name;
+      document.getElementById('genAvatar').textContent = getInitials(name);
+    }
+    document.getElementById('genCallName').value = loadField('weaver_callname', name || '');
+    document.getElementById('genWork').value = loadField('weaver_work', '');
+    document.getElementById('genInstructions').value = loadField('weaver_instructions', '');
+    document.getElementById('voiceLang').value = loadField('weaver_voice_lang', 'en');
+    document.getElementById('voiceStyle').value = loadField('weaver_voice_style', 'buttery');
+    document.getElementById('voiceSpeed').value = loadField('weaver_voice_speed', 'normal');
+    document.getElementById('notifToggle').checked = loadField('weaver_notif', '1') === '1';
+
+    // theme
+    const theme = loadField('weaver_theme', 'system');
+    applyTheme(theme);
+    document.querySelectorAll('#segAppearance button').forEach(b =>
+      b.classList.toggle('active', b.dataset.mode === theme));
+    // motion
+    const motion = loadField('weaver_motion', 'system');
+    document.body.classList.toggle('reduce-motion', motion === 'reduced');
+    document.querySelectorAll('#segMotion button').forEach(b =>
+      b.classList.toggle('active', b.dataset.motion === motion));
+    // font
+    const f = loadField('weaver_font', 'sans');
+    document.getElementById('chatFont').value = f;
+    setChatFont(f);
+    // language (applies translation + direction)
+    const lang = loadField('weaver_voice_lang', 'en');
+    document.getElementById('voiceLang').value = lang;
+    setLanguage(lang);
+
+    // Capabilities toggles
+    document.getElementById('capArtifacts').checked = loadField('weaver_cap_artifacts', '1') === '1';
+    document.getElementById('capAiArtifacts').checked = loadField('weaver_cap_ai_artifacts', '0') === '1';
+    document.getElementById('capInline').checked = loadField('weaver_cap_inline', '1') === '1';
+    const codeOn = loadField('weaver_cap_code', '1') === '1';
+    document.getElementById('capCode').checked = codeOn;
+    document.getElementById('capEgress').checked = loadField('weaver_cap_egress', '1') === '1';
+    onCodeExecToggle(codeOn);
+    // Memory toggle
+    document.getElementById('memGenerate').checked = loadField('weaver_mem_generate', '1') === '1';
+
+    // Attach menu toggles
+    document.getElementById('attachResearch').checked = loadField('weaver_attach_research', '0') === '1';
+    document.getElementById('attachWebSearch').checked = loadField('weaver_attach_websearch', '1') === '1';
+    document.getElementById('attachHealth').checked = loadField('weaver_attach_health', '0') === '1';
+    const savedToolAccess = loadField('weaver_tool_access', 'Auto');
+    setToolAccess(savedToolAccess);
+    document.querySelectorAll('input[name="toolAccessMode"]').forEach(r => {
+      r.checked = r.dataset.mode === savedToolAccess;
+    });
+  })();
+
+  // Submit name on Enter
+  document.getElementById('nameInput').addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); saveUserName(); }
+  });
+
+  // On load: show modal only if no name saved yet
+  (function initUserName() {
+    let saved = null;
+    try { saved = localStorage.getItem('weaver_username'); } catch (e) {}
+    if (saved) {
+      applyUserName(saved);
+    } else {
+      const ov = document.getElementById('nameOverlay');
+      ov.classList.add('show');
+      setTimeout(() => document.getElementById('nameInput').focus(), 100);
+    }
+  })();
+
+  // ── Sidebar toggle ─────────────────────────────
+  const isMobile = () => window.matchMedia('(max-width: 768px)').matches;
+  let sidebarOpen = !isMobile();  // collapsed by default on phones
+
+  function syncSidebar() {
+    const sidebar   = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const backdrop  = document.getElementById('sidebarBackdrop');
+    sidebar.classList.toggle('collapsed', !sidebarOpen);
+    toggleBtn.classList.toggle('hidden', sidebarOpen);
+    // backdrop only matters on mobile overlay mode
+    backdrop.classList.toggle('show', sidebarOpen && isMobile());
+  }
+
+  function toggleSidebar() {
+    sidebarOpen = !sidebarOpen;
+    syncSidebar();
+  }
+
+  // Re-evaluate default state when crossing the breakpoint
+  window.addEventListener('resize', () => {
+    if (isMobile() && sidebarOpen) { sidebarOpen = false; syncSidebar(); }
+    else if (!isMobile() && !sidebarOpen) { sidebarOpen = true; syncSidebar(); }
+  });
+
+  // Apply initial state
+  syncSidebar();
+
+  // ── Textarea auto-resize + toggle send button ──
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+    const sendBtn = document.getElementById('sendBtn');
+    sendBtn.classList.toggle('visible', el.value.trim().length > 0);
+  }
+
+  // ── Chat session tracking (sidebar list + search) ──
+  let currentChatId = null;
+
+  function loadChats() {
+    try { return JSON.parse(localStorage.getItem('weaver_chats') || '[]'); }
+    catch (e) { return []; }
+  }
+  function saveChats(list) {
+    try { localStorage.setItem('weaver_chats', JSON.stringify(list)); } catch (e) {}
+  }
+  function makeChatTitle(text) {
+    const t = text.trim().replace(/\s+/g, ' ');
+    return t.length > 42 ? t.slice(0, 42).trim() + '…' : t;
+  }
+  function addChatFromMessage(text) {
+    const list = loadChats();
+    const id = 'c' + Date.now() + Math.random().toString(36).slice(2, 7);
+    list.unshift({ id, title: makeChatTitle(text), ts: Date.now() });
+    saveChats(list);
+    currentChatId = id;
+    renderChatsList();
+  }
+  function selectChat(id) {
+    currentChatId = id;
+    renderChatsList();
+  }
+  function renderChatsList() {
+    const box = document.querySelector('.chats-list');
+    if (!box) return;
+    const list = loadChats();
+    box.innerHTML = list.map(c =>
+      `<div class="chat-item${c.id === currentChatId ? ' active' : ''}" onclick="selectChat('${c.id}')" title="${c.title.replace(/"/g,'&quot;')}">
+        <span class="chat-dot"></span>
+        <span class="chat-text">${c.title}</span>
+      </div>`
+    ).join('');
+  }
+  renderChatsList();
+
+  // ── Send message ───────────────────────────────
+  // ── Start a new chat ───────────────────────────
+  function newChat() {
+    const main = document.getElementById('mainContent');
+    main.classList.remove('chat-mode');
+    const messages = document.getElementById('messages');
+    if (messages) messages.innerHTML = '';
+    const input = document.getElementById('mainInput');
+    if (input) { input.value = ''; autoResize(input); input.focus(); }
+    currentChatId = null;
+    renderChatsList();
+    const titleEl = document.getElementById('chatTitleText');
+    if (titleEl) titleEl.textContent = 'New chat';
+  }
+
+  function sendMessage() {
+    const input = document.getElementById('mainInput');
+    const text = input.value.trim();
+    if (!text) return;
+
+    // Switch to chat mode (docks the input panel to the bottom)
+    const main = document.getElementById('mainContent');
+    main.classList.add('chat-mode');
+
+    // Append the user message
+    const messages = document.getElementById('messages');
+    const userMsg = document.createElement('div');
+    userMsg.className = 'msg user';
+    userMsg.innerHTML = '<div class="bubble"></div>';
+    userMsg.querySelector('.bubble').textContent = text;
+    messages.appendChild(userMsg);
+
+    // Track this as a chat session (title comes from the first message, like real chat apps)
+    if (!currentChatId) {
+      addChatFromMessage(text);
+      // Update top-bar title with first message (truncated)
+      const titleEl = document.getElementById('chatTitleText');
+      if (titleEl) titleEl.textContent = text.length > 40 ? text.slice(0, 40) + '…' : text;
+    }
+
+    // Clear input
+    input.value = '';
+    autoResize(input);
+    input.focus();
+
+    // Scroll to the newest message
+    messages.scrollTop = messages.scrollHeight;
+
+    // (Demo) simulate an assistant reply
+    setTimeout(() => {
+      const aiMsg = document.createElement('div');
+      aiMsg.className = 'msg ai';
+
+      // Format relative time
+      function relativeTime() {
+        const lang = document.documentElement.lang || 'en';
+        if (lang === 'ar') return 'الآن';
+        return 'just now';
+      }
+
+      const logoSVG =
+        '<svg class="msg-logo" width="22" height="22" viewBox="0 0 256 256" fill="#C97A5A">' +
+        '<path d="M119 235 C120 235 120 233 120 232 C120 221 166 204 191 205 C203 206 204 207 210 214 C214 219 217 221 218 218 C218 218 216 215 214 212 C203 199 207 152 222 133 C223 131 225 129 225 128 C225 128 227 127 230 127 C234 126 250 122 253 121 C262 118 238 120 224 124 C223 124 222 123 217 115 C205 95 203 88 203 61 L203 51 L208 46 C217 37 214 36 205 44 C201 47 197 51 195 52 C189 56 161 54 152 49 C149 48 143 46 139 44 C135 42 130 40 128 39 L124 38 L124 30 C124 20 122 17 122 25 C120 39 120 39 115 44 C104 54 85 61 66 61 C54 61 53 60 44 53 C38 48 32 45 38 51 C39 52 43 55 45 57 L50 62 L50 71 C50 86 44 105 33 119 L31 122 L16 121 C6 121 2 121 3 122 C4 122 7 123 9 123 C17 123 27 124 26 125 C26 126 28 129 31 132 C44 145 53 175 48 189 C47 192 45 196 36 204 C24 217 24 219 37 207 L45 199 L51 199 C81 199 116 218 116 233 C116 237 118 239 119 235 Z  M120 217 C120 195 136 184 171 181 L177 180 L187 190 C199 202 199 200 186 201 C163 201 137 209 124 221 L120 225 L120 217 Z  M114 218 C107 208 82 197 62 196 C50 196 50 195 56 189 C70 173 114 191 116 214 C117 222 117 222 114 218 Z  M119 193 C119 178 133 167 153 165 L160 165 L166 170 L172 176 L167 176 C148 179 133 186 123 196 L119 200 L119 193 Z  M112 195 C103 186 90 181 76 181 L65 180 L70 176 L75 170 L84 171 C100 171 112 175 114 182 C116 185 117 199 116 199 C115 199 114 197 112 195 Z  M192 189 C187 184 182 179 182 178 C181 177 181 176 180 176 C177 176 180 157 184 149 C189 137 196 132 209 130 C220 129 221 129 218 133 C207 148 198 186 202 198 C203 201 201 199 192 189 Z  M54 178 C54 163 45 141 35 131 C29 125 29 125 34 125 C41 125 42 126 47 133 C60 152 65 179 57 184 L54 186 L54 178 Z  M119 173 C119 164 126 158 142 156 L149 155 L152 158 L156 161 L150 162 C142 163 131 169 124 175 L119 179 L119 173 Z  M64 173 C63 170 63 166 62 163 C61 152 56 141 48 130 L44 125 L47 125 C56 125 71 146 72 161 L72 170 L68 173 L64 177 L64 173 Z  M113 174 C110 171 94 168 86 168 L79 168 L84 163 C91 155 106 158 115 169 C117 172 116 176 113 174 Z  M169 168 C163 162 162 160 162 152 C162 137 166 132 182 132 L193 132 L188 137 C181 145 175 159 175 169 C175 173 174 173 169 168 Z  M76 164 C76 164 75 162 75 160 C74 147 69 138 58 129 L52 125 L55 125 C57 125 62 125 65 126 L72 126 L77 133 C81 140 85 150 85 155 C85 159 77 167 76 164 Z  M114 162 C112 160 100 156 95 156 C91 156 91 156 92 154 C94 154 96 152 98 150 C103 145 112 146 115 151 C116 154 116 164 114 162 Z  M119 158 C119 145 131 139 141 147 L144 151 L139 152 C134 153 124 158 121 161 C119 162 119 162 119 158 Z  M155 155 C148 148 152 132 160 131 C166 131 166 132 164 135 C160 139 159 144 159 152 C160 160 159 160 155 155 Z  M89 152 C88 151 88 148 87 146 C85 140 83 135 79 131 C75 126 75 126 80 126 C92 126 101 142 93 150 C90 152 89 153 89 152 Z  M144 146 C139 141 139 139 144 133 C148 128 151 129 149 136 C148 139 148 141 149 145 C150 151 150 151 144 146 Z  M115 146 C114 145 111 145 109 144 L105 144 L111 138 L117 132 L117 139 C117 144 117 147 117 147 C117 147 116 146 115 146 Z  M119 140 C119 128 119 128 127 135 L133 140 L129 142 C127 142 124 144 122 145 L119 147 L119 140 Z  M99 140 C99 137 97 133 93 130 L90 127 L96 127 C99 127 105 127 108 128 L115 128 L108 136 C100 144 99 144 99 140 Z  M130 134 L124 129 L133 130 C143 130 142 130 140 135 C137 141 138 141 130 134 Z  M156 127 C153 125 151 117 151 107 L150 98 L155 94 C161 88 161 88 160 97 C160 109 166 123 173 127 C175 128 174 128 166 128 C162 128 157 128 156 127 Z  M175 122 C163 109 159 91 167 83 C174 75 179 71 179 74 C175 87 183 121 191 125 C193 127 192 128 186 128 L180 128 L175 122 Z  M132 126 C123 126 123 125 131 117 L138 111 L138 114 C138 116 139 120 140 122 C141 126 141 127 140 127 C140 127 136 126 132 126 Z  M145 125 C140 119 138 110 143 106 L146 103 L146 107 C146 112 150 124 151 125 C153 126 152 127 150 127 C148 127 146 126 145 125 Z  M195 124 C186 115 181 98 182 81 L183 68 L187 64 C200 53 200 53 200 71 C200 91 202 101 213 117 L217 124 L214 125 C205 128 199 127 195 124 Z  M108 124 C108 124 103 124 98 124 C87 123 87 123 91 118 C92 115 93 111 94 109 L94 104 L105 114 C110 120 115 124 115 125 C115 125 110 125 108 124 Z  M61 115 C69 104 74 86 70 81 C69 78 72 81 77 86 L82 92 L81 99 C80 107 78 113 73 119 L70 123 L63 123 L56 123 L61 115 Z  M74 123 C74 122 75 121 77 119 C81 115 84 108 85 101 L86 96 L89 98 C93 102 91 113 86 121 C85 123 74 124 74 123 Z  M120 114 C120 100 120 99 124 103 C126 105 128 107 130 108 C134 110 134 110 126 117 L120 123 L120 114 Z  M37 119 C41 114 50 97 52 93 C53 90 53 83 54 77 L54 65 L58 68 C64 73 62 83 51 107 C45 121 44 122 39 122 L35 122 L37 119 Z  M47 121 C58 100 64 83 63 76 L62 72 L66 75 L69 78 L69 87 C68 101 57 122 49 122 C48 122 47 122 47 121 Z  M106 111 C97 103 96 101 99 102 C102 103 111 103 116 101 C118 101 118 101 118 110 C118 123 118 123 106 111 Z  M130 105 C124 102 122 98 121 92 L121 87 L127 92 C131 96 135 98 137 99 C143 101 143 101 139 104 C136 108 135 108 130 105 Z  M103 100 C102 100 100 100 98 100 C96 99 93 98 91 97 L89 94 L97 94 C104 94 106 93 112 90 L119 86 L119 91 C119 97 111 102 103 100 Z  M136 95 C134 94 130 91 127 88 L121 83 L121 75 C121 65 121 65 126 70 C132 76 147 85 153 86 L157 86 L152 92 C146 98 143 98 136 95 Z  M80 85 C76 82 74 79 76 79 C86 83 106 79 117 71 L120 69 L120 75 C119 78 119 81 119 81 C106 89 101 91 93 92 L86 92 L80 85 Z  M142 77 C131 72 122 63 122 59 C122 55 123 55 127 57 C133 63 158 71 169 71 C173 71 173 72 167 77 C159 84 155 84 142 77 Z  M73 77 C71 77 69 76 67 74 L65 71 L73 71 C78 71 82 71 83 71 C83 70 87 69 91 69 C99 67 112 62 116 59 C120 56 120 57 120 60 C120 71 93 81 73 77 Z  M61 68 C59 66 61 66 71 66 C87 65 93 63 108 56 C117 51 120 50 120 51 C120 59 69 74 61 68 Z  M162 66 C130 60 123 56 124 47 C124 44 124 42 124 42 C125 42 131 45 139 49 C153 55 160 57 179 59 L186 59 L182 63 C179 67 171 68 162 66 Z" fill-rule="evenodd"/></svg>';
+
+      const actionsHTML =
+        '<div class="msg-actions">' +
+          '<span class="msg-time">' + relativeTime() + '</span>' +
+          // Regenerate
+          '<button class="msg-action-btn" title="إعادة توليد">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M1 4v6h6M23 20v-6h-6" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+          // Dislike
+          '<button class="msg-action-btn" title="لا أحب">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+          // Like
+          '<button class="msg-action-btn" title="أحب">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 22H4.72A2.31 2.31 0 0 1 2.4 20V13a2.31 2.31 0 0 1 2.33-2H7" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+          // Copy
+          '<button class="msg-action-btn" title="نسخ">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+        '</div>';
+
+      aiMsg.innerHTML =
+        logoSVG +
+        '<div class="msg-wrapper">' +
+          '<div class="bubble"></div>' +
+          actionsHTML +
+        '</div>';
+
+      aiMsg.querySelector('.bubble').textContent = 'تم استلام رسالتك. (رد تجريبي)';
+
+      // Update timestamp every minute
+      const timeEl = aiMsg.querySelector('.msg-time');
+      const sentAt = Date.now();
+      function updateTime() {
+        const mins = Math.floor((Date.now() - sentAt) / 60000);
+        const lang = document.documentElement.lang || 'en';
+        if (mins < 1) timeEl.textContent = lang === 'ar' ? 'الآن' : 'just now';
+        else if (mins === 1) timeEl.textContent = lang === 'ar' ? 'منذ دقيقة' : '1 minute ago';
+        else timeEl.textContent = lang === 'ar' ? `منذ ${mins} دقائق` : `${mins} minutes ago`;
+      }
+      setInterval(updateTime, 60000);
+
+      messages.appendChild(aiMsg);
+      messages.scrollTop = messages.scrollHeight;
+    }, 500);
+  }
+
+  // ── Mode buttons ───────────────────────────────
+  function setMode(btn) {
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.remove('active');
+      b.classList.add('inactive');
+    });
+    btn.classList.remove('inactive');
+    btn.classList.add('active');
+  }
+
+  // ── Attach ("+") menu ───────────────────────────
+  let attachedFiles = [];
+
+  function toggleAttachMenu(e) {
+    e.stopPropagation();
+    const menu = document.getElementById('attachMenu');
+    menu.classList.toggle('show');
+  }
+
+  document.addEventListener('click', function (e) {
+    const menu = document.getElementById('attachMenu');
+    const wrap = document.querySelector('.attach-wrap');
+    if (menu && menu.classList.contains('show') && wrap && !wrap.contains(e.target)) {
+      menu.classList.remove('show');
+    }
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      const menu = document.getElementById('attachMenu');
+      if (menu) menu.classList.remove('show');
+    }
+  });
+
+  function triggerAttach(kind) {
+    const map = { files: 'attachFilesInput', photos: 'attachPhotosInput', camera: 'attachCameraInput' };
+    const input = document.getElementById(map[kind]);
+    if (input) input.click();
+  }
+
+  function handleAttachFiles(fileList) {
+    if (!fileList || !fileList.length) return;
+    Array.from(fileList).forEach(f => attachedFiles.push(f));
+    renderAttachChips();
+    document.getElementById('attachMenu').classList.remove('show');
+    document.getElementById('mainInput').focus();
+  }
+
+  function renderAttachChips() {
+    const box = document.getElementById('attachChips');
+    box.innerHTML = '';
+    attachedFiles.forEach((f, i) => {
+      const dot = f.name.lastIndexOf('.');
+      const ext = dot > -1 ? f.name.slice(dot + 1).toUpperCase() : 'FILE';
+      const card = document.createElement('div');
+      card.className = 'attach-file-card';
+      card.innerHTML = `
+        <button class="attach-file-remove" title="Remove">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <span class="attach-file-badge">${ext}</span>
+        <span class="attach-file-name">${f.name}</span>
+      `;
+      card.querySelector('.attach-file-remove').onclick = () => { attachedFiles.splice(i, 1); renderAttachChips(); };
+      box.appendChild(card);
+    });
+  }
+
+  function toggleAttachSub(which, e) {
+    e.stopPropagation();
+    const panels = { toolaccess: ['toolAccessSub', 'toolAccessChevron'], connectors: ['connectorsSub', 'connectorsChevron'] };
+    Object.keys(panels).forEach(key => {
+      const [panelId, chevronId] = panels[key];
+      const panel = document.getElementById(panelId);
+      const chevron = document.getElementById(chevronId);
+      if (key === which) {
+        const willShow = !panel.classList.contains('show');
+        panel.classList.toggle('show', willShow);
+        chevron.classList.toggle('rot', willShow);
+      } else {
+        panel.classList.remove('show');
+        chevron.classList.remove('rot');
+      }
+    });
+  }
+
+  function setToolAccess(mode) {
+    const labels = {
+      en: { Auto: 'Auto', All: 'All tools', None: 'No tools' },
+      ar: { Auto: 'تلقائي', All: 'كل الأدوات', None: 'بدون أدوات' }
+    };
+    document.getElementById('toolAccessValue').textContent = labels[currentLang][mode];
+    saveField('weaver_tool_access', mode);
+  }
+
+  function openConnectorSettings() {
+    document.getElementById('attachMenu').classList.remove('show');
+    openSettings();
+  }
+
+  // ── Chip prompt injection ──────────────────────
+  function insertPrompt(text) {
+    const input = document.getElementById('mainInput');
+    input.value = text;
+    input.focus();
+    autoResize(input);
+  }
+
+  // ── Enter to send ──────────────────────────────
+  document.getElementById('mainInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+</script>
+</body>
+</html>

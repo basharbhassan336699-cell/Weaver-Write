@@ -1,0 +1,113 @@
+================================================================
+PROMPT: PIPE-02 — Multilingual Pipeline (English + Arabic)
+DIFFICULTY: 🔴 ADVANCED
+USE CASE: Texts containing both English and Arabic content
+TARGET: Apply language-appropriate humanization to each section
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+================================================================
+
+The text below may contain English sections, Arabic sections, or both.
+Detect the language of each section and apply the appropriate rules.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ENGLISH SECTIONS — APPLY THESE RULES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPLACE these AI-marker words:
+delve → examine / explore
+robust → strong / reliable
+pivotal → key / critical
+leverage → use / apply
+groundbreaking → new / original
+moreover → also / [delete]
+furthermore → also / besides / [delete]
+additionally → also / [delete]
+seamless → smooth / effortless
+transformative → significant / major
+utilize → use
+foster → encourage / support
+facilitate → help / enable
+underscore → show / stress
+showcase → show / present
+commendable → good
+meticulous → careful / thorough
+intricate → complex / detailed
+realm → area / field
+notably → specifically
+"it is important to note that" → [delete, state the point directly]
+"in today's fast-paced world" → today / currently / [delete]
+"in conclusion" → [delete or: to summarize]
+"the implications are far-reaching" → [specify what the implications are]
+tapestry → mix / combination / variety
+landscape (metaphorical) → field / market / industry
+
+SENTENCE STRUCTURE:
+- Break uniform sentence lengths: add short (≤8 words) + long (≥28 words)
+- Remove formal transition words at paragraph starts
+- Never start two consecutive paragraphs with the same grammatical structure
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ARABIC SECTIONS — APPLY THESE RULES:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPLACE these Arabic AI-marker words/phrases:
+يُعدّ / يُعتبر           → هو / يمثل / يشكّل
+بالغ الأهمية             → مهم جداً / له وزن كبير
+جوهري / محوري           → أساسي / رئيسي
+ريادي                    → متقدم / رائد
+منظومة                   → نظام / مجموعة / إطار
+ركائز / مرتكزات          → أسس / قواعد / عناصر
+في إطار                  → في / ضمن
+وفي هذا السياق           → وهنا / ولهذا
+علاوة على ذلك            → وأيضاً / وكذلك
+فضلاً عن ذلك             → وأيضاً / وكذلك
+بالإضافة إلى ذلك         → وأيضاً
+وخلاصة القول             → وباختصار / وفي النهاية
+مما لا شك فيه            → ومن الواضح / ومن المؤكد
+تجدر الإشارة إلى أن      → ويُلاحظ أن / ومن المهم
+وانطلاقاً من ذلك         → ولهذا / وبناءً عليه
+في ضوء ذلك               → لذلك / ومن هنا
+يستوجب / يستدعي          → يحتاج / يتطلب
+يُرسّخ                   → يثبّت / يقوّي
+يُسهم                    → يساعد / يشارك / يضيف
+يُعزز                    → يقوي / يدعم / يرفع
+
+SENTENCE STRUCTURE (Arabic):
+- Vary between: جملة فعلية قصيرة / جملة اسمية / جملة طويلة مفصّلة
+- Avoid starting every paragraph with a present-tense verb (يُعدّ، يتجلى، يرتكز)
+- Remove formal Arabic transitions that appear at every paragraph start
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PROTECTED IN BOTH LANGUAGES (never modify):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✦ All citations and references regardless of format
+✦ Technical and scientific terminology specific to the subject
+✦ Proper nouns: names, organizations, countries, institutions
+✦ Statistics, percentages, dates, numerical data
+✦ Direct quotes (in quotation marks or indented blocks)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OUTPUT FORMAT:
+
+---SECTIONS IDENTIFIED---
+[List: Section 1 = English, Section 2 = Arabic, etc.]
+
+---WORDS REPLACED---
+English: [key replacements]
+Arabic: [key replacements]
+
+---REWRITTEN TEXT---
+[Full text in original language mix, with all changes applied]
+
+INPUT TEXT:
+{{TEXT}}
+
+================================================================
+NOTE ON ARABIC AI PATTERNS:
+Arabic LLM output often shows implicit translation patterns —
+the model maps English AI patterns (ecosystem → منظومة,
+pillars → ركائز, foundations → مرتكزات) rather than using
+natural Modern Standard Arabic expressions.
+This prompt specifically targets those translated patterns.
+================================================================

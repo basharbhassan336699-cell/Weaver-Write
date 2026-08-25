@@ -1,0 +1,368 @@
+{
+  "_description": "Code libraries used inside Weaver Write tools (Layer 3)",
+  "_note": "These are not tools or skills, but libraries called inside tool code",
+  "libraries": [
+    {
+      "name": "paper-qa",
+      "purpose": "Core academic RAG engine for search and answering",
+      "category": "academic",
+      "used_by": [
+        "academic_search",
+        "credibility_check"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "pymupdf4llm",
+      "purpose": "Extract PDF text page by page with page numbers + automatic OCR",
+      "category": "document",
+      "used_by": [
+        "academic_search",
+        "doc_read"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "trafilatura",
+      "purpose": "Clean text extraction from web pages (strips ads)",
+      "category": "web",
+      "used_by": [
+        "web_extract"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "python-docx",
+      "purpose": "Create and edit Word documents with RTL support",
+      "category": "output",
+      "used_by": [
+        "doc_export",
+        "docx_builder"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "python-pptx",
+      "purpose": "Create PowerPoint presentations",
+      "category": "output",
+      "used_by": [
+        "doc_export",
+        "pptx_builder"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "openpyxl",
+      "purpose": "Handle Excel formulas and formatting",
+      "category": "output",
+      "used_by": [
+        "doc_export",
+        "xlsx_builder"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "reportlab",
+      "purpose": "Create PDF files from scratch",
+      "category": "output",
+      "used_by": [
+        "doc_export",
+        "pdf_builder"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "pypdf",
+      "purpose": "Merge, split, and encrypt PDFs",
+      "category": "output",
+      "used_by": [
+        "pdf_builder"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "pytesseract",
+      "purpose": "OCR for scanned documents (works without GPU)",
+      "category": "document",
+      "used_by": [
+        "doc_read"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "pdf2image",
+      "purpose": "Convert PDF pages to images for OCR",
+      "category": "document",
+      "used_by": [
+        "doc_read"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "mammoth",
+      "purpose": "Read content of existing Word documents",
+      "category": "document",
+      "used_by": [
+        "doc_read"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "pandas",
+      "purpose": "Read and write tabular data",
+      "category": "data",
+      "used_by": [
+        "xlsx_builder",
+        "table_builder"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "semantic-scholar-client",
+      "purpose": "Fetch studies from Semantic Scholar",
+      "category": "academic",
+      "used_by": [
+        "academic_search"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "docx",
+      "purpose": "Build Word documents from JavaScript (vendored dist)",
+      "category": "output",
+      "used_by": [
+        "word"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "pptxgenjs",
+      "purpose": "Build PowerPoint from JavaScript (vendored dist)",
+      "category": "output",
+      "used_by": [
+        "powerpoint"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "markitdown",
+      "purpose": "Read Office files into clean markdown",
+      "category": "document",
+      "used_by": [
+        "word",
+        "powerpoint"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "pandoc",
+      "purpose": "Universal document converter",
+      "category": "document",
+      "used_by": [
+        "word"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "office-oxide",
+      "purpose": "Fast native Office text extraction (Rust, up to 100x faster)",
+      "category": "document",
+      "used_by": [
+        "word",
+        "excel",
+        "powerpoint"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "docling",
+      "purpose": "Advanced document conversion for complex layouts (PDF/Office -> structured markdown)",
+      "category": "document",
+      "used_by": [
+        "pdf"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "mermaid",
+      "purpose": "Diagram rendering from text (flowchart/sequence/gantt/ER)",
+      "category": "output",
+      "used_by": [
+        "diagram"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "searxng",
+      "purpose": "Meta-search engine (HTTP service, not bundled) for web discovery",
+      "category": "web",
+      "used_by": [
+        "web_search"
+      ],
+      "bundled": "external-service"
+    },
+    {
+      "name": "papaparse",
+      "purpose": "Fast CSV parsing (JS/artifacts)",
+      "category": "data",
+      "used_by": [
+        "csv"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "sheetjs",
+      "purpose": "Read/write xlsx in JS/artifacts (alt to openpyxl)",
+      "category": "data",
+      "used_by": [
+        "excel"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "lodash",
+      "purpose": "General data utilities (JS/artifacts)",
+      "category": "data",
+      "used_by": [],
+      "bundled": "vendored"
+    },
+    {
+      "name": "mathjs",
+      "purpose": "Advanced math (artifacts via CDN; Python numpy server-side)",
+      "category": "data",
+      "used_by": [],
+      "bundled": "cdn"
+    },
+    {
+      "name": "lucide",
+      "purpose": "SVG icon set (artifacts via CDN)",
+      "category": "ui",
+      "used_by": [],
+      "bundled": "cdn"
+    },
+    {
+      "name": "shadcn-ui",
+      "purpose": "React UI components (artifacts via CDN)",
+      "category": "ui",
+      "used_by": [],
+      "bundled": "cdn"
+    },
+    {
+      "name": "icalendar",
+      "purpose": "Create/read iCalendar .ics files",
+      "category": "schedule",
+      "used_by": [
+        "calendar"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "pytz",
+      "purpose": "Timezone definitions for event localization",
+      "category": "schedule",
+      "used_by": [
+        "calendar"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "apscheduler",
+      "purpose": "Deferred/interval/cron task scheduling",
+      "category": "schedule",
+      "used_by": [
+        "scheduler"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "matplotlib",
+      "purpose": "Static statistical charts (bar/line/scatter/pie)",
+      "category": "viz",
+      "used_by": [
+        "chart"
+      ],
+      "bundled": "requirements"
+    },
+    {
+      "name": "langgraph",
+      "purpose": "Graph workflow framework — the 11-layer pipeline foundation",
+      "category": "workflow",
+      "used_by": [
+        "orchestrator"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "chart.js",
+      "purpose": "Interactive JS charts (artifacts)",
+      "category": "viz",
+      "used_by": [],
+      "bundled": "vendored"
+    },
+    {
+      "name": "d3",
+      "purpose": "Advanced data-driven visualization (artifacts)",
+      "category": "viz",
+      "used_by": [],
+      "bundled": "vendored"
+    },
+    {
+      "name": "recharts",
+      "purpose": "React charts (artifacts via CDN)",
+      "category": "viz",
+      "used_by": [],
+      "bundled": "cdn"
+    },
+    {
+      "name": "html2pptx",
+      "purpose": "Convert themed HTML/CSS to native editable PPTX (Node.js, no browser)",
+      "category": "output",
+      "used_by": [
+        "powerpoint"
+      ],
+      "bundled": "vendored+npm"
+    },
+    {
+      "name": "bundled-fonts",
+      "purpose": "Open-source Arabic fonts (Amiri/Cairo/Tajawal/Noto Naskh) for offline rendering; Kufyan fallback",
+      "category": "fonts",
+      "used_by": [
+        "chart",
+        "pdf",
+        "powerpoint",
+        "word"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "humanizer-dictionary",
+      "purpose": "AI-signature word/phrase dictionary (550 EN + 131 AR curated + ~104K general synonyms) for text humanization",
+      "category": "nlp",
+      "used_by": [
+        "arabic_rewriter",
+        "english_rewriter"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "expert-prompts",
+      "purpose": "21 research-backed prompts (humanization/detection/knowledge) — COLING2025/ICLR2024/GPTZero/Turnitin, bilingual EN+AR",
+      "category": "prompts",
+      "used_by": [
+        "arabic_rewriter",
+        "english_rewriter",
+        "pipeline"
+      ],
+      "bundled": "vendored"
+    },
+    {
+      "name": "survey-stats",
+      "purpose": "Real statistical analysis of survey data (descriptives, Cronbach alpha, normality, t-test/ANOVA/chi2/correlation)",
+      "category": "statistics",
+      "used_by": [
+        "statistical_analysis"
+      ],
+      "bundled": "code"
+    }
+  ]
+}

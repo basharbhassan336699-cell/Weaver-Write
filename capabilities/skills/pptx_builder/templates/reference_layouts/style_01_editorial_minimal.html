@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Editorial Minimal</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&family=Tajawal:wght@300;400;500;700&display=swap');
+
+  :root{
+    --bg:            #F5EFE6; /* sand */
+    --bg-panel:      #EFE4D3;
+    --ink:           #1F1B16; /* near-black */
+    --terracotta:    #B85042;
+    --sage:          #A7BEAE;
+    --line:          #D8CBB6;
+    --font-heading: 'Cairo', sans-serif;
+    --font-body:    'Tajawal', sans-serif;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; background:var(--bg); font-family:var(--font-body); color:var(--ink); }
+  .slide{ position:relative; width:1280px; height:720px; direction:rtl; text-align:right; }
+
+  /* giant ghost numeral, editorial signature motif */
+  .ghost-num{
+    position:absolute; top:-60px; left:20px;
+    font-family:var(--font-heading); font-weight:900; font-size:320px; line-height:1;
+    color:var(--ink); opacity:0.06; letter-spacing:-10px;
+  }
+
+  .kicker{
+    position:absolute; top:64px; right:70px;
+    font-size:14px; letter-spacing:2px; color:var(--terracotta);
+    font-family:var(--font-heading); font-weight:700; text-transform:uppercase;
+  }
+  .kicker::before{ content:"— "; }
+
+  .title{
+    position:absolute; top:100px; right:70px; width:640px;
+    font-family:var(--font-heading); font-weight:800; font-size:54px; line-height:1.2; color:var(--ink);
+  }
+
+  .lede{
+    position:absolute; top:330px; right:70px; width:520px;
+    font-size:17px; line-height:1.9; color:#4b443b;
+  }
+
+  .divider-v{
+    position:absolute; top:100px; right:730px; width:1.5px; height:520px; background:var(--line);
+  }
+
+  .side-panel{
+    position:absolute; top:100px; left:70px; width:420px; height:520px;
+    background:var(--bg-panel); border-radius:6px; padding:36px 32px;
+    display:flex; flex-direction:column; gap:26px;
+  }
+  .side-panel .item{ display:flex; align-items:flex-start; gap:16px; }
+  .side-panel .idx{ font-family:var(--font-heading); font-weight:800; font-size:22px; color:var(--terracotta); min-width:36px; }
+  .side-panel .txt h4{ font-family:var(--font-heading); font-weight:700; font-size:16px; margin-bottom:6px; color:var(--ink); }
+  .side-panel .txt p{ font-size:13.5px; color:#5c5346; line-height:1.7; }
+
+  .footer-rule{ position:absolute; bottom:50px; right:70px; left:70px; height:1.5px; background:var(--ink); }
+  .footer-meta{ position:absolute; bottom:22px; right:70px; font-size:12px; color:#8a8071; letter-spacing:1px; }
+  .page-num{ position:absolute; bottom:22px; left:70px; font-family:var(--font-heading); font-weight:700; font-size:13px; color:var(--terracotta); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="ghost-num">{{PAGE_NUM}}</div>
+
+    <div class="kicker">{{KICKER}}</div>
+    <h1 class="title">{{TITLE}}</h1>
+    <p class="lede">{{CONTENT_1}}</p>
+
+    <div class="divider-v"></div>
+
+    <div class="side-panel">
+      <div class="item"><div class="idx">01</div><div class="txt"><h4>{{SUBTITLE_1}}</h4><p>{{ITEM_1}}</p></div></div>
+      <div class="item"><div class="idx">02</div><div class="txt"><h4>{{SUBTITLE_2}}</h4><p>{{ITEM_2}}</p></div></div>
+      <div class="item"><div class="idx">03</div><div class="txt"><h4>{{SUBTITLE_3}}</h4><p>{{ITEM_3}}</p></div></div>
+    </div>
+
+    <div class="footer-rule"></div>
+    <div class="footer-meta">{{FOOTER_LABEL}}</div>
+    <div class="page-num">{{PAGE_NUM}}</div>
+  </div>
+</body>
+</html>

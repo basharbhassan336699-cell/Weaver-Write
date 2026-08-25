@@ -1,0 +1,80 @@
+================================================================
+PROMPT: DETECT-03 — Identify Which AI Model Produced the Text
+DIFFICULTY: 🔴 ADVANCED
+USE CASE: Forensic-level analysis, academic integrity investigations
+BEST MODELS: Claude Sonnet 4.x, GPT-4o (high reasoning models only)
+NOTE: Results are probabilistic, not definitive. Use as strong indicator.
+SOURCE: Wikipedia Signs of AI Writing (2026), GPT-4o vs GPT-5 pattern analysis
+================================================================
+
+You are an expert in LLM Stylometrics — the science of identifying which
+AI model produced a given text based on linguistic fingerprints.
+
+Analyze the following text and determine:
+
+[1] IS THIS AI-GENERATED?
+    Provide your evidence. If not AI-generated, stop here.
+
+[2] WHICH MODEL IS MOST LIKELY?
+    Match the text against these known model fingerprints:
+
+    GPT-4o (mid-2024 to mid-2025):
+    - Overuses: align with, bolstered, crucial, emphasizing, enhance,
+      enduring, fostering, highlighting, pivotal, showcasing, underscore, vibrant
+    - Style: focuses heavily on broad context, longer sentences, very balanced
+    - Tendency: diplomatic, avoids strong opinions, comprehensive coverage
+
+    GPT-5 (mid-2025 onward):
+    - Overuses: emphasizing, enhance, highlighting, showcasing
+    - Additional: canned emphasis on notability, attribution, media coverage
+    - Style: noticeably more human-sounding than GPT-4o
+
+    Claude (Anthropic):
+    - More concise than GPT or Grok
+    - Avoids bullet points unless explicitly asked
+    - Implicit ethical hedging even in neutral topics
+    - Rarely uses "delve" or "vibrant"
+    - Tends toward shorter, cleaner paragraphs
+
+    Gemini (Google):
+    - More descriptive and list-heavy
+    - Parallel structure in examples
+    - Tends to enumerate rather than narrate
+    - Often includes "it's worth noting" and "keep in mind"
+
+    DeepSeek:
+    - Dense academic tone
+    - Heavy use of technical terminology
+    - Very structured, almost formulaic section headings
+    - Chinese academic writing patterns occasionally visible
+
+    Grok (xAI):
+    - Overuses: causal, empirical, correlate, underscore (as of 2026)
+    - Superficially "scientific" vocabulary
+    - More opinionated than other models
+    - Idiosyncratic phrasing patterns
+
+    Fine-tuned Arabic LLM:
+    - Appears to translate English patterns into Arabic implicitly
+    - Uses: منظومة (ecosystem), ركائز (pillars), مرتكزات (foundations)
+    - Formal MSA with occasional awkward phrasing
+
+[3] CONFIDENCE LEVEL: X% confident in this attribution
+
+[4] SMOKING GUN EVIDENCE:
+    Quote exactly 3 phrases/sentences from the text that most strongly
+    indicate the model you identified. Explain why each is significant.
+
+[5] ALTERNATIVE MODEL:
+    What is the second most likely model, and why?
+
+TEXT TO ANALYZE:
+{{TEXT}}
+
+================================================================
+IMPORTANT DISCLAIMER:
+This analysis provides a probabilistic assessment, not definitive proof.
+A single word or phrase proves nothing. Look for CLUSTERS of signals.
+Human writers can also use "pivotal" or "moreover" — what matters is
+the density and combination of these patterns across the full text.
+================================================================

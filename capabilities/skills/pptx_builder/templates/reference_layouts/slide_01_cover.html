@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Slide Template</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:ital,wght@0,300;0,400;0,500;0,700;1,400&display=swap');
+
+  :root{
+    /* === Theme Colors === */
+    --bg-primary:      #331263;  /* dark purple - left panel */
+    --bg-secondary:    #0a0523;  /* deep navy/black - right panel */
+    --accent-gold:     #d9ac3d;  /* gold lines / subtitle */
+    --accent-gold-2:   #f2c744;  /* brighter gold (badge) */
+    --accent-purple-2: #b28ee0;  /* light purple - tagline text */
+    --text-primary:    #ffffff;  /* titles */
+    --text-body:       #eae6f2;  /* body copy */
+    --text-muted:      #cfc7e0;  /* secondary body copy */
+    --border-gold:     rgba(217,172,61,0.55);
+
+    /* === Typography === */
+    --font-heading: 'Cairo', 'Tajawal', sans-serif;
+    --font-body:    'Tajawal', 'Cairo', sans-serif;
+
+    /* === Spacing === */
+    --pad-side: 56px;
+    --pad-top: 40px;
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+
+  html,body{
+    width:1280px;
+    height:720px;
+    overflow:hidden;
+    font-family: var(--font-body);
+    background:var(--bg-secondary);
+  }
+
+  .slide{
+    position:relative;
+    width:1280px;
+    height:720px;
+    display:flex;
+    flex-direction:row-reverse; /* image on right visually, matches RTL source order */
+    background:var(--bg-secondary);
+    border-top:5px solid var(--accent-gold);
+    border-bottom:5px solid var(--accent-gold);
+  }
+
+  /* ---------- LEFT CONTENT PANEL ---------- */
+  .content-panel{
+    position:relative;
+    width:42%;
+    height:100%;
+    background:var(--bg-primary);
+    padding: var(--pad-top) var(--pad-side) 48px var(--pad-side);
+    display:flex;
+    flex-direction:column;
+    justify-content:flex-start;
+    text-align:right;
+    overflow:hidden;
+  }
+
+  .top-rule{
+    width:110px;
+    height:6px;
+    background:var(--accent-gold);
+    margin-bottom:26px;
+  }
+
+  .title{
+    font-family:var(--font-heading);
+    font-weight:800;
+    font-size:52px;
+    line-height:1.25;
+    color:var(--text-primary);
+    margin-bottom:22px;
+  }
+
+  .subtitle{
+    font-family:var(--font-heading);
+    font-weight:600;
+    font-size:24px;
+    color:var(--accent-gold);
+    margin-bottom:18px;
+  }
+
+  .tagline{
+    font-family:var(--font-body);
+    font-style:italic;
+    font-weight:400;
+    font-size:17px;
+    color:var(--accent-purple-2);
+    margin-bottom:26px;
+  }
+
+  .divider{
+    width:100%;
+    height:2px;
+    background:var(--accent-gold);
+    opacity:0.85;
+    margin-bottom:22px;
+  }
+
+  .content-line{
+    font-size:15px;
+    color:var(--text-body);
+    margin-bottom:16px;
+  }
+
+  .item-list{
+    list-style:none;
+    margin-bottom:16px;
+  }
+  .item-list li{
+    font-size:15px;
+    line-height:1.7;
+    color:var(--text-body);
+  }
+
+  .footnote{
+    font-size:15px;
+    color:var(--text-muted);
+    margin-top:6px;
+  }
+
+  /* decorative hexagon, bottom-left corner */
+  .hex-decor{
+    position:absolute;
+    left:-40px;
+    bottom:-40px;
+    width:150px;
+    height:150px;
+    opacity:0.9;
+  }
+
+  /* ---------- RIGHT VISUAL PANEL ---------- */
+  .visual-panel{
+    position:relative;
+    width:58%;
+    height:100%;
+    background:var(--bg-secondary);
+    overflow:hidden;
+  }
+
+  /* decorative concentric rings */
+  .ring{
+    position:absolute;
+    border:1.5px solid var(--border-gold);
+    border-radius:50%;
+  }
+  .ring--1{ width:640px; height:640px; top:50%; left:46%; transform:translate(-50%,-50%); }
+  .ring--2{ width:760px; height:760px; top:50%; left:46%; transform:translate(-50%,-50%); opacity:0.6; }
+
+  .image-frame{
+    position:absolute;
+    top:50%; left:46%;
+    transform:translate(-50%,-50%);
+    width:520px;
+    height:520px;
+    border-radius:50%;
+    border:6px solid var(--accent-gold);
+    overflow:hidden;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:linear-gradient(135deg,#1a1440,#0a0523);
+    color:var(--text-muted);
+    font-size:16px;
+    text-align:center;
+  }
+
+  /* page-number badge, bottom-right corner */
+  .page-badge{
+    position:absolute;
+    right:26px;
+    bottom:14px;
+    width:44px;
+    height:44px;
+    border-radius:50%;
+    background:var(--bg-primary);
+    border:2px solid var(--accent-gold-2);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-family:var(--font-heading);
+    font-weight:700;
+    font-size:16px;
+    color:var(--accent-gold-2);
+  }
+</style>
+</head>
+<body>
+
+  <div class="slide">
+
+    <!-- RIGHT: visual / image panel -->
+    <div class="visual-panel">
+      <div class="ring ring--2"></div>
+      <div class="ring ring--1"></div>
+      <div class="image-frame">{{IMAGE_1}}</div>
+      <div class="page-badge">{{PAGE_NUM}}</div>
+    </div>
+
+    <!-- LEFT: text content panel -->
+    <div class="content-panel">
+      <div class="top-rule"></div>
+
+      <h1 class="title">{{TITLE}}</h1>
+      <div class="subtitle">{{SUBTITLE}}</div>
+      <div class="tagline">{{CONTENT_1}}</div>
+
+      <div class="divider"></div>
+
+      <div class="content-line">{{CONTENT_2}}</div>
+
+      <ul class="item-list">
+        <li>{{ITEM_1}}</li>
+        <li>{{ITEM_2}}</li>
+      </ul>
+
+      <div class="footnote">{{CONTENT_3}}</div>
+
+      <!-- decorative hexagon outline -->
+      <svg class="hex-decor" viewBox="0 0 100 115" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="50,2 95,28 95,86 50,113 5,86 5,28"
+                 fill="none" stroke="#d9ac3d" stroke-width="2.5" opacity="0.85"/>
+      </svg>
+    </div>
+
+  </div>
+
+</body>
+</html>

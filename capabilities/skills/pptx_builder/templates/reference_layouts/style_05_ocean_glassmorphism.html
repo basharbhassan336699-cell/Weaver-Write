@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Ocean Glassmorphism</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Tajawal:wght@300;400;500&display=swap');
+
+  :root{
+    --deep:    #071B2B;
+    --blue:    #065A82;
+    --teal:    #1C7293;
+    --mint:    #6FE3C9;
+    --text:    #EAF6F6;
+    --muted:   #A9C6D0;
+    --font-heading: 'Cairo', sans-serif;
+    --font-body:    'Tajawal', sans-serif;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; background:var(--deep); font-family:var(--font-body); color:var(--text); }
+  .slide{ position:relative; width:1280px; height:720px; direction:rtl; text-align:right; }
+
+  /* signature motif: layered gradient waves + glass cards */
+  .gradient-bg{
+    position:absolute; inset:0;
+    background:
+      radial-gradient(circle at 85% 15%, rgba(111,227,201,0.25), transparent 45%),
+      radial-gradient(circle at 10% 90%, rgba(28,114,147,0.55), transparent 50%),
+      linear-gradient(160deg, var(--deep) 0%, var(--blue) 130%);
+  }
+  .wave{ position:absolute; left:0; right:0; height:140px; opacity:0.5; }
+  .wave svg{ width:100%; height:100%; }
+  .wave-1{ bottom:-20px; }
+  .wave-2{ bottom:-60px; opacity:0.3; }
+
+  .kicker{
+    position:absolute; top:52px; right:64px;
+    font-family:var(--font-heading); font-weight:700; font-size:13px; letter-spacing:2px; color:var(--mint);
+    background:rgba(255,255,255,0.08); backdrop-filter:blur(6px); border:1px solid rgba(255,255,255,0.15);
+    padding:8px 20px; border-radius:20px;
+  }
+
+  .title{
+    position:absolute; top:100px; right:64px; width:760px;
+    font-family:var(--font-heading); font-weight:800; font-size:46px; line-height:1.25; color:var(--text);
+  }
+
+  .glass-row{ position:absolute; top:250px; right:64px; left:64px; bottom:56px; display:grid; grid-template-columns:1.1fr 1fr 1fr; gap:22px; }
+
+  .glass{
+    background:rgba(255,255,255,0.07); backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,0.18); border-radius:18px;
+    padding:26px 24px;
+  }
+  .glass.main{ display:flex; flex-direction:column; justify-content:center; }
+  .glass.main p{ font-size:15.5px; line-height:1.9; color:var(--muted); }
+  .glass h4{ font-family:var(--font-heading); font-weight:700; font-size:17px; color:var(--mint); margin-bottom:14px; }
+  .glass ul{ list-style:none; }
+  .glass ul li{ position:relative; padding-right:20px; margin-bottom:12px; font-size:13.5px; color:var(--text); }
+  .glass ul li::before{ content:"◆"; position:absolute; right:0; top:0; color:var(--mint); font-size:9px; }
+
+  .page-num{ position:absolute; bottom:20px; left:64px; font-family:var(--font-heading); font-weight:700; font-size:12px; color:var(--mint); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="gradient-bg"></div>
+    <div class="wave wave-2"><svg viewBox="0 0 1280 140" preserveAspectRatio="none"><path d="M0,80 C320,140 960,20 1280,80 L1280,140 L0,140 Z" fill="#0d3a52"/></svg></div>
+    <div class="wave wave-1"><svg viewBox="0 0 1280 140" preserveAspectRatio="none"><path d="M0,60 C400,130 880,10 1280,70 L1280,140 L0,140 Z" fill="#124a68"/></svg></div>
+
+    <div class="kicker">{{KICKER}}</div>
+    <h1 class="title">{{TITLE}}</h1>
+
+    <div class="glass-row">
+      <div class="glass main"><p>{{CONTENT_1}}</p></div>
+      <div class="glass"><h4>{{SUBTITLE_1}}</h4>
+        <ul><li>{{ITEM_1}}</li><li>{{ITEM_2}}</li><li>{{ITEM_3}}</li></ul>
+      </div>
+      <div class="glass"><h4>{{SUBTITLE_2}}</h4>
+        <ul><li>{{ITEM_4}}</li><li>{{ITEM_5}}</li><li>{{ITEM_6}}</li></ul>
+      </div>
+    </div>
+
+    <div class="page-num">{{PAGE_NUM}}</div>
+  </div>
+</body>
+</html>

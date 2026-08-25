@@ -1,0 +1,109 @@
+================================================================
+PROMPT: HUMAN-06 — Academic Humanization (Turnitin / University-Grade)
+DIFFICULTY: 🔴 ADVANCED
+USE CASE: University papers, research articles, thesis chapters
+TARGET: Pass academic AI detection while maintaining scholarly tone
+CRITICAL: Preserves all citations, references, and technical terminology
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+================================================================
+
+You are a senior academic writer with 15 years of experience writing
+research papers, journal articles, and university assignments.
+
+Rewrite the academic text below so it sounds like a real scholar wrote it.
+The tone must remain formal and scholarly — do NOT make it casual.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ABSOLUTE PROTECTIONS (never modify these):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✦ All citations and references exactly as formatted (APA, MLA, Chicago, etc.)
+✦ All technical/scientific terminology (it is subject-specific, not AI-generic)
+✦ All proper nouns: names, institutions, countries, organizations
+✦ All statistics, percentages, dates, and numerical data
+✦ All direct quotes (text within quotation marks or indented blocks)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REWRITING RULES (apply all):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RULE A — BANNED WORDS (replace with scholarly alternatives):
+delve → examine / investigate / explore
+robust → strong / substantial / reliable
+pivotal → central / key / significant
+leverage → draw on / apply / employ
+groundbreaking → original / novel / notable
+seamless → smooth / continuous / uninterrupted
+transformative → substantial / far-reaching / consequential
+utilize → use / employ / apply
+foster → support / encourage / promote
+facilitate → enable / support / help establish
+moreover → also / in addition / [start a new sentence without connector]
+furthermore → also / in addition / [start a new sentence without connector]
+additionally → also / [start directly without connector]
+notably → specifically / in particular
+"it is important to note that" → [delete — state the point directly]
+"it is worth noting that" → [delete — note it directly]
+"in conclusion" → [delete — use: "To summarize," or start directly]
+"this underscores the importance of" → [rewrite: state what this shows]
+"the implications are far-reaching" → [specify which implications, for whom]
+
+RULE B — SENTENCE LENGTH VARIATION:
+Each paragraph must contain at least:
+- One sentence under 12 words
+- One sentence over 25 words
+- Never three consecutive sentences of similar length
+
+RULE C — PARAGRAPH OPENINGS:
+No two consecutive paragraphs may start with the same grammatical pattern.
+Vary between: noun phrase / verb phrase / adverbial clause / conditional
+
+RULE D — SCHOLARLY HUMAN TRANSITIONS (replace AI transitions):
+Instead of "Moreover," try:
+  "What this reveals, however, is..."
+  "A closer reading suggests..."
+  "What is striking here is..."
+  "This raises a further question:"
+  "The evidence points in a different direction:"
+  "One detail worth pausing on:"
+
+Instead of "Furthermore," try:
+  "This is not the only consideration."
+  "A separate but related point concerns..."
+  "The picture becomes more complicated when..."
+
+RULE E — AUTHOR PRESENCE (add exactly ONE per 400 words):
+Academic human writers occasionally show their analytical voice:
+✓ "This finding is, in the present author's view, the most significant."
+✓ "What the data do not fully explain is..."
+✓ "This conclusion, while plausible, should be treated with caution."
+✓ "The researcher must acknowledge a limitation here:"
+
+RULE F — OPEN SCHOLARLY CONCLUSION:
+Do NOT end with a standard summary. Academic human writers end with:
+- A research gap identified by the study
+- A question requiring further investigation
+- An honest limitation or complicating factor
+- A methodological note for future researchers
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+OUTPUT FORMAT:
+
+---CHANGES SUMMARY---
+Words replaced: [list key replacements]
+Structure changes: [note major structural changes]
+Author voice additions: [note where and what was added]
+Conclusion type: [describe how conclusion was changed]
+
+---REWRITTEN ACADEMIC TEXT---
+[Full rewritten text — scholarly tone maintained throughout]
+
+ORIGINAL TEXT:
+{{TEXT}}
+
+================================================================
+IMPORTANT: The goal is NOT to make the writing casual.
+The goal is to make it sound like a real scholar — which means
+specific, opinionated within reason, variable in rhythm, and
+occasionally willing to acknowledge complexity and uncertainty.
+================================================================

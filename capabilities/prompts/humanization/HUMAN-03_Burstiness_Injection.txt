@@ -1,0 +1,73 @@
+================================================================
+PROMPT: HUMAN-03 — Burstiness Injection (Sentence Length Variation)
+DIFFICULTY: 🔴 ADVANCED
+USE CASE: Texts where vocabulary is acceptable but sentence rhythm feels robotic
+TARGET: Fix the single most detectable AI writing pattern
+CONCEPT: "Burstiness" = natural human sentence length variation.
+         AI texts have low burstiness (uniform sentence lengths).
+         Human texts have high burstiness (wildly variable lengths).
+BEST MODELS: Claude Sonnet 4.x, GPT-4o
+================================================================
+
+Your ONLY task: Apply the Burstiness principle to the text below.
+Do NOT change the meaning. Change ONLY sentence length distribution and phrasing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 1 — DIAGNOSIS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Scan the text and identify all sentences with similar lengths
+(within 3-5 words of each other in consecutive sentences).
+These are "uniform clusters" — the AI fingerprint you must fix.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 2 — TRANSFORMATION RULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+For every cluster of 2-3 similarly-lengthed sentences:
+
+ACTION A — COMPRESS one sentence to under 8 words:
+  Distill its core point to its essence. Shortest possible. Still complete.
+  Example: "This is a significant development." → "This matters."
+
+ACTION B — EXPAND one sentence to 28+ words:
+  Add a real specific detail, example, or nuance that enriches the idea.
+  Not padding — actual substance.
+  Example: "Research confirms this." → "A 2024 study tracking 15 million
+  academic papers found that certain words spiked by over 300% within
+  six months of ChatGPT's public release — a pattern with no historical precedent."
+
+ACTION C — KEEP one sentence at medium length (12-20 words):
+  Rephrase it slightly for natural flow.
+
+ORDER within each paragraph: randomize A, B, C placement.
+Never put two SHORT sentences back-to-back.
+Never put two LONG sentences back-to-back.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STEP 3 — VERIFICATION TARGET
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+After rewriting, the sentence length distribution should look like:
+  Short (≤8 words):   20-25% of sentences
+  Medium (9-20 words): 45-55% of sentences
+  Long (21+ words):   20-30% of sentences
+  Standard Deviation: ≥ 10 words (target: 12-15)
+
+OUTPUT FORMAT:
+---DIAGNOSIS---
+[Brief note on what uniform clusters you found]
+
+---REWRITTEN TEXT---
+[Full rewritten text with burstiness applied]
+
+---VERIFICATION---
+Approximate sentence distribution: Short X% / Medium X% / Long X%
+
+TEXT TO PROCESS:
+{{TEXT}}
+
+================================================================
+TECHNICAL NOTE:
+GPTZero's burstiness metric directly measures sentence length variance.
+A Standard Deviation below 5 words is a near-certain AI signal.
+Human writing typically shows SD of 10-15 words.
+This prompt directly addresses that metric.
+================================================================

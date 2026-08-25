@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<title>Organic Nature</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Tajawal:ital,wght@0,300;0,400;0,500;1,400&display=swap');
+
+  :root{
+    --bg:      #F4F7F1;
+    --forest:  #2C5F2D;
+    --moss:    #97BC62;
+    --sage:    #DCE8D2;
+    --ink:     #223420;
+    --muted:   #5C6E56;
+    --font-heading: 'Cairo', sans-serif;
+    --font-body:    'Tajawal', sans-serif;
+  }
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ width:1280px; height:720px; overflow:hidden; background:var(--bg); font-family:var(--font-body); color:var(--ink); }
+  .slide{ position:relative; width:1280px; height:720px; direction:rtl; text-align:right; }
+
+  /* signature motif: organic blob frame, repeated at different scales */
+  .blob{ position:absolute; }
+  .blob svg{ width:100%; height:100%; }
+
+  .blob-bg-1{ top:-140px; left:-160px; width:480px; height:480px; opacity:0.5; }
+  .blob-bg-2{ bottom:-180px; left:-100px; width:380px; height:380px; opacity:0.35; }
+
+  .kicker{
+    position:absolute; top:58px; right:64px;
+    font-family:var(--font-heading); font-weight:700; font-size:14px; color:var(--forest);
+    background:var(--sage); padding:8px 22px; border-radius:20px;
+  }
+
+  .title{
+    position:absolute; top:120px; right:64px; width:600px;
+    font-family:var(--font-heading); font-weight:800; font-size:48px; line-height:1.25; color:var(--forest);
+  }
+
+  .lede{ position:absolute; top:300px; right:64px; width:520px; font-size:16px; line-height:1.9; color:var(--muted); }
+
+  /* organic image frame, blob-clipped */
+  .blob-frame{
+    position:absolute; top:110px; left:70px; width:360px; height:420px;
+    display:flex; align-items:center; justify-content:center;
+    background:linear-gradient(160deg,var(--moss),var(--forest));
+    color:rgba(255,255,255,0.85); font-size:13px; text-align:center; padding:20px;
+    clip-path: path('M180,0 C260,10 340,60 350,150 C360,250 320,340 230,390 C140,440 30,420 5,320 C-20,220 20,110 90,50 C120,25 150,-5 180,0 Z');
+  }
+
+  .cards-row{ position:absolute; bottom:56px; right:64px; left:470px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:18px; }
+  .leaf-card{
+    background:#FFFFFF; border:1.5px solid var(--sage); border-radius:20px 20px 20px 4px;
+    padding:20px 18px; text-align:center;
+  }
+  .leaf-card .ic{ width:30px; height:30px; margin:0 auto 10px; color:var(--forest); }
+  .leaf-card h4{ font-family:var(--font-heading); font-weight:700; font-size:15px; color:var(--forest); margin-bottom:8px; }
+  .leaf-card p{ font-size:12.5px; color:var(--muted); line-height:1.7; }
+
+  .page-num{ position:absolute; bottom:20px; left:64px; font-family:var(--font-heading); font-weight:700; font-size:13px; color:var(--forest); }
+</style>
+</head>
+<body>
+  <div class="slide">
+    <div class="blob blob-bg-1">
+      <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><path fill="#97BC62" d="M45,-60C58,-52,67,-37,71,-20C75,-3,74,16,65,31C56,46,39,57,20,64C1,71,-20,74,-38,66C-56,58,-71,39,-75,18C-79,-3,-72,-26,-58,-42C-44,-58,-23,-67,-2,-66C19,-65,32,-68,45,-60Z" transform="translate(100 100)"/></svg>
+    </div>
+    <div class="blob blob-bg-2">
+      <svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"><path fill="#2C5F2D" d="M40,-52C51,-44,57,-29,60,-13C63,3,63,21,55,35C47,49,31,59,13,64C-5,69,-25,68,-41,58C-57,48,-69,29,-71,10C-73,-9,-65,-28,-52,-41C-39,-54,-20,-61,-1,-60C18,-59,29,-60,40,-52Z" transform="translate(100 100)"/></svg>
+    </div>
+
+    <div class="kicker">{{KICKER}}</div>
+    <h1 class="title">{{TITLE}}</h1>
+    <p class="lede">{{CONTENT_1}}</p>
+
+    <div class="blob-frame">{{IMAGE_1}}</div>
+
+    <div class="cards-row">
+      <div class="leaf-card"><div class="ic">{{ICON_1}}</div><h4>{{SUBTITLE_1}}</h4><p>{{ITEM_1}}</p></div>
+      <div class="leaf-card"><div class="ic">{{ICON_2}}</div><h4>{{SUBTITLE_2}}</h4><p>{{ITEM_2}}</p></div>
+      <div class="leaf-card"><div class="ic">{{ICON_3}}</div><h4>{{SUBTITLE_3}}</h4><p>{{ITEM_3}}</p></div>
+    </div>
+
+    <div class="page-num">{{PAGE_NUM}}</div>
+  </div>
+</body>
+</html>
