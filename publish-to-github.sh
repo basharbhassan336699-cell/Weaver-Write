@@ -3,8 +3,8 @@
 set -e
 cd "$(dirname "$0")"
 
-USERNAME="${1:?Usage: bash publish-to-github.sh YOUR_GITHUB_USERNAME}"
-REPO="weaver-write"
+USERNAME="${1:-basharbhassan336699-cell}"
+REPO="Weaver-Write"
 
 echo "Publishing Weaver Write to github.com/$USERNAME/$REPO ..."
 
