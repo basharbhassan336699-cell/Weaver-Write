@@ -1,0 +1,4 @@
+# The vendored APScheduler v4 (pre-release) needs these to run:
+attrs>=23.0
+tzlocal>=5.0
+# icalendar and pytz are vendored; zoneinfo (Python 3.9+) is used when available

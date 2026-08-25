@@ -1,0 +1,31 @@
+[project]
+name = "unimemory"
+version = "1.0.0"
+description = "محرك الذاكرة الموحّد — يجمع Zep + Cognee + mem0 + OpenMemory"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+
+# الأساس: يعمل بلا أي تبعية خارجية (SQLite مدمج + fallback embedding)
+dependencies = []
+
+[project.optional-dependencies]
+# LLM سحابي
+anthropic = ["anthropic"]
+openai = ["openai"]
+# كل مزودات LLM
+llm = ["anthropic", "openai"]
+# MCP Server (للتكامل مع Claude)
+mcp = ["mcp"]
+# كل شيء
+all = ["anthropic", "openai", "mcp"]
+
+[project.scripts]
+unimemory = "unimemory.cli:main"
+unimemory-mcp = "unimemory.mcp:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["unimemory*"]

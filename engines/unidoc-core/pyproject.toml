@@ -1,0 +1,51 @@
+[project]
+name = "unidoc"
+version = "1.0.0"
+description = "أداة موحّدة لتحويل المستندات — تجمع anydoc + olmocr + chandra بتوجيه ذكي"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+
+# المتطلبات الأساسية (التوجيه فقط — بلا محركات ثقيلة)
+dependencies = [
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+# anydoc — Office المهيكل
+office = [
+    "firecrawl-anydoc",
+]
+# olmocr — PDF/صور عبر VLM (GPU)
+olmocr = [
+    "olmocr[gpu]",
+]
+# chandra — دقة عالية محلي
+chandra-hf = [
+    "chandra-ocr[hf]",
+]
+# chandra — remote vLLM
+chandra-remote = [
+    "chandra-ocr",
+]
+# Tesseract fallback للأجهزة الصغيرة (Termux)
+tesseract = [
+    "pytesseract",
+    "pdf2image",
+]
+# كل شيء
+all = [
+    "firecrawl-anydoc",
+    "chandra-ocr[hf]",
+    "pytesseract",
+    "pdf2image",
+]
+
+[project.scripts]
+unidoc = "unidoc.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["unidoc*"]
