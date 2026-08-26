@@ -49,9 +49,16 @@ cd "$INSTALL_DIR"
 echo "Installing Python libraries..."
 if [ "$PLATFORM" = "termux" ]; then
     # NOTE: on Termux, `pip install --upgrade pip` is forbidden — it breaks the
-    # python-pip package. Ensure pip via pkg, then install requirements directly.
+    # python-pip package. Also, compiled libraries (numpy/scipy/pandas/matplotlib)
+    # must come from Termux prebuilt packages; building them from pip source needs
+    # ninja/cmake and fails on-device (e.g. "matplotlib" / "ninja" build errors).
     pkg install -y python-pip 2>/dev/null || true
-    pip install -r requirements.txt
+    pkg install -y matplotlib python-numpy python-pandas python-scipy python-pillow 2>/dev/null || true
+    # Install each requirement independently so one heavy package that cannot
+    # build on-device (e.g. torch-based paper-qa) does not abort the rest.
+    grep -vE '^[[:space:]]*#|^[[:space:]]*$' requirements.txt | while IFS= read -r req; do
+        pip install "$req" 2>/dev/null || echo "  skipped (optional / needs compilation): $req"
+    done
 else
     python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || python3 -m pip install --upgrade pip
     python3 -m pip install -r requirements.txt --break-system-packages 2>/dev/null || python3 -m pip install -r requirements.txt
