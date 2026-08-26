@@ -3217,7 +3217,7 @@
 
 <div class="wv-overlay" id="connectsOverlay">
   <div class="wv-modal">
-    <div class="wv-head"><h3>🔗 Connectors</h3><button class="wv-x" onclick="wvClose('connectsOverlay')">←</button></div>
+    <div class="wv-head"><h3><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-end:8px"><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"/><path d="m2 22 3-3"/><path d="M7.5 13.5 10 11"/><path d="M10.5 16.5 13 14"/><path d="m18 3-4 4h6l-4 4"/></svg>Connectors</h3><button class="wv-x" onclick="wvClose('connectsOverlay')">←</button></div>
     <div class="wv-body">
       <div class="wv-field">
         <input id="connSearch" type="text" placeholder="Search 1000+ apps & sites (Gmail, Slack, GitHub…) / ابحث في التطبيقات والمواقع" autocomplete="off" spellcheck="false">
@@ -3336,9 +3336,19 @@
       var r=await (await fetch('/api/connectors/oauth/start',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id:id,client_id:f.client_id,client_secret:f.client_secret})})).json();
       if(r.error){ if(msg){msg.textContent='OAuth error: '+r.error; msg.className='wv-msg err';} return; }
-      window.open(r.auth_url,'_blank');
-      if(msg){ msg.textContent='Complete sign-in in the opened tab…'; msg.className='wv-msg'; }
-      wvPollConnected(id, 30);
+      // open the provider's consent page reliably (mobile browsers often block
+      // window.open): try a real link click, then a popup, then same-tab nav
+      var opened=false;
+      try{ var a=document.createElement('a'); a.href=r.auth_url; a.target='_blank'; a.rel='noopener';
+           document.body.appendChild(a); a.click(); a.remove(); opened=true; }catch(e){}
+      if(!opened){ try{ opened=!!window.open(r.auth_url,'_blank'); }catch(e){} }
+      wvPollConnected(id, 40);
+      if(msg){
+        msg.innerHTML='Complete sign-in… if nothing opened, '+
+          '<a href="'+r.auth_url.replace(/"/g,'&quot;')+'" target="_blank" rel="noopener" style="color:var(--accent)">tap here to open '+id+'</a>.';
+        msg.className='wv-msg';
+      }
+      if(!opened){ setTimeout(function(){ window.location.href=r.auth_url; }, 400); }
     }catch(e){ if(msg){msg.textContent='Failed: '+e.message; msg.className='wv-msg err';} }
   }
   function wvPollConnected(id, tries){
