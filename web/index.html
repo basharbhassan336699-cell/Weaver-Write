@@ -3097,6 +3097,227 @@
     }
   });
 </script>
+<!-- ══════════ Keys / Projects / Artifacts panels ══════════ -->
+<style>
+  .wv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
+    align-items:center;justify-content:center;z-index:1000;padding:16px}
+  .wv-overlay.show{display:flex}
+  .wv-modal{background:var(--bg-elev,#1c1a24);color:var(--text,#ece9f5);
+    border:1px solid var(--border,#2c2739);border-radius:16px;width:100%;
+    max-width:520px;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+  .wv-head{display:flex;align-items:center;justify-content:space-between;
+    padding:16px 18px;border-bottom:1px solid var(--border,#2c2739);position:sticky;top:0;
+    background:inherit}
+  .wv-head h3{margin:0;font-size:1.05rem;font-weight:700}
+  .wv-x{background:none;border:none;color:var(--text-muted,#9a95ad);font-size:22px;
+    cursor:pointer;line-height:1;padding:2px 6px;border-radius:8px}
+  .wv-x:hover{background:var(--border,#2c2739)}
+  .wv-body{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+  .wv-field{display:flex;flex-direction:column;gap:6px}
+  .wv-field label{font-size:.8rem;color:var(--text-muted,#9a95ad);font-weight:600}
+  .wv-field input,.wv-field select{width:100%;box-sizing:border-box;padding:10px 12px;
+    border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);
+    color:var(--text,#ece9f5);font:inherit;font-size:.92rem;outline:none}
+  .wv-field input:focus,.wv-field select:focus{border-color:#9f88ff}
+  .wv-btn{padding:10px 14px;border-radius:10px;border:1px solid var(--border,#3a3350);
+    background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit;font-weight:600;
+    cursor:pointer;font-size:.9rem}
+  .wv-btn:hover{border-color:#9f88ff;color:#c1a6ff}
+  .wv-btn.primary{background:linear-gradient(135deg,#7c5cff,#a678ff);border:none;color:#fff}
+  .wv-btn.primary:hover{filter:brightness(1.07)}
+  .wv-row{display:flex;gap:10px;flex-wrap:wrap}
+  .wv-msg{font-size:.85rem;color:var(--text-muted,#9a95ad);min-height:1em}
+  .wv-msg.ok{color:#68c79a}.wv-msg.err{color:#f07d63}
+  .wv-card{border:1px solid var(--border,#2c2739);border-radius:12px;padding:12px 14px;
+    display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .wv-card .t{font-weight:600;font-size:.92rem}
+  .wv-card .s{font-size:.78rem;color:var(--text-muted,#9a95ad)}
+  .wv-empty{text-align:center;color:var(--text-muted,#9a95ad);padding:26px 10px;font-size:.9rem}
+  .wv-list{display:flex;flex-direction:column;gap:10px}
+  .wv-mini{background:none;border:none;color:var(--text-muted,#9a95ad);cursor:pointer;
+    font-size:.8rem;padding:4px 6px;border-radius:6px}
+  .wv-mini:hover{color:#f07d63}
+  .wv-status{background:var(--bg,#14131a);border:1px solid var(--border,#2c2739);
+    border-radius:12px;padding:12px 14px;font-size:.86rem;line-height:1.7}
+  .wv-status b{color:#c1a6ff}
+</style>
+
+<div class="wv-overlay" id="keysOverlay">
+  <div class="wv-modal">
+    <div class="wv-head"><h3>🔑 API Keys</h3><button class="wv-x" onclick="wvClose('keysOverlay')">×</button></div>
+    <div class="wv-body">
+      <div class="wv-status" id="kStatus">…</div>
+      <div class="wv-field">
+        <label>AI platform / منصة الذكاء الاصطناعي</label>
+        <select id="kProvider"></select>
+      </div>
+      <div class="wv-field">
+        <label>Platform URL / رابط المنصة (for a platform not listed)</label>
+        <input id="kUrl" type="text" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="wv-field">
+        <label>API key / المفتاح</label>
+        <input id="kKey" type="password" placeholder="Paste your key" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="wv-row">
+        <button class="wv-btn" id="kDiscover" onclick="wvDiscover()">🔍 Discover models / استكشاف النماذج</button>
+      </div>
+      <div class="wv-field" id="kModelWrap" style="display:none">
+        <label>Model / النموذج</label>
+        <select id="kModel"></select>
+      </div>
+      <div class="wv-msg" id="kMsg"></div>
+      <div class="wv-row">
+        <button class="wv-btn primary" onclick="wvSaveKey()">Save / حفظ</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wv-overlay" id="projectsOverlay">
+  <div class="wv-modal">
+    <div class="wv-head"><h3>📁 Projects</h3><button class="wv-x" onclick="wvClose('projectsOverlay')">×</button></div>
+    <div class="wv-body">
+      <div class="wv-row">
+        <input id="pName" class="" style="flex:1;min-width:160px;padding:10px 12px;border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit" placeholder="New project name / اسم المشروع">
+        <button class="wv-btn primary" onclick="wvAddProject()">Create / إنشاء</button>
+      </div>
+      <div class="wv-list" id="pList"></div>
+    </div>
+  </div>
+</div>
+
+<div class="wv-overlay" id="artifactsOverlay">
+  <div class="wv-modal">
+    <div class="wv-head"><h3>🧩 Artifacts</h3><button class="wv-x" onclick="wvClose('artifactsOverlay')">×</button></div>
+    <div class="wv-body">
+      <div class="wv-list" id="aList"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── panel open/close + nav wiring ──
+  function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
+  function wvOpen(id){ var o=document.getElementById(id); if(o) o.classList.add('show'); }
+  document.querySelectorAll('.wv-overlay').forEach(function(o){
+    o.addEventListener('click', function(e){ if(e.target===o) o.classList.remove('show'); });
+  });
+  (function wireNav(){
+    document.querySelectorAll('.nav-item').forEach(function(it){
+      var span=it.querySelector('span[data-i18n]');
+      if(!span) return;
+      var k=span.getAttribute('data-i18n');
+      if(k==='keys')      it.addEventListener('click', function(){ wvOpenKeys(); });
+      if(k==='projects')  it.addEventListener('click', function(){ wvOpen('projectsOverlay'); wvRenderProjects(); });
+      if(k==='artifacts') it.addEventListener('click', function(){ wvOpen('artifactsOverlay'); wvRenderArtifacts(); });
+    });
+  })();
+
+  // ── Keys panel ──
+  var WV_REG = [];
+  function wvSetMsg(t, cls){ var m=document.getElementById('kMsg'); m.textContent=t||''; m.className='wv-msg'+(cls?(' '+cls):''); }
+  async function wvOpenKeys(){
+    wvOpen('keysOverlay'); wvSetMsg('');
+    document.getElementById('kModelWrap').style.display='none';
+    // status
+    try{
+      var st=await (await fetch('/api/status')).json();
+      document.getElementById('kStatus').innerHTML = st.key_set
+        ? ('Connected: <b>'+(st.provider||'?')+'</b> · model <b>'+(st.model||'?')+'</b>')
+        : 'No key connected yet.';
+    }catch(e){ document.getElementById('kStatus').textContent='(could not read status)'; }
+    // providers
+    try{
+      var pr=await (await fetch('/api/providers')).json();
+      WV_REG = pr.registry || (pr.providers||[]).map(function(n){return {name:n,base_url:'',auth:'bearer'};});
+      var sel=document.getElementById('kProvider'); sel.innerHTML='';
+      WV_REG.forEach(function(p){ var o=document.createElement('option'); o.value=p.name; o.textContent=p.name; sel.appendChild(o); });
+      var oc=document.createElement('option'); oc.value='__custom__'; oc.textContent='Other / custom (enter URL)'; sel.appendChild(oc);
+      sel.onchange=wvProviderChange; wvProviderChange();
+    }catch(e){}
+  }
+  function wvProviderChange(){
+    var sel=document.getElementById('kProvider'); var url=document.getElementById('kUrl');
+    if(sel.value==='__custom__'){ url.value=''; url.readOnly=false; url.placeholder='https://api.example.com/v1'; }
+    else{ var p=WV_REG.find(function(x){return x.name===sel.value;}); url.value=p?p.base_url:''; url.readOnly=false; }
+  }
+  async function wvDiscover(){
+    var url=document.getElementById('kUrl').value.trim();
+    var key=document.getElementById('kKey').value.trim();
+    var sel=document.getElementById('kProvider');
+    var p=WV_REG.find(function(x){return x.name===sel.value;});
+    var auth=p?p.auth:'bearer';
+    if(!url){ wvSetMsg('Enter the platform URL first.', 'err'); return; }
+    if(!key){ wvSetMsg('Enter the API key first.', 'err'); return; }
+    wvSetMsg('Discovering models…');
+    try{
+      var r=await (await fetch('/api/providers/models',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({base_url:url,key:key,auth:auth})})).json();
+      if(r.error || !(r.models&&r.models.length)){ wvSetMsg('No models found ('+(r.error||'empty')+'). You can still type one when saving.', 'err');
+        document.getElementById('kModelWrap').style.display='none'; return; }
+      var ms=document.getElementById('kModel'); ms.innerHTML='';
+      r.models.slice(0,100).forEach(function(m){ var o=document.createElement('option'); o.value=m; o.textContent=m; ms.appendChild(o); });
+      document.getElementById('kModelWrap').style.display='';
+      wvSetMsg('Found '+r.models.length+' models.', 'ok');
+    }catch(e){ wvSetMsg('Discovery failed: '+e.message, 'err'); }
+  }
+  async function wvSaveKey(){
+    var sel=document.getElementById('kProvider');
+    var provider = sel.value==='__custom__' ? '' : sel.value;
+    var url=document.getElementById('kUrl').value.trim();
+    var key=document.getElementById('kKey').value.trim();
+    var mw=document.getElementById('kModelWrap');
+    var model = (mw.style.display!=='none') ? document.getElementById('kModel').value : '';
+    if(!key){ wvSetMsg('Enter the API key.', 'err'); return; }
+    wvSetMsg('Saving…');
+    try{
+      var body={api_key:key, provider:provider, base_url:url, model:model};
+      var r=await (await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+      wvSetMsg('Saved ✓ The key is now active (shared with the terminal too).', 'ok');
+      document.getElementById('kKey').value='';
+      var st=await (await fetch('/api/status')).json();
+      document.getElementById('kStatus').innerHTML = st.key_set
+        ? ('Connected: <b>'+(st.provider||'?')+'</b> · model <b>'+(st.model||'?')+'</b>') : 'No key connected yet.';
+      var mn=document.getElementById('modelName'); if(mn && st.model) mn.textContent=st.model;
+    }catch(e){ wvSetMsg('Save failed: '+e.message, 'err'); }
+  }
+
+  // ── Projects (stored locally on this device) ──
+  function wvGet(k){ try{ return JSON.parse(localStorage.getItem(k)||'[]'); }catch(e){ return []; } }
+  function wvSet(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} }
+  function wvAddProject(){
+    var el=document.getElementById('pName'); var name=(el.value||'').trim(); if(!name) return;
+    var list=wvGet('weaver_projects'); list.unshift({id:Date.now(),name:name,created:new Date().toISOString()});
+    wvSet('weaver_projects',list); el.value=''; wvRenderProjects();
+  }
+  function wvDelProject(id){ wvSet('weaver_projects', wvGet('weaver_projects').filter(function(p){return p.id!==id;})); wvRenderProjects(); }
+  function wvRenderProjects(){
+    var box=document.getElementById('pList'); var list=wvGet('weaver_projects');
+    if(!list.length){ box.innerHTML='<div class="wv-empty">No projects yet. Create one above.</div>'; return; }
+    box.innerHTML=list.map(function(p){
+      return '<div class="wv-card"><div><div class="t">'+wvEsc(p.name)+'</div><div class="s">'+new Date(p.created).toLocaleDateString()+'</div></div>'+
+             '<button class="wv-mini" onclick="wvDelProject('+p.id+')">Delete</button></div>';
+    }).join('');
+  }
+
+  // ── Artifacts (saved locally) ──
+  function wvRenderArtifacts(){
+    var box=document.getElementById('aList'); var list=wvGet('weaver_artifacts');
+    if(!list.length){ box.innerHTML='<div class="wv-empty">No artifacts yet.<br>Artifacts you save from a chat will appear here.</div>'; return; }
+    box.innerHTML=list.map(function(a){
+      return '<div class="wv-card"><div><div class="t">'+wvEsc(a.title||'Untitled')+'</div><div class="s">'+wvEsc(a.type||'text')+' · '+new Date(a.created).toLocaleDateString()+'</div></div>'+
+             '<button class="wv-mini" onclick="wvDelArtifact('+a.id+')">Delete</button></div>';
+    }).join('');
+  }
+  function wvDelArtifact(id){ wvSet('weaver_artifacts', wvGet('weaver_artifacts').filter(function(a){return a.id!==id;})); wvRenderArtifacts(); }
+  function wvSaveArtifact(title,type,content){
+    var list=wvGet('weaver_artifacts'); list.unshift({id:Date.now(),title:title,type:type||'text',content:content||'',created:new Date().toISOString()});
+    wvSet('weaver_artifacts',list);
+  }
+  function wvEsc(s){ return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+</script>
+
 <script>
   // Show the real connected model name, and remember the Effort choice.
   (function () {
