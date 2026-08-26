@@ -3113,20 +3113,23 @@
 </script>
 <!-- ══════════ Keys / Projects / Artifacts panels ══════════ -->
 <style>
-  .wv-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
-    align-items:center;justify-content:center;z-index:1000;padding:16px}
+  /* full-screen section pages (open like a real page, not a small popup) */
+  .wv-overlay{position:fixed;inset:0;background:#0f0e15;display:none;
+    align-items:stretch;justify-content:center;z-index:1000;padding:0}
   .wv-overlay.show{display:flex}
-  .wv-modal{background:var(--bg-elev,#1c1a24);color:var(--text,#ece9f5);
-    border:1px solid var(--border,#2c2739);border-radius:16px;width:100%;
-    max-width:520px;max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.5)}
-  .wv-head{display:flex;align-items:center;justify-content:space-between;
+  .wv-modal{background:#161320;color:var(--text,#ece9f5);
+    border:none;border-radius:0;width:100%;
+    max-width:900px;height:100vh;max-height:100vh;overflow:auto}
+  .wv-head{display:flex;align-items:center;gap:12px;
     padding:16px 18px;border-bottom:1px solid var(--border,#2c2739);position:sticky;top:0;
-    background:inherit}
-  .wv-head h3{margin:0;font-size:1.05rem;font-weight:700}
-  .wv-x{background:none;border:none;color:var(--text-muted,#9a95ad);font-size:22px;
-    cursor:pointer;line-height:1;padding:2px 6px;border-radius:8px}
-  .wv-x:hover{background:var(--border,#2c2739)}
-  .wv-body{padding:16px 18px;display:flex;flex-direction:column;gap:14px}
+    background:#161320;z-index:2}
+  .wv-head h3{margin:0;font-size:1.15rem;font-weight:700;flex:1}
+  .wv-x{background:none;border:1px solid var(--border,#2c2739);color:var(--text,#ece9f5);
+    font-size:20px;cursor:pointer;line-height:1;width:34px;height:34px;border-radius:9px;
+    display:grid;place-items:center;order:-1}
+  .wv-x:hover{background:var(--border,#2c2739);color:#c1a6ff}
+  .wv-body{padding:16px 18px 60px;display:flex;flex-direction:column;gap:14px;
+    max-width:640px;margin:0 auto;width:100%;box-sizing:border-box}
   .wv-field{display:flex;flex-direction:column;gap:6px}
   .wv-field label{font-size:.8rem;color:var(--text-muted,#9a95ad);font-weight:600}
   .wv-field input,.wv-field select{width:100%;box-sizing:border-box;padding:10px 12px;
@@ -3161,7 +3164,7 @@
 
 <div class="wv-overlay" id="keysOverlay">
   <div class="wv-modal">
-    <div class="wv-head"><h3>🔑 API Keys</h3><button class="wv-x" onclick="wvClose('keysOverlay')">×</button></div>
+    <div class="wv-head"><h3>🔑 API Keys</h3><button class="wv-x" onclick="wvClose('keysOverlay')">←</button></div>
     <div class="wv-body">
       <div class="wv-status" id="kStatus">…</div>
       <div class="wv-field">
@@ -3193,7 +3196,7 @@
 
 <div class="wv-overlay" id="projectsOverlay">
   <div class="wv-modal">
-    <div class="wv-head"><h3>📁 Projects</h3><button class="wv-x" onclick="wvClose('projectsOverlay')">×</button></div>
+    <div class="wv-head"><h3>📁 Projects</h3><button class="wv-x" onclick="wvClose('projectsOverlay')">←</button></div>
     <div class="wv-body">
       <div class="wv-row">
         <input id="pName" class="" style="flex:1;min-width:160px;padding:10px 12px;border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit" placeholder="New project name / اسم المشروع">
@@ -3206,7 +3209,7 @@
 
 <div class="wv-overlay" id="artifactsOverlay">
   <div class="wv-modal">
-    <div class="wv-head"><h3>🧩 Artifacts</h3><button class="wv-x" onclick="wvClose('artifactsOverlay')">×</button></div>
+    <div class="wv-head"><h3>🧩 Artifacts</h3><button class="wv-x" onclick="wvClose('artifactsOverlay')">←</button></div>
     <div class="wv-body">
       <div class="wv-list" id="aList"></div>
     </div>
@@ -3215,7 +3218,7 @@
 
 <div class="wv-overlay" id="connectsOverlay">
   <div class="wv-modal">
-    <div class="wv-head"><h3>🔗 Connectors</h3><button class="wv-x" onclick="wvClose('connectsOverlay')">×</button></div>
+    <div class="wv-head"><h3>🔗 Connectors</h3><button class="wv-x" onclick="wvClose('connectsOverlay')">←</button></div>
     <div class="wv-body">
       <div class="wv-field">
         <input id="connSearch" type="text" placeholder="Search 1000+ apps & sites (Gmail, Slack, GitHub…) / ابحث في التطبيقات والمواقع" autocomplete="off" spellcheck="false">
