@@ -2805,6 +2805,9 @@
 
   // ── Chat session tracking (sidebar list + search) ──
   let currentChatId = null;
+  let currentProjectId = (function(){ try { return localStorage.getItem('weaver_current_project') || null; } catch(e){ return null; } })();
+  function wvProjectsRaw(){ try { return JSON.parse(localStorage.getItem('weaver_projects')||'[]'); } catch(e){ return []; } }
+  function wvActiveProjectName(){ var p=wvProjectsRaw().find(function(x){return String(x.id)===String(currentProjectId);}); return p?p.name:null; }
 
   function loadChats() {
     try { return JSON.parse(localStorage.getItem('weaver_chats') || '[]'); }
@@ -2820,7 +2823,7 @@
   function addChatFromMessage(text) {
     const list = loadChats();
     const id = 'c' + Date.now() + Math.random().toString(36).slice(2, 7);
-    list.unshift({ id, title: makeChatTitle(text), ts: Date.now() });
+    list.unshift({ id, title: makeChatTitle(text), ts: Date.now(), projectId: currentProjectId });
     saveChats(list);
     currentChatId = id;
     renderChatsList();
@@ -2832,8 +2835,16 @@
   function renderChatsList() {
     const box = document.querySelector('.chats-list');
     if (!box) return;
-    const list = loadChats();
-    box.innerHTML = list.map(c =>
+    let list = loadChats();
+    let chip = '';
+    if (currentProjectId) {
+      const pn = wvActiveProjectName();
+      if (pn) {
+        list = list.filter(c => String(c.projectId) === String(currentProjectId));
+        chip = `<div class="proj-chip" onclick="wvClearProject()" title="Show all chats">📁 ${pn.replace(/"/g,'&quot;')} <span style="opacity:.7">✕</span></div>`;
+      } else { currentProjectId = null; }
+    }
+    box.innerHTML = chip + list.map(c =>
       `<div class="chat-item${c.id === currentChatId ? ' active' : ''}" onclick="selectChat('${c.id}')" title="${c.title.replace(/"/g,'&quot;')}">
         <span class="chat-dot"></span>
         <span class="chat-text">${c.title}</span>
@@ -2973,6 +2984,9 @@
           bubble.textContent = (data && data.reply)
             ? data.reply
             : (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)');
+          if (data && data.reply && typeof wvAutoSaveArtifacts === 'function') {
+            wvAutoSaveArtifacts(data.reply, currentChatId);
+          }
         }
       } catch (err) {
         bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
@@ -3140,6 +3154,9 @@
   .wv-status{background:var(--bg,#14131a);border:1px solid var(--border,#2c2739);
     border-radius:12px;padding:12px 14px;font-size:.86rem;line-height:1.7}
   .wv-status b{color:#c1a6ff}
+  .proj-chip{display:inline-flex;align-items:center;gap:6px;margin:6px 8px 8px;
+    padding:5px 10px;border-radius:999px;background:rgba(159,136,255,.14);
+    color:#c1a6ff;font-size:.8rem;cursor:pointer;font-weight:600}
 </style>
 
 <div class="wv-overlay" id="keysOverlay">
@@ -3291,29 +3308,77 @@
     var list=wvGet('weaver_projects'); list.unshift({id:Date.now(),name:name,created:new Date().toISOString()});
     wvSet('weaver_projects',list); el.value=''; wvRenderProjects();
   }
-  function wvDelProject(id){ wvSet('weaver_projects', wvGet('weaver_projects').filter(function(p){return p.id!==id;})); wvRenderProjects(); }
+  function wvDelProject(id){
+    wvSet('weaver_projects', wvGet('weaver_projects').filter(function(p){return String(p.id)!==String(id);}));
+    if(String(currentProjectId)===String(id)) wvClearProject();
+    wvRenderProjects();
+  }
+  function wvOpenProject(id){        // make this project active: new chats join it, sidebar filters to it
+    currentProjectId = String(id);
+    try{ localStorage.setItem('weaver_current_project', currentProjectId); }catch(e){}
+    wvClose('projectsOverlay');
+    if(typeof renderChatsList==='function') renderChatsList();
+  }
+  function wvClearProject(){
+    currentProjectId = null;
+    try{ localStorage.removeItem('weaver_current_project'); }catch(e){}
+    if(typeof renderChatsList==='function') renderChatsList();
+    if(document.getElementById('projectsOverlay').classList.contains('show')) wvRenderProjects();
+  }
   function wvRenderProjects(){
     var box=document.getElementById('pList'); var list=wvGet('weaver_projects');
     if(!list.length){ box.innerHTML='<div class="wv-empty">No projects yet. Create one above.</div>'; return; }
+    var chats=[]; try{ chats=JSON.parse(localStorage.getItem('weaver_chats')||'[]'); }catch(e){}
     box.innerHTML=list.map(function(p){
-      return '<div class="wv-card"><div><div class="t">'+wvEsc(p.name)+'</div><div class="s">'+new Date(p.created).toLocaleDateString()+'</div></div>'+
-             '<button class="wv-mini" onclick="wvDelProject('+p.id+')">Delete</button></div>';
+      var count=chats.filter(function(c){return String(c.projectId)===String(p.id);}).length;
+      var active=String(currentProjectId)===String(p.id);
+      return '<div class="wv-card"><div><div class="t">'+wvEsc(p.name)+
+             (active?' <span style="color:#68c79a;font-size:.7rem">(active)</span>':'')+'</div>'+
+             '<div class="s">'+count+' chat'+(count===1?'':'s')+' · '+new Date(p.created).toLocaleDateString()+'</div></div>'+
+             '<div style="display:flex;gap:6px">'+
+             (active?'<button class="wv-btn" onclick="wvClearProject()">Deselect</button>'
+                    :'<button class="wv-btn" onclick="wvOpenProject('+p.id+')">Open</button>')+
+             '<button class="wv-mini" onclick="wvDelProject('+p.id+')">Delete</button></div></div>';
     }).join('');
   }
 
-  // ── Artifacts (saved locally) ──
+  // ── Artifacts (auto-saved from chat replies) ──
+  var wvArtOpen=null;
+  function wvViewArtifact(id){ wvArtOpen=(String(wvArtOpen)===String(id))?null:String(id); wvRenderArtifacts(); }
   function wvRenderArtifacts(){
     var box=document.getElementById('aList'); var list=wvGet('weaver_artifacts');
-    if(!list.length){ box.innerHTML='<div class="wv-empty">No artifacts yet.<br>Artifacts you save from a chat will appear here.</div>'; return; }
+    if(!list.length){ box.innerHTML='<div class="wv-empty">No artifacts yet.<br>Code and documents from your chats are saved here automatically.</div>'; return; }
     box.innerHTML=list.map(function(a){
-      return '<div class="wv-card"><div><div class="t">'+wvEsc(a.title||'Untitled')+'</div><div class="s">'+wvEsc(a.type||'text')+' · '+new Date(a.created).toLocaleDateString()+'</div></div>'+
-             '<button class="wv-mini" onclick="wvDelArtifact('+a.id+')">Delete</button></div>';
+      var open=String(wvArtOpen)===String(a.id);
+      var pre = open ? '<pre style="white-space:pre-wrap;word-break:break-word;background:var(--bg,#14131a);border:1px solid var(--border,#2c2739);border-radius:8px;padding:10px;margin-top:8px;max-height:42vh;overflow:auto;font-size:.8rem">'+wvEsc(a.content)+'</pre>' : '';
+      return '<div class="wv-card" style="flex-direction:column;align-items:stretch">'+
+             '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">'+
+             '<div><div class="t">'+wvEsc(a.title||'Untitled')+'</div>'+
+             '<div class="s">'+wvEsc(a.type||'text')+' · '+new Date(a.created).toLocaleDateString()+'</div></div>'+
+             '<div style="display:flex;gap:6px"><button class="wv-btn" onclick="wvViewArtifact('+a.id+')">'+(open?'Hide':'View')+'</button>'+
+             '<button class="wv-mini" onclick="wvDelArtifact('+a.id+')">Delete</button></div></div>'+pre+'</div>';
     }).join('');
   }
-  function wvDelArtifact(id){ wvSet('weaver_artifacts', wvGet('weaver_artifacts').filter(function(a){return a.id!==id;})); wvRenderArtifacts(); }
-  function wvSaveArtifact(title,type,content){
-    var list=wvGet('weaver_artifacts'); list.unshift({id:Date.now(),title:title,type:type||'text',content:content||'',created:new Date().toISOString()});
+  function wvDelArtifact(id){ wvSet('weaver_artifacts', wvGet('weaver_artifacts').filter(function(a){return String(a.id)!==String(id);})); wvRenderArtifacts(); }
+  function wvSaveArtifact(title,type,content,chatId){
+    var list=wvGet('weaver_artifacts'); list.unshift({id:Date.now(),title:title,type:type||'text',content:content||'',created:new Date().toISOString(),chatId:chatId||null});
     wvSet('weaver_artifacts',list);
+  }
+  // scan an assistant reply for fenced code blocks and save each as an artifact
+  function wvAutoSaveArtifacts(reply, chatId){
+    if(!reply) return;
+    var re=/```([\w+.\-]*)\s*\n([\s\S]*?)```/g, m, saved=wvGet('weaver_artifacts'), added=0;
+    while((m=re.exec(reply))!==null){
+      var lang=(m[1]||'').trim(), body=(m[2]||'').replace(/\s+$/,'');
+      if(body.replace(/\s/g,'').length<12) continue;               // skip tiny snippets
+      if(saved.some(function(a){return a.content===body;})) continue; // dedupe
+      var first=(body.split('\n')[0]||'').trim().slice(0,50);
+      var title=(lang?('['+lang+'] '):'')+(first||'Snippet');
+      saved.unshift({id:Date.now()+added,title:title,type:lang||'code',content:body,
+                     created:new Date().toISOString(),chatId:chatId||null});
+      added++;
+    }
+    if(added) wvSet('weaver_artifacts',saved);
   }
   function wvEsc(s){ return String(s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 </script>
