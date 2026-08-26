@@ -43,6 +43,71 @@ def _mask(key: str) -> str:
     return (key[:4] + "…" + key[-4:]) if len(key) > 8 else "…"
 
 
+def _chat(message: str, history=None, timeout: int = 120) -> dict:
+    """Send a message to the configured provider using the saved key and return
+    the assistant reply. OpenAI-compatible /chat/completions (works for the
+    registry providers, incl. Anthropic's and Google's compatible endpoints)."""
+    import urllib.request
+    import urllib.error
+
+    s = keysync.get_settings()  # reads config/.env fresh (CLI + web share it)
+    key = (s.get("WEAVER_API_KEY") or "").strip()
+    if not key:
+        return {"error": "no_key"}
+    base = (s.get("WEAVER_BASE_URL") or "").rstrip("/")
+    model = s.get("WEAVER_MODEL") or ""
+    if not base:
+        det = getattr(keysync, "detect_provider", lambda _k: None)(key)
+        if det:
+            base = (det[0] or "").rstrip("/")
+            model = model or det[1]
+    if not base:
+        return {"error": "no_provider",
+                "message": "No provider URL is configured. Add your key again."}
+    try:
+        max_tokens = int(s.get("WEAVER_MAX_TOKENS") or 2000)
+    except Exception:
+        max_tokens = 2000
+    try:
+        temperature = float(s.get("WEAVER_TEMPERATURE") or 0.7)
+    except Exception:
+        temperature = 0.7
+
+    msgs = list(history or [])
+    msgs.append({"role": "user", "content": message})
+    payload = json.dumps({"model": model, "messages": msgs,
+                          "max_tokens": max_tokens,
+                          "temperature": temperature}).encode("utf-8")
+    headers = {"Content-Type": "application/json",
+               "Authorization": f"Bearer {key}",
+               "x-api-key": key, "anthropic-version": "2023-06-01"}
+    req = urllib.request.Request(base + "/chat/completions", data=payload,
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8")[:400]
+        except Exception:
+            detail = str(e)
+        return {"error": "http_error", "message": f"{e.code}: {detail}"}
+    except Exception as e:
+        return {"error": "request_failed", "message": str(e)}
+
+    reply = ""
+    try:
+        reply = data["choices"][0]["message"]["content"]
+    except Exception:
+        c = data.get("content")
+        if isinstance(c, list):  # native Anthropic shape, just in case
+            reply = "".join(p.get("text", "") for p in c if isinstance(p, dict))
+        elif isinstance(c, str):
+            reply = c
+    return {"reply": reply, "provider": s.get("WEAVER_PROVIDER", ""),
+            "model": model}
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     # ── helpers ──────────────────────────────────────────────
     def _json(self, obj, code=200):
@@ -125,6 +190,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"ok": True, "saved": list(updates.keys())})
             return
 
+        if path == "/api/chat":
+            msg = (body.get("message") or "").strip()
+            if not msg:
+                self._json({"error": "empty"})
+                return
+            self._json(_chat(msg, body.get("history")))
+            return
+
         if path == "/api/providers/models":
             models, err = providers.list_models_for(
                 body.get("base_url", ""), body.get("key", ""),
@@ -158,8 +231,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
-class _ReuseTCPServer(socketserver.TCPServer):
+class _ReuseTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True  # avoid stale TIME_WAIT "address already in use"
+    daemon_threads = True       # don't block the UI while a chat is generating
 
 
 def serve(port=None):
