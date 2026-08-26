@@ -3113,53 +3113,52 @@
 </script>
 <!-- ══════════ Keys / Projects / Artifacts panels ══════════ -->
 <style>
-  /* full-screen section pages (open like a real page, not a small popup) */
-  .wv-overlay{position:fixed;inset:0;background:#0f0e15;display:none;
-    align-items:stretch;justify-content:center;z-index:1000;padding:0}
-  .wv-overlay.show{display:flex}
-  .wv-modal{background:#161320;color:var(--text,#ece9f5);
-    border:none;border-radius:0;width:100%;
-    max-width:900px;height:100vh;max-height:100vh;overflow:auto}
-  .wv-head{display:flex;align-items:center;gap:12px;
-    padding:16px 18px;border-bottom:1px solid var(--border,#2c2739);position:sticky;top:0;
-    background:#161320;z-index:2}
-  .wv-head h3{margin:0;font-size:1.15rem;font-weight:700;flex:1}
-  .wv-x{background:none;border:1px solid var(--border,#2c2739);color:var(--text,#ece9f5);
-    font-size:20px;cursor:pointer;line-height:1;width:34px;height:34px;border-radius:9px;
+  /* section pages rendered INSIDE the main area (sidebar stays visible),
+     styled with the app's own tokens so they match the main interface */
+  .wv-overlay{position:absolute;inset:0;background:var(--bg);display:none;
+    z-index:60;overflow:auto}
+  .wv-overlay.show{display:block}
+  .wv-modal{background:var(--bg);color:var(--text);width:100%;
+    max-width:860px;margin:0 auto;min-height:100%}
+  .wv-head{display:flex;align-items:center;gap:12px;padding:16px 20px;
+    border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:2}
+  .wv-head h3{margin:0;font-size:1.1rem;font-weight:700;flex:1;color:var(--text)}
+  .wv-x{background:none;border:1px solid var(--border);color:var(--text);
+    font-size:19px;cursor:pointer;line-height:1;width:34px;height:34px;border-radius:9px;
     display:grid;place-items:center;order:-1}
-  .wv-x:hover{background:var(--border,#2c2739);color:#c1a6ff}
-  .wv-body{padding:16px 18px 60px;display:flex;flex-direction:column;gap:14px;
-    max-width:640px;margin:0 auto;width:100%;box-sizing:border-box}
+  .wv-x:hover{background:var(--surface-hover);border-color:var(--accent);color:var(--accent)}
+  .wv-body{padding:18px 20px 64px;display:flex;flex-direction:column;gap:14px;
+    max-width:660px;margin:0 auto;width:100%;box-sizing:border-box}
   .wv-field{display:flex;flex-direction:column;gap:6px}
-  .wv-field label{font-size:.8rem;color:var(--text-muted,#9a95ad);font-weight:600}
+  .wv-field label{font-size:.8rem;color:var(--text-muted);font-weight:600}
   .wv-field input,.wv-field select{width:100%;box-sizing:border-box;padding:10px 12px;
-    border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);
-    color:var(--text,#ece9f5);font:inherit;font-size:.92rem;outline:none}
-  .wv-field input:focus,.wv-field select:focus{border-color:#9f88ff}
-  .wv-btn{padding:10px 14px;border-radius:10px;border:1px solid var(--border,#3a3350);
-    background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit;font-weight:600;
+    border-radius:10px;border:1px solid var(--border);background:var(--surface);
+    color:var(--text);font:inherit;font-size:.92rem;outline:none}
+  .wv-field input:focus,.wv-field select:focus{border-color:var(--accent)}
+  .wv-btn{padding:10px 14px;border-radius:10px;border:1px solid var(--border);
+    background:var(--surface);color:var(--text);font:inherit;font-weight:600;
     cursor:pointer;font-size:.9rem}
-  .wv-btn:hover{border-color:#9f88ff;color:#c1a6ff}
-  .wv-btn.primary{background:linear-gradient(135deg,#7c5cff,#a678ff);border:none;color:#fff}
-  .wv-btn.primary:hover{filter:brightness(1.07)}
+  .wv-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--surface-hover)}
+  .wv-btn.primary{background:var(--accent);border:1px solid var(--accent);color:#fff}
+  .wv-btn.primary:hover{filter:brightness(1.08);color:#fff}
   .wv-row{display:flex;gap:10px;flex-wrap:wrap}
-  .wv-msg{font-size:.85rem;color:var(--text-muted,#9a95ad);min-height:1em}
-  .wv-msg.ok{color:#68c79a}.wv-msg.err{color:#f07d63}
-  .wv-card{border:1px solid var(--border,#2c2739);border-radius:12px;padding:12px 14px;
-    display:flex;align-items:center;justify-content:space-between;gap:10px}
-  .wv-card .t{font-weight:600;font-size:.92rem}
-  .wv-card .s{font-size:.78rem;color:var(--text-muted,#9a95ad)}
-  .wv-empty{text-align:center;color:var(--text-muted,#9a95ad);padding:26px 10px;font-size:.9rem}
+  .wv-msg{font-size:.85rem;color:var(--text-muted);min-height:1em}
+  .wv-msg.ok{color:#4a9e6f}.wv-msg.err{color:#d9694f}
+  .wv-card{border:1px solid var(--border);border-radius:12px;padding:12px 14px;
+    background:var(--surface);display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .wv-card .t{font-weight:600;font-size:.92rem;color:var(--text)}
+  .wv-card .s{font-size:.78rem;color:var(--text-muted)}
+  .wv-empty{text-align:center;color:var(--text-muted);padding:30px 10px;font-size:.9rem}
   .wv-list{display:flex;flex-direction:column;gap:10px}
-  .wv-mini{background:none;border:none;color:var(--text-muted,#9a95ad);cursor:pointer;
+  .wv-mini{background:none;border:none;color:var(--text-muted);cursor:pointer;
     font-size:.8rem;padding:4px 6px;border-radius:6px}
-  .wv-mini:hover{color:#f07d63}
-  .wv-status{background:var(--bg,#14131a);border:1px solid var(--border,#2c2739);
-    border-radius:12px;padding:12px 14px;font-size:.86rem;line-height:1.7}
-  .wv-status b{color:#c1a6ff}
+  .wv-mini:hover{color:#d9694f}
+  .wv-status{background:var(--surface);border:1px solid var(--border);
+    border-radius:12px;padding:12px 14px;font-size:.86rem;line-height:1.7;color:var(--text)}
+  .wv-status b{color:var(--accent)}
   .proj-chip{display:inline-flex;align-items:center;gap:6px;margin:6px 8px 8px;
-    padding:5px 10px;border-radius:999px;background:rgba(159,136,255,.14);
-    color:#c1a6ff;font-size:.8rem;cursor:pointer;font-weight:600}
+    padding:5px 10px;border-radius:999px;background:color-mix(in srgb,var(--accent) 16%,transparent);
+    color:var(--accent);font-size:.8rem;cursor:pointer;font-weight:600}
 </style>
 
 <div class="wv-overlay" id="keysOverlay">
@@ -3232,6 +3231,7 @@
 <script>
   // ── panel open/close + nav wiring ──
   function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
+  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
   function wvOpen(id){ var o=document.getElementById(id); if(o) o.classList.add('show'); }
   document.querySelectorAll('.wv-overlay').forEach(function(o){
     o.addEventListener('click', function(e){ if(e.target===o) o.classList.remove('show'); });
@@ -3280,7 +3280,7 @@
     var open=wvConnOpenId===c.id;
     var cats=(c.categories||[]).slice(0,2).join(', ');
     var auth=(c.auth||[]).join(', ')||'credential';
-    var home=c.homepage? '<a href="'+wvEsc(c.homepage)+'" target="_blank" rel="noopener" style="color:#9f88ff;font-size:.75rem;text-decoration:none">site ↗</a>':'';
+    var home=c.homepage? '<a href="'+wvEsc(c.homepage)+'" target="_blank" rel="noopener" style="color:var(--accent);font-size:.75rem;text-decoration:none">site ↗</a>':'';
     var isOauth=(c.auth||[]).map(function(a){return String(a).toLowerCase();}).indexOf('oauth2')>=0;
     var form='';
     if(open && !c.connected){
@@ -3288,7 +3288,7 @@
       if(isOauth){
         var redir=window.location.origin+'/oauth/callback';
         note='<div class="s" style="line-height:1.6">In your '+wvEsc(c.name)+' OAuth app, add this redirect URI:<br>'+
-             '<code style="color:#c1a6ff;word-break:break-all">'+wvEsc(redir)+'</code></div>';
+             '<code style="color:var(--accent);word-break:break-all">'+wvEsc(redir)+'</code></div>';
       }
       form='<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">'+note+
         wvConnFields(c.auth).map(function(f){
@@ -3302,11 +3302,11 @@
         '</div>';
     }
     var btn = c.connected
-      ? '<button class="wv-mini" style="color:#f07d63" onclick="wvConnDisconnect(\''+c.id+'\')">Disconnect</button>'
+      ? '<button class="wv-mini" style="color:#d9694f" onclick="wvConnDisconnect(\''+c.id+'\')">Disconnect</button>'
       : '<button class="wv-btn" onclick="wvConnToggle(\''+c.id+'\')">'+(open?'Cancel':'Connect')+'</button>';
     return '<div class="wv-card" style="flex-direction:column;align-items:stretch">'+
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">'+
-      '<div><div class="t">'+wvEsc(c.name)+(c.connected?' <span style="color:#68c79a;font-size:.7rem">● connected</span>':'')+'</div>'+
+      '<div><div class="t">'+wvEsc(c.name)+(c.connected?' <span style="color:#4a9e6f;font-size:.7rem">● connected</span>':'')+'</div>'+
       '<div class="s">'+wvEsc(cats||'—')+' · <span style="opacity:.8">'+wvEsc(auth)+'</span> '+home+'</div></div>'+
       '<div style="display:flex;gap:6px;align-items:center">'+btn+'</div></div>'+form+'</div>';
   }
@@ -3455,7 +3455,7 @@
       var count=chats.filter(function(c){return String(c.projectId)===String(p.id);}).length;
       var active=String(currentProjectId)===String(p.id);
       return '<div class="wv-card"><div><div class="t">'+wvEsc(p.name)+
-             (active?' <span style="color:#68c79a;font-size:.7rem">(active)</span>':'')+'</div>'+
+             (active?' <span style="color:#4a9e6f;font-size:.7rem">(active)</span>':'')+'</div>'+
              '<div class="s">'+count+' chat'+(count===1?'':'s')+' · '+new Date(p.created).toLocaleDateString()+'</div></div>'+
              '<div style="display:flex;gap:6px">'+
              (active?'<button class="wv-btn" onclick="wvClearProject()">Deselect</button>'
