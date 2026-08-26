@@ -199,6 +199,10 @@
   .chat-item:hover { background: var(--surface-hover); color: var(--text); }
   .chat-item.active { background: var(--surface); color: var(--text); }
   .chat-item.active .chat-dot { background: var(--accent); border-color: var(--accent); }
+  .chat-item .chat-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .chat-item .chat-del { opacity: 0; color: var(--text-dim); font-size: 12px; padding: 0 4px; flex: none; }
+  .chat-item:hover .chat-del { opacity: 1; }
+  .chat-item .chat-del:hover { color: #d9694f; }
 
   .chat-dot {
     width: 6px;
@@ -2400,7 +2404,7 @@
     const overlay = document.getElementById('csearchOverlay');
     const input = document.getElementById('csearchInput');
     input.value = '';
-    renderChatSearchList('');
+    fetchChats().then(() => renderChatSearchList(''));  // refresh from the server
     overlay.classList.add('show');
     setTimeout(() => input.focus(), 30);
   }
@@ -2809,34 +2813,78 @@
   function wvProjectsRaw(){ try { return JSON.parse(localStorage.getItem('weaver_projects')||'[]'); } catch(e){ return []; } }
   function wvActiveProjectName(){ var p=wvProjectsRaw().find(function(x){return String(x.id)===String(currentProjectId);}); return p?p.name:null; }
 
-  function loadChats() {
-    try { return JSON.parse(localStorage.getItem('weaver_chats') || '[]'); }
-    catch (e) { return []; }
-  }
-  function saveChats(list) {
-    try { localStorage.setItem('weaver_chats', JSON.stringify(list)); } catch (e) {}
-  }
+  // Chats + messages are stored on the SERVER (config/chats), so nothing is
+  // lost when the browser cache is cleared, the terminal is closed, or the
+  // device restarts — only what you delete is removed.
+  var currentMessages = [];   // [{role:'user'|'assistant', content}] (var: no TDZ)
+  var chatsCache = [];
+  function loadChats() { return chatsCache || []; }   // compatibility for chat search
+
   function makeChatTitle(text) {
-    const t = text.trim().replace(/\s+/g, ' ');
+    const t = (text || '').trim().replace(/\s+/g, ' ');
     return t.length > 42 ? t.slice(0, 42).trim() + '…' : t;
   }
+  function newChatId() { return 'c' + Date.now() + Math.random().toString(36).slice(2, 7); }
+
+  async function fetchChats() {
+    try { const d = await (await fetch('/api/chats')).json(); chatsCache = d.chats || []; }
+    catch (e) { chatsCache = []; }
+    return chatsCache;
+  }
   function addChatFromMessage(text) {
-    const list = loadChats();
-    const id = 'c' + Date.now() + Math.random().toString(36).slice(2, 7);
-    list.unshift({ id, title: makeChatTitle(text), ts: Date.now(), projectId: currentProjectId });
-    saveChats(list);
-    currentChatId = id;
+    currentChatId = newChatId();
+    currentMessages = [];
+    chatsCache.unshift({ id: currentChatId, title: makeChatTitle(text), ts: Date.now(), projectId: currentProjectId, count: 0 });
     renderChatsList();
   }
-  function selectChat(id) {
+  async function saveCurrentChat() {
+    if (!currentChatId) return;
+    const c = chatsCache.find(x => x.id === currentChatId);
+    const title = (c && c.title) || (currentMessages[0] ? makeChatTitle(currentMessages[0].content) : 'New chat');
+    try {
+      await fetch('/api/chats/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: currentChatId, title: title, projectId: currentProjectId, messages: currentMessages }) });
+    } catch (e) {}
+  }
+  async function selectChat(id) {
+    let d;
+    try { d = await (await fetch('/api/chats/one?id=' + encodeURIComponent(id))).json(); } catch (e) { return; }
+    if (!d || d.error) return;
     currentChatId = id;
+    currentMessages = (d.messages || []).slice();
+    const main = document.getElementById('mainContent'); if (main) main.classList.add('chat-mode');
+    const box = document.getElementById('messages');
+    if (box) {
+      box.innerHTML = '';
+      currentMessages.forEach(m => box.appendChild(m.role === 'user' ? makeUserMsg(m.content) : makeAiMsg(m.content)));
+      box.scrollTop = box.scrollHeight;
+    }
+    const titleEl = document.getElementById('chatTitleText'); if (titleEl && d.title) titleEl.textContent = d.title;
     renderChatsList();
   }
+  async function deleteChat(id) {
+    try { await fetch('/api/chats/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: id }) }); } catch (e) {}
+    chatsCache = chatsCache.filter(c => c.id !== id);
+    if (currentChatId === id) { currentChatId = null; currentMessages = []; newChat(); }
+    refreshChats();
+  }
+  function makeUserMsg(text) {
+    const d = document.createElement('div'); d.className = 'msg user';
+    d.innerHTML = '<div class="bubble"></div>'; d.querySelector('.bubble').textContent = text; return d;
+  }
+  function makeAiMsg(text) {
+    const d = document.createElement('div'); d.className = 'msg ai';
+    d.innerHTML = '<div class="msg-wrapper"><div class="bubble"></div></div>';
+    d.querySelector('.bubble').textContent = text; return d;
+  }
+  // renderChatsList renders straight from chatsCache (no fetch) so an
+  // optimistic new chat isn't wiped before it's saved. refreshChats() pulls
+  // the authoritative list from the server, then renders.
+  async function refreshChats() { await fetchChats(); renderChatsList(); }
   function renderChatsList() {
     const box = document.querySelector('.chats-list');
     if (!box) return;
-    let list = loadChats();
-    let chip = '';
+    let list = chatsCache; let chip = '';
     if (currentProjectId) {
       const pn = wvActiveProjectName();
       if (pn) {
@@ -2845,13 +2893,16 @@
       } else { currentProjectId = null; }
     }
     box.innerHTML = chip + list.map(c =>
-      `<div class="chat-item${c.id === currentChatId ? ' active' : ''}" onclick="selectChat('${c.id}')" title="${c.title.replace(/"/g,'&quot;')}">
+      `<div class="chat-item${c.id === currentChatId ? ' active' : ''}" data-id="${c.id}" title="${(c.title||'').replace(/"/g,'&quot;')}">
         <span class="chat-dot"></span>
-        <span class="chat-text">${c.title}</span>
+        <span class="chat-text">${(c.title || 'Chat')}</span>
+        <span class="chat-del" title="Delete chat" onclick="event.stopPropagation();deleteChat('${c.id}')">✕</span>
       </div>`
     ).join('');
+    box.querySelectorAll('.chat-item').forEach(el =>
+      el.addEventListener('click', () => selectChat(el.getAttribute('data-id'))));
   }
-  renderChatsList();
+  refreshChats();
 
   // ── Send message ───────────────────────────────
   // ── Start a new chat ───────────────────────────
@@ -2863,6 +2914,7 @@
     const input = document.getElementById('mainInput');
     if (input) { input.value = ''; autoResize(input); input.focus(); }
     currentChatId = null;
+    currentMessages = [];
     renderChatsList();
     const titleEl = document.getElementById('chatTitleText');
     if (titleEl) titleEl.textContent = 'New chat';
@@ -2892,6 +2944,9 @@
       const titleEl = document.getElementById('chatTitleText');
       if (titleEl) titleEl.textContent = text.length > 40 ? text.slice(0, 40) + '…' : text;
     }
+    currentMessages.push({ role: 'user', content: text });
+    // Persist immediately so the chat survives even before the reply arrives
+    saveCurrentChat();
 
     // Clear input
     input.value = '';
@@ -2991,6 +3046,9 @@
       } catch (err) {
         bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
       }
+      // persist the assistant reply to the server so the chat survives restarts
+      currentMessages.push({ role: 'assistant', content: bubble.textContent || '' });
+      saveCurrentChat();
       messages.scrollTop = messages.scrollHeight;
     })();
   }

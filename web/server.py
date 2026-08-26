@@ -260,6 +260,64 @@ def _oauth_exchange(pend, code):
     return tok, None
 
 
+# ── persistent chat history (survives browser/terminal/device restarts) ──
+_CHATS_DIR = os.path.join(_ROOT, "config", "chats")
+_ID_RE = re.compile(r'^[A-Za-z0-9_.\-]+$')
+
+
+def _chats_index():
+    items = []
+    try:
+        names = os.listdir(_CHATS_DIR)
+    except OSError:
+        names = []
+    for fn in names:
+        if not fn.endswith(".json"):
+            continue
+        try:
+            d = json.load(open(os.path.join(_CHATS_DIR, fn), encoding="utf-8"))
+            items.append({"id": d.get("id"), "title": d.get("title", ""),
+                          "ts": d.get("ts", 0), "projectId": d.get("projectId"),
+                          "count": len(d.get("messages", []))})
+        except Exception:
+            pass
+    items.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    return items
+
+
+def _chat_read(cid):
+    if not (cid and _ID_RE.match(cid)):
+        return None
+    try:
+        return json.load(open(os.path.join(_CHATS_DIR, cid + ".json"),
+                              encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _chat_write(d):
+    cid = d.get("id")
+    if not (cid and _ID_RE.match(cid)):
+        return False
+    try:
+        os.makedirs(_CHATS_DIR, exist_ok=True)
+        with open(os.path.join(_CHATS_DIR, cid + ".json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def _chat_remove(cid):
+    if not (cid and _ID_RE.match(cid)):
+        return
+    try:
+        os.remove(os.path.join(_CHATS_DIR, cid + ".json"))
+    except OSError:
+        pass
+
+
 def _connectors_state():
     try:
         return json.loads(open(_CONN_STATE, encoding="utf-8").read())
@@ -436,6 +494,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "provider": s.get("WEAVER_PROVIDER", ""),
                         "model": s.get("WEAVER_MODEL", "")})
             return
+        if path == "/api/chats":
+            self._json({"chats": _chats_index()})
+            return
+        if path == "/api/chats/one":
+            cid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
+            d = _chat_read(cid)
+            self._json(d if d else {"error": "not_found"})
+            return
         if path == "/api/providers":
             reg = []
             try:
@@ -540,6 +606,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                     (body.get("client_id") or "").strip(),
                                     (body.get("client_secret") or "").strip(),
                                     host))
+            return
+
+        if path == "/api/chats/save":
+            cid = (body.get("id") or "").strip()
+            if not cid:
+                self._json({"error": "missing_id"})
+                return
+            rec = {"id": cid, "title": body.get("title", ""),
+                   "ts": body.get("ts") or int(time.time() * 1000),
+                   "projectId": body.get("projectId"),
+                   "messages": body.get("messages", [])}
+            self._json({"ok": _chat_write(rec), "id": cid})
+            return
+        if path == "/api/chats/delete":
+            _chat_remove((body.get("id") or "").strip())
+            self._json({"ok": True})
             return
 
         if path == "/api/chat":
