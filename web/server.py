@@ -59,9 +59,10 @@ def _build_token() -> str:
 # injected into index.html so the page auto-reloads after an update
 _RELOAD_JS = (
     "<script>(function(){window.__WEAVER_BUILD__=%r;"
-    "async function c(){try{var r=await fetch('/api/version',{cache:'no-store'});"
+    "async function c(){if(document.hidden)return;"  # skip while tab is backgrounded (saves battery)
+    "try{var r=await fetch('/api/version',{cache:'no-store'});"
     "var d=await r.json();if(d&&d.build&&d.build!==window.__WEAVER_BUILD__){"
-    "location.reload(true);}}catch(e){}}"
+    "location.reload();}}catch(e){}}"
     "setInterval(c,5000);})();</script>"
 )
 
