@@ -117,15 +117,44 @@ def _clear():
 
 _TTY = None
 def _tty():
-    """Controlling-terminal fd (int), or False if unavailable. Reading the tty
-    directly lets prompts work even when stdin is a pipe (`curl | bash`)."""
+    """Controlling-terminal fd (int), or False if unavailable. Prefers stdin
+    when it's already a terminal (direct run), otherwise opens /dev/tty — so
+    prompts work both directly and under `curl | bash` (stdin is a pipe)."""
     global _TTY
     if _TTY is None:
+        _TTY = False
         try:
-            _TTY = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+            if os.isatty(0):
+                _TTY = 0
         except Exception:
-            _TTY = False
+            pass
+        if _TTY is False:
+            try:
+                _TTY = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+            except Exception:
+                _TTY = False
     return _TTY
+
+
+def cmd_diag(args):
+    """Print why the interactive menu is or isn't available (for support)."""
+    import platform
+    print("Weaver Write — interactive diagnostics")
+    print(f"  platform     : {platform.system()} / {platform.machine()}")
+    print(f"  python       : {sys.version.split()[0]}")
+    print(f"  stdout.isatty: {sys.stdout.isatty()}")
+    print(f"  stdin.isatty : {os.isatty(0) if hasattr(os,'isatty') else '?'}")
+    print(f"  TERM         : {os.environ.get('TERM')!r}")
+    print(f"  supports_color: {_supports_color()}")
+    tty = _tty()
+    print(f"  tty fd       : {tty!r}")
+    try:
+        import termios, tty as _t  # noqa: F401
+        print("  termios/tty  : available")
+    except Exception as e:
+        print(f"  termios/tty  : MISSING ({e})")
+    print(f"  interactive  : {_interactive()}  "
+          f"({'arrow-key menu' if _interactive() else 'numbered fallback'})")
 
 
 def _interactive():
@@ -590,6 +619,7 @@ def build_parser():
 
     sub.add_parser("restore", help="restore state after shutdown")
     sub.add_parser("doctor", help="diagnose and fix problems")
+    sub.add_parser("diag", help="show interactive-menu diagnostics")
     sub.add_parser("version", help="show version")
     return p
 
@@ -616,6 +646,8 @@ def main(argv=None):
         cmd_serve(args)
     elif cmd == "restore":
         cmd_restore(args)
+    elif cmd == "diag":
+        cmd_diag(args)
     elif cmd == "doctor":
         cmd_doctor(args)
     elif cmd == "version":
