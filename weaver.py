@@ -117,46 +117,60 @@ def _clear():
 
 _TTY = None
 def _tty():
-    """Controlling terminal handle (or False if none)."""
+    """Controlling-terminal fd (int), or False if unavailable. Reading the tty
+    directly lets prompts work even when stdin is a pipe (`curl | bash`)."""
     global _TTY
     if _TTY is None:
         try:
-            _TTY = open("/dev/tty", "r+")
+            _TTY = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
         except Exception:
             _TTY = False
     return _TTY
 
 
-def _read_key(f):
-    """Read one keypress from tty f in raw mode.
-    Returns 'up'/'down'/'right'/'back'/'enter'/'esc' or the literal char."""
+def _interactive():
+    """True when an arrow-key menu can be driven on this terminal."""
+    if not _supports_color() or _tty() is False:
+        return False
+    try:
+        import termios  # noqa: F401
+        import tty  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _read_key(fd):
+    """Read one keypress from tty fd in cbreak mode. Returns
+    'up'/'down'/'right'/'back'/'enter'/'esc' or the literal character.
+    Uses raw os.read on the fd — robust on Termux/Android."""
     import termios, tty as _ttymod
-    fd = f.fileno()
     old = termios.tcgetattr(fd)
     try:
-        _ttymod.setraw(fd)
-        ch = f.read(1)
-        if ch == "\x1b":
-            seq = f.read(2)
-            return {"[A": "up", "[B": "down", "[C": "right",
-                    "[D": "back"}.get(seq, "esc")
-        if ch in ("\r", "\n"):
+        _ttymod.setcbreak(fd)
+        b = os.read(fd, 1)
+        if b == b"\x1b":
+            rest = os.read(fd, 2)
+            return {b"[A": "up", b"[B": "down", b"[C": "right",
+                    b"[D": "back"}.get(rest, "esc")
+        if b in (b"\r", b"\n"):
             return "enter"
-        if ch in ("\x7f", "\b"):
+        if b in (b"\x7f", b"\x08"):
             return "back"
-        if ch in ("\x03", "\x04"):
+        if b in (b"\x03", b"\x04"):
             raise KeyboardInterrupt
-        return ch
+        return b.decode("utf-8", "ignore")
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
 def _menu(title, options, allow_back=False, hint=None):
     """Arrow-key menu: earthy-orange title, caret on the highlighted option,
-    previous questions cleared away. Returns the chosen index, or 'BACK'."""
-    f = _tty()
-    if not f or not _supports_color():
+    the WEAVER banner and a cleared screen on every question. Returns the
+    chosen index, or 'BACK'."""
+    if not _interactive():
         return _menu_numeric(title, options, allow_back, hint)
+    fd = _tty()
     sel = 0
     while True:
         banner()
@@ -172,8 +186,9 @@ def _menu(title, options, allow_back=False, hint=None):
         print(f"\n{DIM}{nav}{RESET}")
         if hint:
             print(f"{DIM}{hint}{RESET}")
+        sys.stdout.flush()
         try:
-            k = _read_key(f)
+            k = _read_key(fd)
         except KeyboardInterrupt:
             print()
             sys.exit(0)
@@ -192,14 +207,19 @@ def _menu(title, options, allow_back=False, hint=None):
 
 
 def _menu_numeric(title, options, allow_back=False, hint=None):
-    """Fallback for non-interactive / no-tty environments."""
-    print(f"\n{title}")
+    """Fallback when arrow keys aren't available — still shows the banner and
+    the earthy-orange title so the look is consistent."""
+    banner()
+    if _supports_color():
+        print(f"{QUESTION}{BOLD}{title}{RESET}\n")
+    else:
+        print(f"\n{title}")
     for i, opt in enumerate(options, 1):
         print(f"  {i}) {opt}")
     if allow_back:
         print("  b) ← back")
     if hint:
-        print(f"  {hint}")
+        print(f"{DIM}{hint}{RESET}" if _supports_color() else f"  {hint}")
     while True:
         c = _prompt_line("Choose")
         if c is None:
@@ -216,18 +236,19 @@ def _prompt_line(prompt, default=None):
     suffix = f" [{default}]" if default else ""
     msg = (f"{QUESTION}{prompt}{RESET}{suffix}: " if _supports_color()
            else f"{prompt}{suffix}: ")
-    f = _tty()
-    if f:
+    fd = _tty()
+    if fd is not False:
         try:
-            f.write(msg)
-            f.flush()
-            line = f.readline()
-            if line == "":
+            os.write(fd, msg.encode("utf-8", "replace"))
+            data = os.read(fd, 4096)
+            if data == b"":
                 raise EOFError
-            return line.strip() or default
+            return data.decode("utf-8", "replace").strip() or default
         except (EOFError, KeyboardInterrupt):
             print()
             return default
+        except Exception:
+            pass
     try:
         return input(msg).strip() or default
     except (EOFError, KeyboardInterrupt):
