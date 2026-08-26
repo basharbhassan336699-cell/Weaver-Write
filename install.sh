@@ -48,7 +48,9 @@ cd "$INSTALL_DIR"
 # 4. python deps
 echo "Installing Python libraries..."
 if [ "$PLATFORM" = "termux" ]; then
-    pip install --upgrade pip
+    # NOTE: on Termux, `pip install --upgrade pip` is forbidden — it breaks the
+    # python-pip package. Ensure pip via pkg, then install requirements directly.
+    pkg install -y python-pip 2>/dev/null || true
     pip install -r requirements.txt
 else
     python3 -m pip install --upgrade pip --break-system-packages 2>/dev/null || python3 -m pip install --upgrade pip
