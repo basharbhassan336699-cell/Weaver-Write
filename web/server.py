@@ -158,10 +158,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+class _ReuseTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True  # avoid stale TIME_WAIT "address already in use"
+
+
 def serve(port=None):
     port = port or PORT
     keysync.load_env()  # load synced settings first
-    with socketserver.TCPServer(("127.0.0.1", port), Handler) as httpd:
+    with _ReuseTCPServer(("127.0.0.1", port), Handler) as httpd:
         print(f"Weaver Write web UI running at http://127.0.0.1:{port}")
         print("Press Ctrl+C to stop.")
         try:

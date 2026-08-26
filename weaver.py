@@ -531,25 +531,35 @@ def cmd_serve(args):
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
+    import errno
     try:
-        from web.server import serve
-        serve(port)
-    except ImportError:
-        # fallback: static file server if web.server isn't importable
-        webdir = os.path.join(here, "web")
-        if os.path.isdir(webdir):
+        try:
+            from web.server import serve
+            serve(port)
+        except ImportError:
+            # fallback: static file server if web.server isn't importable
+            webdir = os.path.join(here, "web")
+            if not os.path.isdir(webdir):
+                print(f"No web/ directory found at {webdir}")
+                return
             import http.server, socketserver, functools
             handler = functools.partial(http.server.SimpleHTTPRequestHandler,
                                         directory=webdir)
-            with socketserver.TCPServer(("127.0.0.1", port), handler) as httpd:
+            class _Reuse(socketserver.TCPServer):
+                allow_reuse_address = True
+            with _Reuse(("127.0.0.1", port), handler) as httpd:
                 print(f"Weaver Write web UI at http://127.0.0.1:{port}")
                 print("Press Ctrl+C to stop.")
-                try:
-                    httpd.serve_forever()
-                except KeyboardInterrupt:
-                    print("\nStopped.")
+                httpd.serve_forever()
+    except OSError as e:
+        if e.errno in (errno.EADDRINUSE, 98):
+            print(f"\nWeaver Write is already running at http://127.0.0.1:{port}")
+            print("Open that address in your browser.")
+            print(f"To stop it:  pkill -f weaver.py   (then run: weaver serve)")
         else:
-            print(f"No web/ directory found at {webdir}")
+            print(f"Could not start the web server: {e}")
+    except KeyboardInterrupt:
+        print("\nStopped.")
 
 def cmd_restore(args):
     """Restore running state after a device shutdown."""
