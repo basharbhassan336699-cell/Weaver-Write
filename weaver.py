@@ -35,6 +35,8 @@ WEB_PORT = 8848
 WEB_URL = f"http://127.0.0.1:{WEB_PORT}"
 
 ORANGE = "\033[38;5;208m"
+QUESTION = "\033[38;5;173m"   # earthy terracotta orange for question titles
+CARET = "\033[38;5;215m"      # highlighted (selected) option
 DIM = "\033[2m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
@@ -54,7 +56,9 @@ def _supports_color():
     return sys.stdout.isatty() and os.environ.get("TERM") != "dumb"
 
 
-def banner():
+def banner(clear=True):
+    if clear:
+        _clear()
     o, r = (ORANGE, RESET) if _supports_color() else ("", "")
     print(_BANNER.format(o=o, r=r))
     b = BOLD if _supports_color() else ""
@@ -98,89 +102,283 @@ def save_keys(keys):
         pass
 
 
-def _ask(prompt, default=None):
-    suffix = f" [{default}]" if default else ""
+# ── interactive core ─────────────────────────────────────────
+# Works even under `curl | bash` (stdin is the pipe): reads the controlling
+# terminal /dev/tty directly, so questions are answerable and the key can be
+# typed. One question at a time on a cleared screen, with back navigation.
+def _clear():
+    if _supports_color():
+        try:
+            sys.stdout.write("\033[2J\033[3J\033[H")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
+_TTY = None
+def _tty():
+    """Controlling terminal handle (or False if none)."""
+    global _TTY
+    if _TTY is None:
+        try:
+            _TTY = open("/dev/tty", "r+")
+        except Exception:
+            _TTY = False
+    return _TTY
+
+
+def _read_key(f):
+    """Read one keypress from tty f in raw mode.
+    Returns 'up'/'down'/'right'/'back'/'enter'/'esc' or the literal char."""
+    import termios, tty as _ttymod
+    fd = f.fileno()
+    old = termios.tcgetattr(fd)
     try:
-        val = input(f"{prompt}{suffix}: ").strip()
+        _ttymod.setraw(fd)
+        ch = f.read(1)
+        if ch == "\x1b":
+            seq = f.read(2)
+            return {"[A": "up", "[B": "down", "[C": "right",
+                    "[D": "back"}.get(seq, "esc")
+        if ch in ("\r", "\n"):
+            return "enter"
+        if ch in ("\x7f", "\b"):
+            return "back"
+        if ch in ("\x03", "\x04"):
+            raise KeyboardInterrupt
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _menu(title, options, allow_back=False, hint=None):
+    """Arrow-key menu: earthy-orange title, caret on the highlighted option,
+    previous questions cleared away. Returns the chosen index, or 'BACK'."""
+    f = _tty()
+    if not f or not _supports_color():
+        return _menu_numeric(title, options, allow_back, hint)
+    sel = 0
+    while True:
+        banner()
+        print(f"{QUESTION}{BOLD}{title}{RESET}\n")
+        for i, opt in enumerate(options):
+            if i == sel:
+                print(f"  {CARET}▸ {opt}{RESET}")
+            else:
+                print(f"    {DIM}{opt}{RESET}")
+        nav = "↑/↓ move · Enter select"
+        if allow_back:
+            nav += " · ← back"
+        print(f"\n{DIM}{nav}{RESET}")
+        if hint:
+            print(f"{DIM}{hint}{RESET}")
+        try:
+            k = _read_key(f)
+        except KeyboardInterrupt:
+            print()
+            sys.exit(0)
+        except Exception:
+            return _menu_numeric(title, options, allow_back, hint)
+        if k == "up":
+            sel = (sel - 1) % len(options)
+        elif k == "down":
+            sel = (sel + 1) % len(options)
+        elif k == "enter":
+            return sel
+        elif k == "back" and allow_back:
+            return "BACK"
+        elif k and k.isdigit() and 1 <= int(k) <= len(options):
+            return int(k) - 1
+
+
+def _menu_numeric(title, options, allow_back=False, hint=None):
+    """Fallback for non-interactive / no-tty environments."""
+    print(f"\n{title}")
+    for i, opt in enumerate(options, 1):
+        print(f"  {i}) {opt}")
+    if allow_back:
+        print("  b) ← back")
+    if hint:
+        print(f"  {hint}")
+    while True:
+        c = _prompt_line("Choose")
+        if c is None:
+            return 0
+        c = c.strip().lower()
+        if allow_back and c in ("b", "back"):
+            return "BACK"
+        if c.isdigit() and 1 <= int(c) <= len(options):
+            return int(c) - 1
+
+
+def _prompt_line(prompt, default=None):
+    """Read a line from the controlling terminal (falls back to stdin)."""
+    suffix = f" [{default}]" if default else ""
+    msg = (f"{QUESTION}{prompt}{RESET}{suffix}: " if _supports_color()
+           else f"{prompt}{suffix}: ")
+    f = _tty()
+    if f:
+        try:
+            f.write(msg)
+            f.flush()
+            line = f.readline()
+            if line == "":
+                raise EOFError
+            return line.strip() or default
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return default
+    try:
+        return input(msg).strip() or default
     except (EOFError, KeyboardInterrupt):
         print()
         return default
-    return val or default
+
+
+def _ask(prompt, default=None):
+    return _prompt_line(prompt, default)
 
 
 def _choose(prompt, options):
-    print(prompt)
-    for i, opt in enumerate(options, 1):
-        print(f"  {i}) {opt}")
-    while True:
-        c = _ask("Choose")
-        if c and c.isdigit() and 1 <= int(c) <= len(options):
-            return int(c) - 1
-        if c is None:
-            return 0
+    r = _menu(prompt, options)
+    return 0 if r == "BACK" else r
 
 
 # ── commands ─────────────────────────────────────────────────
 def cmd_install(args):
-    banner()
-    # 1) quick install or restore
-    choice = _choose("Quick install, or restore a previous account?",
-                     ["Quick install (fresh)",
-                      "Restore a previous account"])
+    _clear()
     cfg = load_config()
-    if choice == 1:
-        token = _ask("Paste your restore token / account ID")
-        cfg["account"] = token or "restored"
+    st = {}
+    step = "type"
+    # step machine so ← back can revisit an earlier question
+    while True:
+        if step == "type":
+            st["type"] = _menu("Quick install, or restore a previous account?",
+                               ["Quick install (fresh)",
+                                "Restore a previous account"])
+            step = "restore" if st["type"] == 1 else "key_yesno"
+        elif step == "restore":
+            st["token"] = _prompt_line("Paste your restore token / account ID")
+            step = "key_yesno"
+        elif step == "key_yesno":
+            r = _menu("Set up your AI API key now?",
+                      ["Yes, add my key", "Skip for now"], allow_back=True)
+            if r == "BACK":
+                step = "type"
+                continue
+            step = "provider" if r == 0 else "finish"
+        elif step == "provider":
+            r = _select_provider_and_key(allow_back=True)
+            if r == "BACK":
+                step = "key_yesno"
+                continue
+            step = "finish"
+        elif step == "finish":
+            break
+
+    if st.get("type") == 1:
+        cfg["account"] = st.get("token") or "restored"
         cfg["restored"] = True
-        print("Restoring your previous account and settings...")
     else:
         cfg["account"] = "local"
         cfg["restored"] = False
-        print("Setting up a fresh Weaver Write install...")
     save_config(cfg)
 
-    # 2) API keys
-    setup_keys = _choose("Set up your API key now?",
-                         ["Yes, add my key", "Skip for now"])
-    if setup_keys == 0:
-        _do_add_key()
+    # final screen
+    banner()
+    b, r = (BOLD, RESET) if _supports_color() else ("", "")
+    print(f"{b}Setup complete.{r}\n")
+    print(f"Your Weaver Write web interface:\n    {ORANGE}{WEB_URL}{r}\n")
+    print(f"{DIM}Note: the link only opens while the server is running.{r}")
+    go = _menu("Open the web interface now?",
+               ["Start it now", "Later (run:  weaver serve)"])
+    if go == 0 and _tty():
+        print(f"\nStarting… open {WEB_URL} in your browser. Press Ctrl+C to stop.\n")
+        cmd_serve(args)
+    else:
+        print("\nStart it any time with:  weaver serve")
 
-    # 3) show the web UI URL (unique to Weaver Write)
-    print("\n" + "-" * 48)
-    print(f"{BOLD if _supports_color() else ''}Setup complete.{RESET if _supports_color() else ''}")
-    print(f"Your Weaver Write web interface:\n    {WEB_URL}")
-    print("Start it any time with:  weaver serve")
-    print("-" * 48)
+
+# friendly labels for the built-in provider registry
+_PROVIDER_LABELS = {
+    "anthropic": "Anthropic (Claude)", "openai": "OpenAI (GPT)",
+    "deepseek": "DeepSeek", "google": "Google Gemini",
+    "groq": "Groq (fast, free tier)", "openrouter": "OpenRouter (many models)",
+    "mistral": "Mistral", "xai": "xAI (Grok)", "perplexity": "Perplexity",
+    "together": "Together AI", "fireworks": "Fireworks AI",
+    "cerebras": "Cerebras", "nvidia": "NVIDIA NIM", "ollama": "Ollama (local)",
+}
 
 
 def _do_add_key():
-    keys = load_keys()
-    provider = _choose("Which provider is your AI key for?",
-                       ["Anthropic (Claude)", "OpenAI", "DeepSeek",
-                        "Other / custom (enter platform URL)"])
-    names = ["anthropic", "openai", "deepseek", "custom"]
-    if provider == 3:
-        return _do_add_custom_provider()
-    key = _ask(f"Paste your {names[provider]} API key")
-    if key:
-        keys[names[provider]] = key
-        keys["active"] = names[provider]
-        save_keys(keys)
-        # ALSO write to config/.env so the WEB UI sees the same key (sync)
-        try:
-            import sys as _sys, os as _os
-            _here = _os.path.dirname(_os.path.abspath(__file__))
-            if _here not in _sys.path:
-                _sys.path.insert(0, _here)
-            from config.keysync import set_api_key
-            applied = set_api_key(key, provider=names[provider])
-            prov = applied.get("WEAVER_PROVIDER", names[provider])
-            print(f"Saved. Weaver Write will run on your {prov} key "
-                  f"(synced to the web UI).")
-        except Exception:
-            print(f"Saved. Weaver Write will run on your {names[provider]} key.")
-    else:
+    _select_provider_and_key()
+
+
+def _select_provider_and_key(allow_back=False):
+    """List every provider in the registry (plus a custom option), take the
+    key, auto-detect the model, and save it (synced to the web UI).
+    Returns True on success, False on cancel, or 'BACK'."""
+    import sys as _sys, os as _os
+    _here = _os.path.dirname(_os.path.abspath(__file__))
+    if _here not in _sys.path:
+        _sys.path.insert(0, _here)
+    try:
+        from config import providers as _P
+        registry = _P.load_registry()
+    except Exception:
+        registry = [{"name": n} for n in ("anthropic", "openai", "deepseek")]
+
+    names = [p["name"] for p in registry]
+    labels = [_PROVIDER_LABELS.get(n, n) for n in names]
+    labels.append("Other / custom (enter platform URL)")
+    idx = _menu("Which provider is your AI key for?", labels, allow_back=allow_back,
+                hint="Any OpenAI-compatible platform works — pick “Other / custom” "
+                     "for anything not listed.")
+    if idx == "BACK":
+        return "BACK"
+    if idx == len(labels) - 1:
+        return bool(_do_add_custom_provider())
+    return _connect_named_provider(names[idx],
+                                   registry[idx].get("base_url", ""))
+
+
+def _connect_named_provider(name, base_url):
+    key = _prompt_line(f"Paste your {name} API key")
+    if not key:
         print("No key entered — you can add one later with:  weaver keys add")
+        return False
+    model = ""
+    try:
+        from config import providers as _P
+        res = _P.connect_custom_provider(base_url, key, name=name)
+        models = res.get("models") or []
+        if models:
+            shown = models[:30]
+            mi = _menu(f"Choose the model for {name}:", shown, allow_back=True)
+            model = res.get("model", shown[0]) if mi == "BACK" else shown[mi]
+        else:
+            model = res.get("model", "")
+    except Exception:
+        model = ""
+    try:
+        from config.keysync import set_api_key
+        applied = set_api_key(key, provider=name, base_url=base_url, model=model)
+        prov = applied.get("WEAVER_PROVIDER", name)
+        mdl = applied.get("WEAVER_MODEL") or "(auto)"
+        _remember_key(name, key)
+        print(f"Saved. Weaver Write will run on your {prov} key "
+              f"(model: {mdl}, synced to the web UI).")
+    except Exception:
+        _remember_key(name, key)
+        print(f"Saved your {name} key.")
+    return True
+
+
+def _remember_key(name, key):
+    keys = load_keys()
+    keys[name] = key
+    keys["active"] = name
+    save_keys(keys)
 
 
 def _do_add_custom_provider():
@@ -195,11 +393,11 @@ def _do_add_custom_provider():
     base_url = _ask("Platform API base URL (e.g. https://api.example.com/v1)")
     if not base_url:
         print("No URL entered — cancelled.")
-        return
+        return False
     key = _ask("Paste the API key for this platform")
     if not key:
         print("No key entered — cancelled.")
-        return
+        return False
 
     print("Detecting available models from the platform...")
     try:
@@ -207,14 +405,14 @@ def _do_add_custom_provider():
         res = providers.connect_custom_provider(base_url, key, name=name)
     except Exception as e:
         print(f"Could not connect: {e}")
-        return
+        return False
 
     if res.get("error") or not res.get("models"):
         print(f"Couldn't list models ({res.get('error', 'unknown')}).")
         model = _ask("Enter the model name to use manually (optional)")
         res["model"] = model or ""
         if not model:
-            return
+            return False
     else:
         models = res["models"]
         print(f"Found {len(models)} models.")
@@ -232,8 +430,10 @@ def _do_add_custom_provider():
         save_keys(keys)
         print(f"Connected '{res['name']}' with model '{res['model']}' "
               f"(synced to the web UI).")
+        return True
     except Exception as e:
         print(f"Saved detection, but sync failed: {e}")
+        return False
 
 
 def cmd_keys(args):
@@ -274,7 +474,7 @@ def cmd_keys(args):
 
 def cmd_serve(args):
     """Start the local web UI (serves web/index.html + API, synced with .env)."""
-    port = args.port or WEB_PORT
+    port = getattr(args, "port", None) or WEB_PORT
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
         sys.path.insert(0, here)
