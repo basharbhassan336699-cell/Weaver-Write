@@ -38,12 +38,18 @@ ensure_pkg git git
 # 3. clone or update
 if [ -d "$INSTALL_DIR/.git" ]; then
     echo "Updating existing install..."
-    git -C "$INSTALL_DIR" pull --ff-only
+    # ignore file-mode (chmod +x) differences so updates never conflict, and
+    # hard-reset to the remote so a local mode/edit can't abort the update
+    git -C "$INSTALL_DIR" config core.fileMode false 2>/dev/null || true
+    git -C "$INSTALL_DIR" fetch origin main --quiet 2>/dev/null || git -C "$INSTALL_DIR" fetch origin --quiet
+    git -C "$INSTALL_DIR" reset --hard origin/main 2>/dev/null || git -C "$INSTALL_DIR" pull --ff-only
 else
     echo "Cloning Weaver Write..."
     git clone "$REPO" "$INSTALL_DIR"
 fi
 cd "$INSTALL_DIR"
+# don't let a later `chmod +x` register as a tracked change
+git config core.fileMode false 2>/dev/null || true
 
 # 4. python deps
 echo "Installing Python libraries..."
