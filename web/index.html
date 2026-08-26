@@ -3278,14 +3278,25 @@
     var cats=(c.categories||[]).slice(0,2).join(', ');
     var auth=(c.auth||[]).join(', ')||'credential';
     var home=c.homepage? '<a href="'+wvEsc(c.homepage)+'" target="_blank" rel="noopener" style="color:#9f88ff;font-size:.75rem;text-decoration:none">site ↗</a>':'';
+    var isOauth=(c.auth||[]).map(function(a){return String(a).toLowerCase();}).indexOf('oauth2')>=0;
     var form='';
     if(open && !c.connected){
-      form='<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">'+
+      var note='';
+      if(isOauth){
+        var redir=window.location.origin+'/oauth/callback';
+        note='<div class="s" style="line-height:1.6">In your '+wvEsc(c.name)+' OAuth app, add this redirect URI:<br>'+
+             '<code style="color:#c1a6ff;word-break:break-all">'+wvEsc(redir)+'</code></div>';
+      }
+      form='<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">'+note+
         wvConnFields(c.auth).map(function(f){
           return '<input id="cf_'+c.id+'_'+f.k+'" type="'+f.type+'" placeholder="'+wvEsc(f.label)+'" '+
                  'style="padding:9px 11px;border-radius:9px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit;font-size:.88rem;outline:none">';
         }).join('')+
-        '<button class="wv-btn primary" onclick="wvConnectSave(\''+c.id+'\')">Connect / ربط</button></div>';
+        (isOauth
+          ? '<button class="wv-btn primary" onclick="wvOAuthStart(\''+c.id+'\')">Sign in / تسجيل الدخول</button>'+
+            '<div class="wv-msg" id="oauthMsg_'+c.id+'"></div>'
+          : '<button class="wv-btn primary" onclick="wvConnectSave(\''+c.id+'\')">Connect / ربط</button>')+
+        '</div>';
     }
     var btn = c.connected
       ? '<button class="wv-mini" style="color:#f07d63" onclick="wvConnDisconnect(\''+c.id+'\')">Disconnect</button>'
@@ -3311,6 +3322,32 @@
   async function wvConnDisconnect(id){
     try{ await fetch('/api/connectors/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})}); }catch(e){}
     wvLoadConnectors(document.getElementById('connSearch').value.trim());
+  }
+  // live OAuth: open the provider's consent page, then poll for the token
+  async function wvOAuthStart(id){
+    var f={}; document.querySelectorAll('[id^="cf_'+id+'_"]').forEach(function(inp){ f[inp.id.slice(('cf_'+id+'_').length)]=inp.value.trim(); });
+    var msg=document.getElementById('oauthMsg_'+id);
+    if(!f.client_id){ if(msg){msg.textContent='Enter the OAuth Client ID.'; msg.className='wv-msg err';} return; }
+    if(msg){ msg.textContent='Opening sign-in…'; msg.className='wv-msg'; }
+    try{
+      var r=await (await fetch('/api/connectors/oauth/start',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:id,client_id:f.client_id,client_secret:f.client_secret})})).json();
+      if(r.error){ if(msg){msg.textContent='OAuth error: '+r.error; msg.className='wv-msg err';} return; }
+      window.open(r.auth_url,'_blank');
+      if(msg){ msg.textContent='Complete sign-in in the opened tab…'; msg.className='wv-msg'; }
+      wvPollConnected(id, 30);
+    }catch(e){ if(msg){msg.textContent='Failed: '+e.message; msg.className='wv-msg err';} }
+  }
+  function wvPollConnected(id, tries){
+    if(tries<=0) return;
+    setTimeout(async function(){
+      try{
+        var d=await (await fetch('/api/connectors?limit=5&q='+encodeURIComponent(id))).json();
+        var it=(d.connectors||[]).find(function(x){return x.id===id;});
+        if(it && it.connected){ wvConnOpenId=null; wvLoadConnectors(document.getElementById('connSearch').value.trim()); return; }
+      }catch(e){}
+      wvPollConnected(id, tries-1);
+    }, 3000);
   }
 
   // ── Keys panel ──

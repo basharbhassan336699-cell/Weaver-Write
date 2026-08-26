@@ -26,6 +26,12 @@ import http.server
 import socketserver
 import re
 import time
+import base64
+import hashlib
+import secrets
+import urllib.parse
+import urllib.request
+import urllib.error
 from urllib.parse import urlparse, parse_qs
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -92,6 +98,158 @@ def _connectors_index():
                       "auth": auth, "homepage": home})
     _CONN_INDEX = items
     return items
+
+
+# ── live OAuth (authorization-code + PKCE) for oauth2 connectors ──
+_OAUTH_META = {}      # connector id -> {auth_url, token_url, scopes, pkce, params} | None
+_OAUTH_PENDING = {}   # state -> pending exchange info
+
+
+def _resolve_scopes(pdir, txt):
+    """Return the scope strings for a connector, resolving the many forms used
+    in the definitions: inline quoted strings, string constants, arrays of
+    constants (Google/GitHub), and object-member refs (Canva)."""
+    m = re.search(r'scopes:\s*\[(.*?)\]', txt, re.S)
+    inline = m.group(1) if m else None
+    varname = None
+    if inline is None:
+        mv = re.search(r'scopes:\s*([A-Za-z_][\w.]*)', txt)
+        if not mv:
+            return []
+        varname = mv.group(1)
+    sc = ""
+    for fn in ("scopes.ts", "actions.ts"):  # scope consts live in either
+        try:
+            sc += "\n" + open(os.path.join(pdir, fn), encoding="utf-8").read()
+        except OSError:
+            pass
+    str_const = {}
+    for nm, val in re.findall(r'export const (\w+)\s*(?::\s*string)?\s*=\s*"([^"]+)"', sc):
+        str_const[nm] = val
+    arr_const = {}
+    for nm, arr in re.findall(r'export const (\w+)\s*(?::[^={]*?)?=\s*\[(.*?)\]', sc, re.S):
+        arr_const[nm] = arr
+    obj_props = {}
+    for nm, obj in re.findall(r'export const (\w+)\s*(?::[^={]*?)?=\s*\{(.*?)\}', sc, re.S):
+        for k, v in re.findall(r'(\w+)\s*:\s*"([^"]+)"', obj):
+            obj_props[nm + "." + k] = v
+
+    def tok(t, seen):
+        t = t.strip().strip(",").strip()
+        if not t:
+            return []
+        if t.startswith('"') and t.endswith('"'):
+            return [t[1:-1]]
+        if t in str_const:
+            return [str_const[t]]
+        if t in obj_props:
+            return [obj_props[t]]
+        if t in arr_const:
+            if t in seen:
+                return []
+            seen.add(t)
+            return body(arr_const[t], seen)
+        return []
+
+    def body(b, seen):
+        out = []
+        for p in re.findall(r'"[^"]+"|[A-Za-z_][\w.]*', b):
+            out.extend(tok(p, seen))
+        return out
+
+    res = body(inline, set()) if inline is not None else tok(varname, set())
+    dedup = []
+    for s in res:
+        if s not in dedup:
+            dedup.append(s)
+    return dedup
+
+
+def _connector_oauth(cid):
+    """OAuth metadata for a connector, or None if it isn't oauth2."""
+    if cid in _OAUTH_META:
+        return _OAUTH_META[cid]
+    pdir = os.path.join(_PROVIDERS_DIR, cid)
+    meta = None
+    try:
+        txt = open(os.path.join(pdir, "definition.ts"), encoding="utf-8").read()
+        au = re.search(r'authorizationUrl:\s*"([^"]+)"', txt)
+        tu = re.search(r'tokenUrl:\s*"([^"]+)"', txt)
+        if au and tu:
+            params = {}
+            pm = re.search(r'authorizationParams:\s*\{([^}]*)\}', txt)
+            if pm:
+                for k, v in re.findall(r'(\w+):\s*"([^"]+)"', pm.group(1)):
+                    params[k] = v
+            meta = {"auth_url": au.group(1), "token_url": tu.group(1),
+                    "scopes": _resolve_scopes(pdir, txt),
+                    "pkce": ("pkce:" in txt or "code_challenge" in txt),
+                    "params": params}
+    except OSError:
+        pass
+    _OAUTH_META[cid] = meta
+    return meta
+
+
+def _oauth_start(cid, client_id, client_secret, host):
+    meta = _connector_oauth(cid)
+    if not meta:
+        return {"error": "not_oauth"}
+    if not client_id:
+        return {"error": "missing_client_id"}
+    redirect_uri = "http://%s/oauth/callback" % host
+    state = secrets.token_urlsafe(24)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    _OAUTH_PENDING[state] = {"id": cid, "client_id": client_id,
+                             "client_secret": client_secret, "verifier": verifier,
+                             "token_url": meta["token_url"],
+                             "redirect_uri": redirect_uri, "ts": time.time()}
+    # remember the client credentials right away (pending connection)
+    st = _connectors_state()
+    ex = st.get(cid, {})
+    ex.update({"client_id": client_id, "client_secret": client_secret})
+    st[cid] = ex
+    _save_connectors_state(st)
+    q = {"response_type": "code", "client_id": client_id,
+         "redirect_uri": redirect_uri, "state": state,
+         "code_challenge": challenge, "code_challenge_method": "S256"}
+    if meta["scopes"]:
+        q["scope"] = " ".join(meta["scopes"])
+    q.update(meta.get("params", {}))
+    sep = "&" if "?" in meta["auth_url"] else "?"
+    return {"auth_url": meta["auth_url"] + sep + urllib.parse.urlencode(q),
+            "redirect_uri": redirect_uri}
+
+
+def _oauth_exchange(pend, code):
+    data = urllib.parse.urlencode({
+        "grant_type": "authorization_code", "code": code,
+        "redirect_uri": pend["redirect_uri"], "client_id": pend["client_id"],
+        "client_secret": pend["client_secret"], "code_verifier": pend["verifier"],
+    }).encode()
+    req = urllib.request.Request(
+        pend["token_url"], data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded",
+                 "Accept": "application/json"}, method="POST")
+    try:
+        raw = urllib.request.urlopen(req, timeout=30).read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        try:
+            raw = e.read().decode("utf-8")
+        except Exception:
+            raw = str(e)
+        return None, "Token exchange failed: " + raw[:250]
+    except Exception as e:
+        return None, "Token exchange error: " + str(e)
+    try:
+        tok = json.loads(raw)
+    except Exception:
+        tok = dict(urllib.parse.parse_qsl(raw))
+    if not tok.get("access_token"):
+        return None, "No access token returned: " + raw[:250]
+    return tok, None
 
 
 def _connectors_state():
@@ -230,6 +388,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # fetches the latest UI (no background polling needed)
             self._serve_file("index.html", "text/html; charset=utf-8")
             return
+        if path == "/oauth/callback":
+            qs = parse_qs(urlparse(self.path).query)
+            code = qs.get("code", [""])[0]
+            state = qs.get("state", [""])[0]
+            err = qs.get("error", [""])[0]
+            pend = _OAUTH_PENDING.pop(state, None)
+            if err or not code or not pend:
+                self._oauth_page("Sign-in was cancelled or failed."
+                                 + ((" (" + err + ")") if err else ""), False)
+                return
+            tok, e = _oauth_exchange(pend, code)
+            if e:
+                self._oauth_page(e, False)
+                return
+            st = _connectors_state()
+            ex = st.get(pend["id"], {})
+            ex.update({"connected": True, "saved_at": int(time.time()),
+                       "oauth": {"access_token": tok.get("access_token"),
+                                 "refresh_token": tok.get("refresh_token"),
+                                 "scope": tok.get("scope"),
+                                 "token_type": tok.get("token_type"),
+                                 "expires_at": (int(time.time()) + int(tok["expires_in"]))
+                                 if tok.get("expires_in") else None}})
+            st[pend["id"]] = ex
+            _save_connectors_state(st)
+            self._oauth_page("Connected ✓  You can close this tab and "
+                             "return to Weaver Write.", True)
+            return
         if path == "/api/settings":
             s = keysync.get_settings()
             s_masked = dict(s)
@@ -337,6 +523,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _save_connectors_state(st)
             self._json({"ok": True, "id": cid, "connected": False})
             return
+        if path == "/api/connectors/oauth/start":
+            host = self.headers.get("Host", "127.0.0.1:%d" % PORT)
+            self._json(_oauth_start((body.get("id") or "").strip(),
+                                    (body.get("client_id") or "").strip(),
+                                    (body.get("client_secret") or "").strip(),
+                                    host))
+            return
 
         if path == "/api/chat":
             msg = (body.get("message") or "").strip()
@@ -365,6 +558,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         self._json({"error": "not found"}, 404)
+
+    def _oauth_page(self, msg, ok):
+        color = "#68c79a" if ok else "#f07d63"
+        html = ("<!doctype html><meta charset=utf-8><meta name=viewport "
+                "content='width=device-width,initial-scale=1'>"
+                "<body style='margin:0;background:#14131a;color:#ece9f5;"
+                "font-family:system-ui,sans-serif;display:grid;place-items:center;"
+                "height:100vh;text-align:center;padding:20px'>"
+                "<div><div style='font-size:44px'>%s</div>"
+                "<h2 style='color:%s;margin:10px 0'>%s</h2>"
+                "<p style='opacity:.7'>Weaver Write</p></div></body>"
+                % ("✅" if ok else "⚠️", color, msg))
+        data = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _serve_file(self, name, ctype):
         fp = os.path.join(_HERE, name)
