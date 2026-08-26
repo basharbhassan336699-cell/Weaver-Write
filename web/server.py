@@ -24,7 +24,9 @@ import sys
 import json
 import http.server
 import socketserver
-from urllib.parse import urlparse
+import re
+import time
+from urllib.parse import urlparse, parse_qs
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
@@ -41,6 +43,75 @@ def _mask(key: str) -> str:
     if not key:
         return ""
     return (key[:4] + "…" + key[-4:]) if len(key) > 8 else "…"
+
+
+# ── Connectors (real integrations from engines/open-connector-core) ──
+_CONN_INDEX = None
+_PROVIDERS_DIR = os.path.join(_ROOT, "engines", "open-connector-core",
+                              "src", "providers")
+_CONN_STATE = os.path.join(_ROOT, "config", "connectors.json")
+
+
+def _prettify(cid: str) -> str:
+    return cid.replace("_", " ").replace("-", " ").title()
+
+
+def _connectors_index():
+    """Scan the real connector definitions once and cache: id, display name,
+    categories, auth types, homepage. ~1300 connectors."""
+    global _CONN_INDEX
+    if _CONN_INDEX is not None:
+        return _CONN_INDEX
+    items = []
+    try:
+        ids = sorted(os.listdir(_PROVIDERS_DIR))
+    except OSError:
+        ids = []
+    for cid in ids:
+        d = os.path.join(_PROVIDERS_DIR, cid)
+        if not os.path.isdir(d):
+            continue
+        name, cats, auth, home = _prettify(cid), [], [], ""
+        try:
+            txt = open(os.path.join(d, "definition.ts"), encoding="utf-8").read()
+            m = re.search(r'displayName:\s*"([^"]+)"', txt)
+            if m:
+                name = m.group(1)
+            m = re.search(r'categories:\s*\[([^\]]*)\]', txt)
+            if m:
+                cats = re.findall(r'"([^"]+)"', m.group(1))
+            m = re.search(r'authTypes:\s*\[([^\]]*)\]', txt)
+            if m:
+                auth = re.findall(r'"([^"]+)"', m.group(1))
+            m = re.search(r'homepageUrl:\s*"([^"]+)"', txt)
+            if m:
+                home = m.group(1)
+        except OSError:
+            pass
+        items.append({"id": cid, "name": name, "categories": cats,
+                      "auth": auth, "homepage": home})
+    _CONN_INDEX = items
+    return items
+
+
+def _connectors_state():
+    try:
+        return json.loads(open(_CONN_STATE, encoding="utf-8").read())
+    except Exception:
+        return {}
+
+
+def _save_connectors_state(st):
+    try:
+        os.makedirs(os.path.dirname(_CONN_STATE), exist_ok=True)
+        with open(_CONN_STATE, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False, indent=2)
+        try:
+            os.chmod(_CONN_STATE, 0o600)  # credentials stay private
+        except OSError:
+            pass
+    except Exception:
+        pass
 
 
 # Effort levels — real generation settings, not just labels. Higher effort =
@@ -183,6 +254,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
                        for n in providers.provider_names()]
             self._json({"providers": [r["name"] for r in reg], "registry": reg})
             return
+        if path == "/api/connectors":
+            qs = parse_qs(urlparse(self.path).query)
+            q = (qs.get("q", [""])[0] or "").lower().strip()
+            try:
+                limit = max(1, min(200, int(qs.get("limit", ["60"])[0])))
+            except Exception:
+                limit = 60
+            idx = _connectors_index()
+            state = _connectors_state()
+
+            def _match(it):
+                if not q:
+                    return True
+                return (q in it["name"].lower() or q in it["id"].lower()
+                        or any(q in c.lower() for c in it["categories"]))
+            res = [it for it in idx if _match(it)]
+            out = []
+            for it in res[:limit]:
+                c = dict(it)
+                c["connected"] = bool(state.get(it["id"], {}).get("connected"))
+                out.append(c)
+            self._json({"count_all": len(idx), "total": len(res),
+                        "shown": len(out), "connectors": out,
+                        "connected_count": len(state)})
+            return
         # static files (js/css/img) from web/
         safe = path.lstrip("/").replace("..", "")
         if safe and os.path.exists(os.path.join(_HERE, safe)):
@@ -220,6 +316,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if updates:
                     keysync.save_env(updates)
             self._json({"ok": True, "saved": list(updates.keys())})
+            return
+
+        if path == "/api/connectors/connect":
+            cid = (body.get("id") or "").strip()
+            if not cid:
+                self._json({"error": "missing id"})
+                return
+            fields = {k: v for k, v in (body.get("fields") or {}).items() if v}
+            st = _connectors_state()
+            st[cid] = {"connected": True, "fields": fields,
+                       "saved_at": int(time.time())}
+            _save_connectors_state(st)
+            self._json({"ok": True, "id": cid, "connected": True})
+            return
+        if path == "/api/connectors/disconnect":
+            cid = (body.get("id") or "").strip()
+            st = _connectors_state()
+            st.pop(cid, None)
+            _save_connectors_state(st)
+            self._json({"ok": True, "id": cid, "connected": False})
             return
 
         if path == "/api/chat":
