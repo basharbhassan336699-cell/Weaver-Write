@@ -612,6 +612,80 @@ def cmd_doctor(args):
           "\nAll good — no problems found.")
 
 
+def _load_chat():
+    """Import the shared chat function used by the web server."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from web.server import _chat
+    return _chat
+
+
+def cmd_test(args):
+    """End-to-end self-test of the AI connection, straight from the terminal —
+    shows exactly why a reply would fail (no key / bad key / no credit / net)."""
+    banner()
+    try:
+        from config.keysync import get_settings
+        s = get_settings()
+    except Exception as e:
+        print(f"Could not read settings: {e}")
+        return
+    key = s.get("WEAVER_API_KEY", "")
+    masked = (key[:4] + "…" + key[-4:]) if len(key) > 8 else ("(none)" if not key else "…")
+    print("Connection check")
+    print(f"  key      : {masked}")
+    print(f"  provider : {s.get('WEAVER_PROVIDER') or '(none)'}")
+    print(f"  model    : {s.get('WEAVER_MODEL') or '(none)'}")
+    print(f"  base url : {s.get('WEAVER_BASE_URL') or '(none)'}")
+    if not key:
+        print("\n>>> No API key set. Add one with:  weaver keys add")
+        return
+    if not s.get("WEAVER_BASE_URL"):
+        print("\n>>> No provider URL. Re-add your key:  weaver keys add")
+        return
+    print("\nContacting the provider (say 'OK')…")
+    try:
+        chat = _load_chat()
+    except Exception as e:
+        print(f"Could not load chat module: {e}")
+        return
+    r = chat("Reply with just: OK", timeout=60)
+    if r.get("error"):
+        print(f"\n>>> FAILED: {r.get('error')}")
+        if r.get("message"):
+            print(f"    {r.get('message')}")
+        print("\nWhat it means:")
+        print("  http_error 401/403 -> the API key is wrong or revoked")
+        print("  http_error 402/429 -> no credit / rate limited on the provider")
+        print("  request_failed     -> no internet, or the provider URL is wrong")
+        print("  no_key/no_provider -> add your key again:  weaver keys add")
+    else:
+        print(f"\n>>> SUCCESS. Provider replied: {(r.get('reply') or '').strip()[:200]}")
+        print("The AI connection works. If the web UI shows nothing, restart it:")
+        print("  pkill -f weaver.py ; weaver serve   (then hard-refresh the page)")
+
+
+def cmd_ask(args):
+    """Ask the model a question directly from the terminal."""
+    q = " ".join(args.text) if getattr(args, "text", None) else ""
+    if not q:
+        q = _prompt_line("Your message")
+    if not q:
+        return
+    try:
+        chat = _load_chat()
+    except Exception as e:
+        print(f"Could not load chat: {e}")
+        return
+    r = chat(q, timeout=120)
+    if r.get("error"):
+        print(f"[error: {r.get('error')}] {r.get('message','')}"
+              + ("\nAdd your key with: weaver keys add" if r.get("error") == "no_key" else ""))
+    else:
+        print("\n" + (r.get("reply") or "").strip() + "\n")
+
+
 def cmd_version(args):
     print("Weaver Write 1.0")
 
@@ -633,6 +707,9 @@ def build_parser():
     sub.add_parser("restore", help="restore state after shutdown")
     sub.add_parser("doctor", help="diagnose and fix problems")
     sub.add_parser("diag", help="show interactive-menu diagnostics")
+    sub.add_parser("test", help="test the AI connection and show any error")
+    ap = sub.add_parser("ask", help="ask the model a question from the terminal")
+    ap.add_argument("text", nargs="*", help="the message")
     sub.add_parser("version", help="show version")
     return p
 
@@ -661,6 +738,10 @@ def main(argv=None):
         cmd_restore(args)
     elif cmd == "diag":
         cmd_diag(args)
+    elif cmd == "test":
+        cmd_test(args)
+    elif cmd == "ask":
+        cmd_ask(args)
     elif cmd == "doctor":
         cmd_doctor(args)
     elif cmd == "version":
