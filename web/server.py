@@ -43,10 +43,30 @@ def _mask(key: str) -> str:
     return (key[:4] + "…" + key[-4:]) if len(key) > 8 else "…"
 
 
-def _chat(message: str, history=None, timeout: int = 120) -> dict:
+# Effort levels — real generation settings, not just labels. Higher effort =
+# more output budget, lower temperature (more precise/deterministic), and a
+# system instruction that asks for deeper, verified reasoning. Uses only
+# universally-supported OpenAI-compatible fields, so no provider breaks.
+EFFORT = {
+    "low":    {"max_tokens": 1024, "temperature": 0.9,
+               "system": "Answer concisely and directly."},
+    "medium": {"max_tokens": 2048, "temperature": 0.7,
+               "system": "Answer clearly and completely."},
+    "high":   {"max_tokens": 4096, "temperature": 0.4,
+               "system": "Think step by step. Be thorough and precise, and "
+                         "double-check your answer before replying."},
+    "max":    {"max_tokens": 8192, "temperature": 0.2,
+               "system": "Reason rigorously and step by step. Be maximally "
+                         "thorough, precise and exhaustive; verify each step "
+                         "and consider edge cases before finalizing."},
+}
+
+
+def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium") -> dict:
     """Send a message to the configured provider using the saved key and return
     the assistant reply. OpenAI-compatible /chat/completions (works for the
-    registry providers, incl. Anthropic's and Google's compatible endpoints)."""
+    registry providers, incl. Anthropic's and Google's compatible endpoints).
+    `effort` (low/medium/high/max) changes real generation settings."""
     import urllib.request
     import urllib.error
 
@@ -64,16 +84,16 @@ def _chat(message: str, history=None, timeout: int = 120) -> dict:
     if not base:
         return {"error": "no_provider",
                 "message": "No provider URL is configured. Add your key again."}
-    try:
-        max_tokens = int(s.get("WEAVER_MAX_TOKENS") or 2000)
-    except Exception:
-        max_tokens = 2000
-    try:
-        temperature = float(s.get("WEAVER_TEMPERATURE") or 0.7)
-    except Exception:
-        temperature = 0.7
 
-    msgs = list(history or [])
+    lvl = EFFORT.get((effort or "medium").lower(), EFFORT["medium"])
+    max_tokens = lvl["max_tokens"]
+    temperature = lvl["temperature"]
+
+    msgs = []
+    # a system instruction whose depth scales with the chosen effort
+    if not (history and history and history[0].get("role") == "system"):
+        msgs.append({"role": "system", "content": lvl["system"]})
+    msgs.extend(list(history or []))
     msgs.append({"role": "user", "content": message})
     payload = json.dumps({"model": model, "messages": msgs,
                           "max_tokens": max_tokens,
@@ -105,7 +125,8 @@ def _chat(message: str, history=None, timeout: int = 120) -> dict:
         elif isinstance(c, str):
             reply = c
     return {"reply": reply, "provider": s.get("WEAVER_PROVIDER", ""),
-            "model": model}
+            "model": model, "effort": (effort or "medium").lower(),
+            "max_tokens": max_tokens}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -197,7 +218,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not msg:
                 self._json({"error": "empty"})
                 return
-            self._json(_chat(msg, body.get("history")))
+            self._json(_chat(msg, body.get("history"),
+                             effort=body.get("effort", "medium")))
             return
 
         if path == "/api/providers/models":
