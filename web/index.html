@@ -2887,8 +2887,8 @@
     // Scroll to the newest message
     messages.scrollTop = messages.scrollHeight;
 
-    // (Demo) simulate an assistant reply
-    setTimeout(() => {
+    // Real assistant reply from the backend (calls /api/chat with the saved key)
+    (async () => {
       const aiMsg = document.createElement('div');
       aiMsg.className = 'msg ai';
 
@@ -2931,7 +2931,9 @@
           actionsHTML +
         '</div>';
 
-      aiMsg.querySelector('.bubble').textContent = 'تم استلام رسالتك. (رد تجريبي)';
+      const bubble = aiMsg.querySelector('.bubble');
+      const isAr = (document.documentElement.lang || 'en') === 'ar';
+      bubble.textContent = '…';
 
       // Update timestamp every minute
       const timeEl = aiMsg.querySelector('.msg-time');
@@ -2947,7 +2949,32 @@
 
       messages.appendChild(aiMsg);
       messages.scrollTop = messages.scrollHeight;
-    }, 500);
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text })
+        });
+        const data = await res.json();
+        if (data && data.error) {
+          if (data.error === 'no_key') {
+            bubble.textContent = isAr
+              ? 'لم يتم ضبط مفتاح API بعد. أضِف مفتاحك من قسم Keys في القائمة الجانبية.'
+              : 'No API key is set yet. Add your key from the Keys section in the sidebar.';
+          } else {
+            bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (data.message || data.error);
+          }
+        } else {
+          bubble.textContent = (data && data.reply)
+            ? data.reply
+            : (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)');
+        }
+      } catch (err) {
+        bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
+      }
+      messages.scrollTop = messages.scrollHeight;
+    })();
   }
 
   // ── Mode buttons ───────────────────────────────
