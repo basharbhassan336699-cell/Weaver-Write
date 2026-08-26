@@ -54,6 +54,10 @@ if [ "$PLATFORM" = "termux" ]; then
     # ninja/cmake and fails on-device (e.g. "matplotlib" / "ninja" build errors).
     pkg install -y python-pip 2>/dev/null || true
     pkg install -y matplotlib python-numpy python-pandas python-scipy python-pillow 2>/dev/null || true
+    # matplotlib from pkg satisfies the pin, so pip skips it and its small
+    # pure-python runtime deps. Install those explicitly (fast, no compilation)
+    # so matplotlib imports cleanly and pip stops warning about missing deps.
+    pip install cycler fonttools kiwisolver pyparsing packaging python-dateutil 2>/dev/null || true
     # Install each requirement independently so one heavy package that cannot
     # build on-device (e.g. torch-based paper-qa) does not abort the rest.
     grep -vE '^[[:space:]]*#|^[[:space:]]*$' requirements.txt | while IFS= read -r req; do
