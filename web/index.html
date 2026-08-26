@@ -3213,6 +3213,19 @@
   </div>
 </div>
 
+<div class="wv-overlay" id="connectsOverlay">
+  <div class="wv-modal">
+    <div class="wv-head"><h3>🔗 Connectors</h3><button class="wv-x" onclick="wvClose('connectsOverlay')">×</button></div>
+    <div class="wv-body">
+      <div class="wv-field">
+        <input id="connSearch" type="text" placeholder="Search 1000+ apps & sites (Gmail, Slack, GitHub…) / ابحث في التطبيقات والمواقع" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="wv-msg" id="connCount"></div>
+      <div class="wv-list" id="connList"></div>
+    </div>
+  </div>
+</div>
+
 <script>
   // ── panel open/close + nav wiring ──
   function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
@@ -3228,8 +3241,77 @@
       if(k==='keys')      it.addEventListener('click', function(){ wvOpenKeys(); });
       if(k==='projects')  it.addEventListener('click', function(){ wvOpen('projectsOverlay'); wvRenderProjects(); });
       if(k==='artifacts') it.addEventListener('click', function(){ wvOpen('artifactsOverlay'); wvRenderArtifacts(); });
+      if(k==='connects')  it.addEventListener('click', function(){ wvOpenConnects(); });
     });
   })();
+
+  // ── Connectors (real integrations from the system) ──
+  var wvConnOpenId=null, wvConnTimer=null;
+  function wvConnFields(auth){
+    auth=(auth||[]).map(function(a){return String(a).toLowerCase();});
+    if(auth.indexOf('oauth2')>=0) return [
+      {k:'client_id',label:'OAuth Client ID',type:'text'},
+      {k:'client_secret',label:'OAuth Client Secret',type:'password'}];
+    if(auth.indexOf('basic')>=0) return [
+      {k:'username',label:'Username',type:'text'},
+      {k:'password',label:'Password',type:'password'}];
+    if(auth.indexOf('api_key')>=0||auth.indexOf('apikey')>=0) return [
+      {k:'api_key',label:'API key',type:'password'}];
+    return [{k:'credential',label:'Credential / Token',type:'password'}];
+  }
+  function wvOpenConnects(){ wvOpen('connectsOverlay'); var s=document.getElementById('connSearch');
+    s.oninput=function(){ clearTimeout(wvConnTimer); wvConnTimer=setTimeout(function(){ wvLoadConnectors(s.value.trim()); },250); };
+    wvLoadConnectors(''); }
+  async function wvLoadConnectors(q){
+    var box=document.getElementById('connList'); var cnt=document.getElementById('connCount');
+    box.innerHTML='<div class="wv-empty">Loading…</div>';
+    try{
+      var d=await (await fetch('/api/connectors?limit=60&q='+encodeURIComponent(q||''))).json();
+      cnt.textContent = (q? (d.total+' match'+(d.total===1?'':'es')) : (d.count_all+' connectors available'))
+                        + (d.connected_count? (' · '+d.connected_count+' connected'):'');
+      if(!d.connectors.length){ box.innerHTML='<div class="wv-empty">No connector matches “'+wvEsc(q)+'”.</div>'; return; }
+      box.innerHTML=d.connectors.map(wvConnCard).join('');
+    }catch(e){ box.innerHTML='<div class="wv-empty">Could not load connectors: '+wvEsc(e.message)+'</div>'; }
+  }
+  function wvConnCard(c){
+    var open=wvConnOpenId===c.id;
+    var cats=(c.categories||[]).slice(0,2).join(', ');
+    var auth=(c.auth||[]).join(', ')||'credential';
+    var home=c.homepage? '<a href="'+wvEsc(c.homepage)+'" target="_blank" rel="noopener" style="color:#9f88ff;font-size:.75rem;text-decoration:none">site ↗</a>':'';
+    var form='';
+    if(open && !c.connected){
+      form='<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">'+
+        wvConnFields(c.auth).map(function(f){
+          return '<input id="cf_'+c.id+'_'+f.k+'" type="'+f.type+'" placeholder="'+wvEsc(f.label)+'" '+
+                 'style="padding:9px 11px;border-radius:9px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit;font-size:.88rem;outline:none">';
+        }).join('')+
+        '<button class="wv-btn primary" onclick="wvConnectSave(\''+c.id+'\')">Connect / ربط</button></div>';
+    }
+    var btn = c.connected
+      ? '<button class="wv-mini" style="color:#f07d63" onclick="wvConnDisconnect(\''+c.id+'\')">Disconnect</button>'
+      : '<button class="wv-btn" onclick="wvConnToggle(\''+c.id+'\')">'+(open?'Cancel':'Connect')+'</button>';
+    return '<div class="wv-card" style="flex-direction:column;align-items:stretch">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">'+
+      '<div><div class="t">'+wvEsc(c.name)+(c.connected?' <span style="color:#68c79a;font-size:.7rem">● connected</span>':'')+'</div>'+
+      '<div class="s">'+wvEsc(cats||'—')+' · <span style="opacity:.8">'+wvEsc(auth)+'</span> '+home+'</div></div>'+
+      '<div style="display:flex;gap:6px;align-items:center">'+btn+'</div></div>'+form+'</div>';
+  }
+  function wvConnToggle(id){ wvConnOpenId = (wvConnOpenId===id)?null:id; wvLoadConnectors(document.getElementById('connSearch').value.trim()); }
+  async function wvConnectSave(id){
+    var fields={};
+    // gather any cf_ inputs for this connector
+    document.querySelectorAll('[id^="cf_'+id+'_"]').forEach(function(inp){
+      var k=inp.id.slice(('cf_'+id+'_').length); fields[k]=inp.value.trim();
+    });
+    try{
+      await fetch('/api/connectors/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,fields:fields})});
+      wvConnOpenId=null; wvLoadConnectors(document.getElementById('connSearch').value.trim());
+    }catch(e){}
+  }
+  async function wvConnDisconnect(id){
+    try{ await fetch('/api/connectors/disconnect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})}); }catch(e){}
+    wvLoadConnectors(document.getElementById('connSearch').value.trim());
+  }
 
   // ── Keys panel ──
   var WV_REG = [];
