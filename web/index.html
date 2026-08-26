@@ -3021,10 +3021,14 @@
 
       try {
         const effortEl = document.getElementById('effortSelect');
+        // send the earlier turns as history so the model remembers the whole
+        // conversation (currentMessages already ends with this user message,
+        // which the backend appends itself — so drop the last entry here)
+        const history = currentMessages.slice(0, -1).slice(-30);
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, effort: effortEl ? effortEl.value : 'medium' })
+          body: JSON.stringify({ message: text, history: history, effort: effortEl ? effortEl.value : 'medium' })
         });
         const data = await res.json();
         if (data && data.error) {
