@@ -3231,8 +3231,23 @@
 <script>
   // ── panel open/close + nav wiring ──
   function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
+  function wvCloseAllPanels(){ document.querySelectorAll('.wv-overlay.show').forEach(function(o){ o.classList.remove('show'); }); }
   (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
-  function wvOpen(id){ var o=document.getElementById(id); if(o) o.classList.add('show'); }
+  function wvOpen(id){
+    // opening a section closes any other open section (smooth switching)
+    wvCloseAllPanels();
+    var cs=document.getElementById('csearchOverlay'); if(cs) cs.classList.remove('show');
+    var stg=document.getElementById('settingsOverlay'); if(stg) stg.classList.remove('show');
+    var o=document.getElementById(id); if(o) o.classList.add('show');
+  }
+  // clicking the sidebar's own controls first closes any open section page,
+  // so search/settings appear on top and collapse is clearly visible
+  (function(){
+    ['button[title="Search"]','button[title="Collapse sidebar"]','button[title="Open sidebar"]','button[title="Toggle sidebar"]']
+      .forEach(function(sel){ document.querySelectorAll(sel).forEach(function(btn){
+        btn.addEventListener('click', function(){ wvCloseAllPanels(); }, true);
+      }); });
+  })();
   document.querySelectorAll('.wv-overlay').forEach(function(o){
     o.addEventListener('click', function(e){ if(e.target===o) o.classList.remove('show'); });
   });
