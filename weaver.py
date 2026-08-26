@@ -60,9 +60,12 @@ def banner(clear=True):
     if clear:
         _clear()
     o, r = (ORANGE, RESET) if _supports_color() else ("", "")
+    rule = "═" * 50
+    print(f"{o}{rule}{r}")
     print(_BANNER.format(o=o, r=r))
     b = BOLD if _supports_color() else ""
-    print(f"        {b}Hello — Weaver Write{r}\n")
+    print(f"        {b}Hello — Weaver Write{r}")
+    print(f"{o}{rule}{r}\n")
 
 
 # ── config helpers ───────────────────────────────────────────
