@@ -43,30 +43,6 @@ def _mask(key: str) -> str:
     return (key[:4] + "…" + key[-4:]) if len(key) > 8 else "…"
 
 
-def _build_token() -> str:
-    """A short token that changes whenever the UI files change, so an open
-    page can detect an update and reload itself automatically."""
-    import hashlib
-    h = hashlib.md5()
-    for f in ("index.html", "server.py"):
-        try:
-            h.update(str(os.path.getmtime(os.path.join(_HERE, f))).encode())
-        except OSError:
-            pass
-    return h.hexdigest()[:12]
-
-
-# injected into index.html so the page auto-reloads after an update
-_RELOAD_JS = (
-    "<script>(function(){window.__WEAVER_BUILD__=%r;"
-    "async function c(){if(document.hidden)return;"  # skip while tab is backgrounded (saves battery)
-    "try{var r=await fetch('/api/version',{cache:'no-store'});"
-    "var d=await r.json();if(d&&d.build&&d.build!==window.__WEAVER_BUILD__){"
-    "location.reload();}}catch(e){}}"
-    "setInterval(c,5000);})();</script>"
-)
-
-
 def _chat(message: str, history=None, timeout: int = 120) -> dict:
     """Send a message to the configured provider using the saved key and return
     the assistant reply. OpenAI-compatible /chat/completions (works for the
@@ -158,10 +134,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = urlparse(self.path).path
 
         if path == "/" or path == "/index.html":
-            self._serve_index()
-            return
-        if path == "/api/version":
-            self._json({"build": _build_token()})
+            # served with no-store headers, so a manual browser reload always
+            # fetches the latest UI (no background polling needed)
+            self._serve_file("index.html", "text/html; charset=utf-8")
             return
         if path == "/api/settings":
             s = keysync.get_settings()
@@ -243,27 +218,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         self._json({"error": "not found"}, 404)
-
-    def _serve_index(self):
-        fp = os.path.join(_HERE, "index.html")
-        if not os.path.exists(fp):
-            self._json({"error": "index.html not found"}, 404)
-            return
-        with open(fp, "rb") as f:
-            html = f.read().decode("utf-8", "replace")
-        inject = _RELOAD_JS % _build_token()
-        if "</body>" in html:
-            html = html.replace("</body>", inject + "</body>", 1)
-        else:
-            html += inject
-        data = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.end_headers()
-        self.wfile.write(data)
 
     def _serve_file(self, name, ctype):
         fp = os.path.join(_HERE, name)
