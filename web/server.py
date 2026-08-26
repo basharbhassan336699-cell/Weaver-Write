@@ -195,6 +195,14 @@ def _oauth_start(cid, client_id, client_secret, host):
     meta = _connector_oauth(cid)
     if not meta:
         return {"error": "not_oauth"}
+    # reuse credentials saved from a previous setup, so later sign-ins are
+    # one tap (jump straight to the provider) — no re-entering client id/secret
+    if not client_id or not client_secret:
+        saved = _connectors_state().get(cid, {})
+        sf = saved.get("fields", {})
+        client_id = client_id or saved.get("client_id") or sf.get("client_id", "")
+        client_secret = (client_secret or saved.get("client_secret")
+                         or sf.get("client_secret", ""))
     if not client_id:
         return {"error": "missing_client_id"}
     redirect_uri = "http://%s/oauth/callback" % host
@@ -459,7 +467,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             out = []
             for it in res[:limit]:
                 c = dict(it)
-                c["connected"] = bool(state.get(it["id"], {}).get("connected"))
+                sv = state.get(it["id"], {})
+                c["connected"] = bool(sv.get("connected"))
+                c["has_client"] = bool(sv.get("client_id")
+                                       or sv.get("fields", {}).get("client_id"))
                 out.append(c)
             self._json({"count_all": len(idx), "total": len(res),
                         "shown": len(out), "connectors": out,

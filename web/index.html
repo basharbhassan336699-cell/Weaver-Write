@@ -3301,14 +3301,22 @@
           : '<button class="wv-btn primary" onclick="wvConnectSave(\''+c.id+'\')">Connect / ربط</button>')+
         '</div>';
     }
-    var btn = c.connected
-      ? '<button class="wv-mini" style="color:#d9694f" onclick="wvConnDisconnect(\''+c.id+'\')">Disconnect</button>'
-      : '<button class="wv-btn" onclick="wvConnToggle(\''+c.id+'\')">'+(open?'Cancel':'Connect')+'</button>';
+    var btn;
+    if(c.connected){
+      btn='<button class="wv-mini" style="color:#d9694f" onclick="wvConnDisconnect(\''+c.id+'\')">Disconnect</button>';
+    }else if(isOauth && c.has_client && !open){
+      // credentials already saved -> one tap jumps straight to the provider
+      btn='<button class="wv-btn primary" onclick="wvOAuthStart(\''+c.id+'\')">Sign in</button>'+
+          '<button class="wv-mini" onclick="wvConnToggle(\''+c.id+'\')">edit</button>';
+    }else{
+      btn='<button class="wv-btn" onclick="wvConnToggle(\''+c.id+'\')">'+(open?'Cancel':'Connect')+'</button>';
+    }
+    var topMsg=(isOauth && !c.connected && !open) ? '<div class="wv-msg" id="oauthMsg_'+c.id+'" style="margin-top:8px"></div>' : '';
     return '<div class="wv-card" style="flex-direction:column;align-items:stretch">'+
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px">'+
       '<div><div class="t">'+wvEsc(c.name)+(c.connected?' <span style="color:#4a9e6f;font-size:.7rem">● connected</span>':'')+'</div>'+
       '<div class="s">'+wvEsc(cats||'—')+' · <span style="opacity:.8">'+wvEsc(auth)+'</span> '+home+'</div></div>'+
-      '<div style="display:flex;gap:6px;align-items:center">'+btn+'</div></div>'+form+'</div>';
+      '<div style="display:flex;gap:6px;align-items:center">'+btn+'</div></div>'+topMsg+form+'</div>';
   }
   function wvConnToggle(id){ wvConnOpenId = (wvConnOpenId===id)?null:id; wvLoadConnectors(document.getElementById('connSearch').value.trim()); }
   async function wvConnectSave(id){
@@ -3330,11 +3338,17 @@
   async function wvOAuthStart(id){
     var f={}; document.querySelectorAll('[id^="cf_'+id+'_"]').forEach(function(inp){ f[inp.id.slice(('cf_'+id+'_').length)]=inp.value.trim(); });
     var msg=document.getElementById('oauthMsg_'+id);
-    if(!f.client_id){ if(msg){msg.textContent='Enter the OAuth Client ID.'; msg.className='wv-msg err';} return; }
     if(msg){ msg.textContent='Opening sign-in…'; msg.className='wv-msg'; }
     try{
       var r=await (await fetch('/api/connectors/oauth/start',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({id:id,client_id:f.client_id,client_secret:f.client_secret})})).json();
+        body:JSON.stringify({id:id,client_id:f.client_id||'',client_secret:f.client_secret||''})})).json();
+      if(r.error==='missing_client_id'){
+        // no saved credentials yet — open the form to collect them once
+        wvConnOpenId=id; wvLoadConnectors(document.getElementById('connSearch').value.trim());
+        setTimeout(function(){ var m=document.getElementById('oauthMsg_'+id);
+          if(m){ m.textContent='Enter your OAuth Client ID and Secret once, then Sign in.'; m.className='wv-msg err'; } }, 120);
+        return;
+      }
       if(r.error){ if(msg){msg.textContent='OAuth error: '+r.error; msg.className='wv-msg err';} return; }
       // open the provider's consent page reliably (mobile browsers often block
       // window.open): try a real link click, then a popup, then same-tab nav
