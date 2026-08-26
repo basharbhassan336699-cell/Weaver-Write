@@ -92,6 +92,10 @@ fi
 # weaver.py — a symlink depends on the file's exec bit, which can get lost on
 # some devices/filesystems and cause "Permission denied" when running `weaver`.
 chmod +x weaver.py 2>/dev/null || true
+# Remove any existing `weaver` first: an old install left a SYMLINK to
+# weaver.py, and writing the wrapper through that symlink would clobber
+# weaver.py itself. Deleting it makes the next write create a real file.
+rm -f "$PREFIX/bin/weaver" /usr/local/bin/weaver 2>/dev/null || true
 _wrapper="#!/usr/bin/env bash
 exec python3 \"$INSTALL_DIR/weaver.py\" \"\$@\""
 if printf '%s\n' "$_wrapper" > "$PREFIX/bin/weaver" 2>/dev/null; then
