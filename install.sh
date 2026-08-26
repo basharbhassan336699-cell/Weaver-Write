@@ -88,10 +88,19 @@ if [ -d "engines/html2pptx-core" ]; then
 fi
 
 # 7. make CLI available
-chmod +x weaver.py
-ln -sf "$INSTALL_DIR/weaver.py" "$PREFIX/bin/weaver" 2>/dev/null || \
-    sudo ln -sf "$INSTALL_DIR/weaver.py" /usr/local/bin/weaver 2>/dev/null || \
+# Use a wrapper script that calls `python3 weaver.py` rather than a symlink to
+# weaver.py — a symlink depends on the file's exec bit, which can get lost on
+# some devices/filesystems and cause "Permission denied" when running `weaver`.
+chmod +x weaver.py 2>/dev/null || true
+_wrapper="#!/usr/bin/env bash
+exec python3 \"$INSTALL_DIR/weaver.py\" \"\$@\""
+if printf '%s\n' "$_wrapper" > "$PREFIX/bin/weaver" 2>/dev/null; then
+    chmod +x "$PREFIX/bin/weaver"
+elif printf '%s\n' "$_wrapper" | sudo tee /usr/local/bin/weaver >/dev/null 2>&1; then
+    sudo chmod +x /usr/local/bin/weaver
+else
     echo "Add to PATH manually: alias weaver='python3 $INSTALL_DIR/weaver.py'"
+fi
 
 echo ""
 echo "═══════════════════════════════════════"
