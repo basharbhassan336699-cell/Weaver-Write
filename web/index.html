@@ -1879,12 +1879,15 @@
           </button>
 
           <div class="toolbar-right">
-            <div class="model-selector" onclick="void(0)">
-              <span class="model-name">Sonnet 4.6</span>
-              <span style="color:var(--text-muted);font-size:13px;">Medium</span>
-              <svg class="chevron" viewBox="0 0 14 14" fill="none">
-                <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
+            <div class="model-selector">
+              <span class="model-name" id="modelName" title="Connected model">…</span>
+              <select id="effortSelect" title="Effort — higher means more thorough and precise"
+                      style="background:transparent;color:var(--text-muted,#9a95ad);border:1px solid var(--border,#333);border-radius:6px;font-size:13px;padding:2px 6px;outline:none;cursor:pointer;">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
             </div>
 
             <button class="send-btn" id="sendBtn" title="Send" onclick="sendMessage()">
@@ -2951,10 +2954,11 @@
       messages.scrollTop = messages.scrollHeight;
 
       try {
+        const effortEl = document.getElementById('effortSelect');
         const res = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text })
+          body: JSON.stringify({ message: text, effort: effortEl ? effortEl.value : 'medium' })
         });
         const data = await res.json();
         if (data && data.error) {
@@ -3092,6 +3096,28 @@
       sendMessage();
     }
   });
+</script>
+<script>
+  // Show the real connected model name, and remember the Effort choice.
+  (function () {
+    fetch('/api/status').then(r => r.json()).then(d => {
+      const el = document.getElementById('modelName');
+      if (!el) return;
+      el.textContent = d.model || d.provider || 'Not connected';
+      if (d.provider && d.model) el.title = d.provider + ' · ' + d.model;
+    }).catch(() => {});
+
+    const eff = document.getElementById('effortSelect');
+    if (eff) {
+      try {
+        const saved = localStorage.getItem('weaver_effort');
+        if (saved) eff.value = saved;
+      } catch (e) {}
+      eff.addEventListener('change', () => {
+        try { localStorage.setItem('weaver_effort', eff.value); } catch (e) {}
+      });
+    }
+  })();
 </script>
 </body>
 </html>
