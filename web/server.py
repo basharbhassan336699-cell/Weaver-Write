@@ -172,7 +172,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "model": s.get("WEAVER_MODEL", "")})
             return
         if path == "/api/providers":
-            self._json({"providers": providers.provider_names()})
+            reg = []
+            try:
+                for p in providers.load_registry():
+                    reg.append({"name": p.get("name", ""),
+                                "base_url": p.get("base_url", ""),
+                                "auth": p.get("auth", "bearer")})
+            except Exception:
+                reg = [{"name": n, "base_url": "", "auth": "bearer"}
+                       for n in providers.provider_names()]
+            self._json({"providers": [r["name"] for r in reg], "registry": reg})
             return
         # static files (js/css/img) from web/
         safe = path.lstrip("/").replace("..", "")
