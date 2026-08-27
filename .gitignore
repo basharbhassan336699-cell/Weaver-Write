@@ -17,6 +17,8 @@ config/providers.json
 weaver_memory.db
 # generated output documents (written to disk by the pipeline)
 outputs/
+# saved chats/messages (persist on disk, never committed or wiped by updates)
+config/chats/
 
 # ── OS / editor noise ──
 .DS_Store

@@ -494,6 +494,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "provider": s.get("WEAVER_PROVIDER", ""),
                         "model": s.get("WEAVER_MODEL", "")})
             return
+        if path == "/api/health":
+            # lets the user confirm the REAL server (with persistence) is the
+            # one running — the static fallback has no /api endpoints at all.
+            try:
+                n = len([f for f in os.listdir(_CHATS_DIR)
+                         if f.endswith(".json")])
+            except OSError:
+                n = 0
+            self._json({"ok": True, "server": "full",
+                        "chats_dir": _CHATS_DIR, "chats": n})
+            return
         if path == "/api/chats":
             self._json({"chats": _chats_index()})
             return
