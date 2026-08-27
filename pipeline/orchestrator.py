@@ -545,9 +545,40 @@ class WeaverOrchestrator:
                 mem.set_status(7, f"تحقق صارم (تخطّي: {e})")
 
 
+    @staticmethod
+    def _resolve_output_dir() -> str:
+        """Where finished files are written. Priority:
+        1) WEAVER_OUTPUT_DIR (explicit override),
+        2) the phone's shared storage in a "Weaver Write" folder — on
+           Termux/Android (~/storage/shared, /storage/emulated/0, /sdcard),
+        3) the project's outputs/ folder (desktop / when storage isn't set up).
+        The chosen directory is created if missing."""
+        import os
+        env = os.environ.get("WEAVER_OUTPUT_DIR", "").strip()
+        if env:
+            d = os.path.expanduser(env)
+            try:
+                os.makedirs(d, exist_ok=True)
+                return d
+            except OSError:
+                pass
+        for base in (os.path.expanduser("~/storage/shared"),
+                     "/storage/emulated/0", "/sdcard"):
+            if os.path.isdir(base):
+                d = os.path.join(base, "Weaver Write")
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    return d
+                except OSError:
+                    continue
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        d = os.path.join(root, "outputs")
+        os.makedirs(d, exist_ok=True)
+        return d
+
     def _export_fallback(self, out_dir: str, safe: str, task: Task) -> str:
         """Always writes a REAL file to disk (Markdown) even when a format's
-        library is missing — so an output always exists in outputs/."""
+        library is missing — so an output always exists."""
         import os
         out = os.path.join(out_dir, safe + ".md")
         body = task.draft or ""
@@ -559,16 +590,15 @@ class WeaverOrchestrator:
         return out
 
     def _export(self, task: Task) -> str:
-        """Route to the right builder by output_format and WRITE the file into
-        the project's outputs/ folder (no download links). Any builder failure
-        (e.g. a missing library) degrades to a real Markdown file."""
+        """Route to the right builder by output_format and WRITE the file to
+        the resolved output directory (the phone's "Weaver Write" folder on
+        Android; see _resolve_output_dir). No download links. Any builder
+        failure (e.g. a missing library) degrades to a real Markdown file."""
         import os, re
         card = task.task_card
         lang = card.get("language", "ar")
         fmt = self._primary_format(card)
-        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        out_dir = os.path.join(root, "outputs")
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir = self._resolve_output_dir()
         topic = (card.get("topic") or task.description or "document").strip()
         safe = re.sub(r'[\\/:*?"<>|]+', "", topic)
         safe = re.sub(r"\s+", "_", safe)[:60] or "document"

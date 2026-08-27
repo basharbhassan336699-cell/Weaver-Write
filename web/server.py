@@ -676,11 +676,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             reply = (res.get("reply") or "").strip()
             out = res.get("output_path")
             if out:
-                try:
-                    rel = os.path.relpath(out, _ROOT)
-                except Exception:
-                    rel = out
-                note = "📄 تم حفظ الملف: " + rel
+                # show the full path — the file lives in the phone's
+                # "Weaver Write" folder (outside the project), so a relative
+                # path would be misleading.
+                note = "📄 تم حفظ الملف: " + out
                 reply = (reply + "\n\n" + note) if reply else note
             if not reply:
                 reply = "(لم يُنتج النظام رداً)"
