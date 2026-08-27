@@ -525,6 +525,26 @@ def cmd_keys(args):
             print(f"Removed {prov}.")
 
 
+def _serve_static(here, port):
+    """Last-resort static file server (UI only, NO API). Used only when the
+    full server can't be imported; the caller prints a loud warning first."""
+    webdir = os.path.join(here, "web")
+    if not os.path.isdir(webdir):
+        print(f"No web/ directory found at {webdir}")
+        return
+    import http.server, socketserver, functools
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler,
+                                directory=webdir)
+
+    class _Reuse(socketserver.TCPServer):
+        allow_reuse_address = True
+
+    with _Reuse(("127.0.0.1", port), handler) as httpd:
+        print(f"Weaver Write (static only) at http://127.0.0.1:{port}")
+        print("Press Ctrl+C to stop.")
+        httpd.serve_forever()
+
+
 def cmd_serve(args):
     """Start the local web UI (serves web/index.html + API, synced with .env)."""
     port = getattr(args, "port", None) or WEB_PORT
@@ -532,25 +552,35 @@ def cmd_serve(args):
     if here not in sys.path:
         sys.path.insert(0, here)
     import errno
+    # Import the full server FIRST. If it fails, say so LOUDLY — the static
+    # fallback below has no API, so the AI and saved chats would silently stop
+    # working (chats would live only in the browser and vanish on reload).
+    serve = None
     try:
+        from web.server import serve
+    except Exception as e:
+        import traceback
+        print("\n" + "=" * 55)
+        print("⚠️  تعذّر تحميل الخادم الكامل (web/server.py).")
+        print("    بدونه لا يعمل: الذكاء، ولا حفظ المحادثات، ولا الأقسام.")
+        print(f"    السبب: {type(e).__name__}: {e}")
+        print("-" * 55)
+        traceback.print_exc()
+        print("=" * 55)
+        print("سيبدأ خادم ثابت مؤقت (يعرض الواجهة فقط، بلا حفظ).")
+        print("أصلح الخطأ أعلاه ثم أعد التشغيل للحصول على الحفظ الدائم.\n")
         try:
-            from web.server import serve
-            serve(port)
-        except ImportError:
-            # fallback: static file server if web.server isn't importable
-            webdir = os.path.join(here, "web")
-            if not os.path.isdir(webdir):
-                print(f"No web/ directory found at {webdir}")
-                return
-            import http.server, socketserver, functools
-            handler = functools.partial(http.server.SimpleHTTPRequestHandler,
-                                        directory=webdir)
-            class _Reuse(socketserver.TCPServer):
-                allow_reuse_address = True
-            with _Reuse(("127.0.0.1", port), handler) as httpd:
-                print(f"Weaver Write web UI at http://127.0.0.1:{port}")
-                print("Press Ctrl+C to stop.")
-                httpd.serve_forever()
+            _serve_static(here, port)
+        except OSError as e2:
+            if getattr(e2, "errno", None) in (errno.EADDRINUSE, 98):
+                print(f"\nWeaver Write is already running at http://127.0.0.1:{port}")
+            else:
+                print(f"Could not start the static server: {e2}")
+        except KeyboardInterrupt:
+            print("\nStopped.")
+        return
+    try:
+        serve(port)
     except OSError as e:
         if e.errno in (errno.EADDRINUSE, 98):
             print(f"\nWeaver Write is already running at http://127.0.0.1:{port}")
