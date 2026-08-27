@@ -645,6 +645,83 @@ class WeaverOrchestrator:
         except Exception as e:
             mem.set_status(8, f"إخراج (تخطّي: {e})")
 
+    # ── تشغيل متزامن لطلب واحد عبر خط الأنابيب الكامل ──
+
+    def _result(self, task: Task) -> dict:
+        """Shape one finished task into a reply dict for the chat / terminal."""
+        card = task.task_card
+        reply = card.get("reply") or task.draft or ""
+        return {
+            "reply": reply,
+            "output_path": task.output_path,
+            "topic": card.get("topic"),
+            "task_type": card.get("task_type"),
+            "language": card.get("language"),
+            "output_format": card.get("output_format"),
+            "tools": task.tools,
+            "skills": task.skills,
+            "status": getattr(task.status, "value", str(task.status)),
+        }
+
+    async def run_once(self, description: str, input_files: list = None,
+                       sandbox: bool = False) -> dict:
+        """Run ONE request through the full pipeline (layers 0→8) and return the
+        reply + output file path. Used by the web chat and the terminal so every
+        request goes through the whole system. Isolated: its own task memory,
+        created and closed here. Sandbox is off by default (text chat needs no
+        package installs); pass sandbox=True for tasks with input files."""
+        task = Task(description=description, input_files=input_files or [])
+        task.started_at = time.time()
+        mem = self.memory.create_task(task.task_id)
+        sb = None
+        try:
+            if sandbox:
+                try:
+                    sb = await self.sandbox.create_for_task(task.task_id)
+                except Exception:
+                    sb = None
+
+            # conduct guard (before Layer 0): stay professional under abuse
+            try:
+                g = self._skill_call("conduct_guard", "conduct_guard",
+                                     "guard_response", description,
+                                     self._detect_lang(description))
+                task.task_card["conduct"] = g
+                if g.get("hostile") and not g.get("do_task"):
+                    task.task_card["reply"] = g.get("reply_prefix", "")
+                    task.status = TaskStatus.COMPLETED
+                    return self._result(task)
+            except Exception:
+                pass
+
+            await self._layer_0(task, mem)
+            try:
+                await self._layer_1(task, mem, sb)
+            except Exception as e:
+                mem.set_status(1, f"بنية تحتية (تخطّي: {e})")
+            try:
+                await self._layer_2(task, mem)
+            except Exception as e:
+                mem.set_status(2, f"إدخال (تخطّي: {e})")
+            await self._layer_3(task, mem)
+            await self._layer_4(task, mem)
+            await self._layer_5(task, mem)
+            await self._layer_6(task, mem)
+            await self._layer_6_5(task, mem)
+            await self._layer_7(task, mem)
+            await self._layer_8(task, mem)
+
+            task.status = TaskStatus.COMPLETED
+            task.completed_at = time.time()
+            return self._result(task)
+        finally:
+            try:
+                if sb is not None:
+                    await self.sandbox.destroy(task.task_id)
+            except Exception:
+                pass
+            self.memory.close_task(task.task_id)
+
     # ── حالة النظام ──
 
     def status(self) -> dict:
@@ -672,3 +749,30 @@ class WeaverOrchestrator:
 
 
 import os  # needed for layer_2
+
+
+# ── synchronous entry point (used by web/server.py and weaver.py) ──
+_SHARED_ORCH = None
+
+
+def run_pipeline_sync(description: str, input_files: list = None,
+                      llm_fn=None) -> dict:
+    """Run one request through the full pipeline and return the reply dict.
+    Safe to call from a synchronous context (a threaded HTTP handler, or the
+    CLI): it spins its own event loop and its own isolated task memory. Each
+    call builds the LLM client fresh from config/.env, so a key added at
+    runtime is picked up without a restart."""
+    import asyncio
+    import tempfile
+
+    fd, db = tempfile.mkstemp(prefix="weaver_", suffix=".db")
+    os.close(fd)
+    orch = WeaverOrchestrator(db_path=db, llm_fn=llm_fn)
+    try:
+        return asyncio.run(orch.run_once(description, input_files,
+                                         sandbox=bool(input_files)))
+    finally:
+        try:
+            os.remove(db)
+        except OSError:
+            pass

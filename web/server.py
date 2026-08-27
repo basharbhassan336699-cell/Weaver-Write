@@ -629,8 +629,50 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not msg:
                 self._json({"error": "empty"})
                 return
-            self._json(_chat(msg, body.get("history"),
-                             effort=body.get("effort", "medium")))
+            # Every request goes through the FULL pipeline (WeaverOrchestrator):
+            # understand → route → research → credibility → write → clean →
+            # verify → export. It writes any output file into outputs/.
+            keysync.load_env()
+            if not os.environ.get("WEAVER_API_KEY", "").strip():
+                self._json({"error": "no_key"})
+                return
+            # thread recent turns so the pipeline still sees the conversation
+            history = body.get("history") or []
+            desc = msg
+            if history:
+                ctx = "\n".join(
+                    f"{h.get('role','user')}: {h.get('content','')}"
+                    for h in history[-6:] if isinstance(h, dict))
+                if ctx.strip():
+                    desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
+                            f"[الطلب الحالي]\n{msg}")
+            try:
+                from pipeline.orchestrator import run_pipeline_sync
+                res = run_pipeline_sync(desc)
+            except Exception as e:
+                self._json({"error": "pipeline_error", "message": str(e)})
+                return
+            reply = (res.get("reply") or "").strip()
+            out = res.get("output_path")
+            if out:
+                try:
+                    rel = os.path.relpath(out, _ROOT)
+                except Exception:
+                    rel = out
+                note = "📄 تم حفظ الملف: " + rel
+                reply = (reply + "\n\n" + note) if reply else note
+            if not reply:
+                reply = "(لم يُنتج النظام رداً)"
+            self._json({
+                "reply": reply,
+                "output_path": out,
+                "pipeline": {
+                    "tools": res.get("tools"), "skills": res.get("skills"),
+                    "task_type": res.get("task_type"),
+                    "topic": res.get("topic"),
+                    "output_format": res.get("output_format"),
+                },
+            })
             return
 
         if path == "/api/providers/models":
