@@ -751,6 +751,37 @@ class WeaverOrchestrator:
 import os  # needed for layer_2
 
 
+# ── intent: is this a document/generation task, or a quick question? ──
+# A quick question is answered directly by the model (fast, no file). A task
+# with a creation intent (write/report/presentation/analysis/export …) goes
+# through the full pipeline. Bilingual triggers; substring match.
+_TASK_TRIGGERS = (
+    # Arabic — creation verbs
+    "اكتب", "أكتب", "اكتبي", "اعمل", "أعمل", "اصنع", "أنشئ", "انشئ", "صمم",
+    "صمّم", "جهّز", "جهز", "حضّر", "حضر", "ولّد", "ولد", "أخرج", "اخرج", "لخّص",
+    "لخص", "حلّل", "حلل",
+    # Arabic — document nouns
+    "بحث", "بحثاً", "مقال", "مقالة", "تقرير", "دراسة", "أطروحة", "رسالة علمية",
+    "عرض", "بوربوينت", "شرائح", "ملف", "مستند", "وثيقة", "صفحة", "صفحات",
+    "مراجع", "مرجع", "استشهاد", "جدول", "جداول", "رسم بياني", "مخطط", "واجب",
+    "ملخص", "خطة", "سيرة ذاتية", "تحليل بيانات",
+    # English — creation verbs + document nouns
+    "write", "create", "generate", "make ", "design", "draft", "compose",
+    "essay", "report", "article", "research", "paper", "presentation",
+    "slides", "powerpoint", "deck", "document", "docx", "pptx", "xlsx", "pdf",
+    "references", "citation", "table", "chart", "analyze data", "analyse data",
+    "thesis", "dissertation", "summariz", "summaris", "outline", "resume",
+    "cv ", "assignment",
+)
+
+
+def is_document_task(text: str) -> bool:
+    """True when the message asks to produce/analyse a document (→ full
+    pipeline); False for a quick conversational question (→ direct answer)."""
+    t = (text or "").lower()
+    return any(trig in t for trig in _TASK_TRIGGERS)
+
+
 # ── synchronous entry point (used by web/server.py and weaver.py) ──
 _SHARED_ORCH = None
 

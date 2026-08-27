@@ -629,9 +629,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not msg:
                 self._json({"error": "empty"})
                 return
-            # Every request goes through the FULL pipeline (WeaverOrchestrator):
-            # understand → route → research → credibility → write → clean →
-            # verify → export. It writes any output file into outputs/.
+            # Quick question → fast direct answer (keeps history + effort).
+            # Document/generation task → the FULL pipeline below.
+            try:
+                from pipeline.orchestrator import is_document_task
+                _is_task = is_document_task(msg)
+            except Exception:
+                _is_task = True
+            if not _is_task:
+                self._json(_chat(msg, body.get("history"),
+                                 effort=body.get("effort", "medium")))
+                return
+            # FULL pipeline (WeaverOrchestrator): understand → route → research
+            # → credibility → write → clean → verify → export (writes outputs/).
             keysync.load_env()
             if not os.environ.get("WEAVER_API_KEY", "").strip():
                 self._json({"error": "no_key"})

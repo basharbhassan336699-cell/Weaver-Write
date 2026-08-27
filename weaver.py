@@ -682,10 +682,28 @@ def cmd_ask(args):
             return
     except Exception:
         pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    # Quick question → fast direct answer; document task → full pipeline.
     try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        if here not in sys.path:
-            sys.path.insert(0, here)
+        from pipeline.orchestrator import is_document_task
+        _is_task = is_document_task(q)
+    except Exception:
+        _is_task = True
+    if not _is_task:
+        try:
+            chat = _load_chat()
+            r = chat(q, timeout=120)
+        except Exception as e:
+            print(f"Could not load chat: {e}")
+            return
+        if r.get("error"):
+            print(f"[error: {r.get('error')}] {r.get('message','')}")
+        else:
+            print("\n" + (r.get("reply") or "").strip() + "\n")
+        return
+    try:
         from pipeline.orchestrator import run_pipeline_sync
         res = run_pipeline_sync(q)
     except Exception as e:
