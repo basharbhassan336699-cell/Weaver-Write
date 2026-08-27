@@ -549,6 +549,37 @@
   .msg-action-btn.done { color: #4caf7d; }
   .msg-action-btn.done svg { stroke: #4caf7d; }
 
+  /* ── Live tool-use / function-call timeline ─── */
+  .tool-steps {
+    display: flex; flex-direction: column; gap: 2px;
+    margin: 0 0 10px; padding-inline-start: 4px;
+    border-inline-start: 2px solid var(--border);
+  }
+  .tstep {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 0.86em; color: var(--text-muted);
+    padding: 3px 8px; line-height: 1.5;
+  }
+  .tstep-ico {
+    width: 13px; height: 13px; flex-shrink: 0; border-radius: 50%;
+    position: relative;
+  }
+  .tstep.running .tstep-ico {
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    animation: tspin 0.7s linear infinite;
+  }
+  .tstep.ok .tstep-ico {
+    border: 0; background: transparent;
+  }
+  .tstep.ok .tstep-ico::after {
+    content: ''; position: absolute; left: 3px; top: 0px;
+    width: 4px; height: 8px; border: solid #4caf7d;
+    border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+  .tstep.running .tstep-label { color: var(--text); }
+  .tstep-detail { color: var(--text-dim); font-size: 0.95em; }
+  @keyframes tspin { to { transform: rotate(360deg); } }
+
   /* When chatting: hide hero decorations, dock the input */
   .main.chat-mode { justify-content: flex-start; overflow: hidden; }
   .main.chat-mode .top-bar { position: absolute; }
@@ -3197,13 +3228,37 @@
       aiMsg.innerHTML =
         logoSVG +
         '<div class="msg-wrapper">' +
+          '<div class="tool-steps" hidden></div>' +
           '<div class="bubble"></div>' +
           actionsHTML +
         '</div>';
       aiMsg.dataset.prompt = text;  // for the Regenerate button
 
       const bubble = aiMsg.querySelector('.bubble');
+      const stepsBox = aiMsg.querySelector('.tool-steps');
       bubble.textContent = '…';
+
+      // ── live tool-use timeline ──
+      function stepsMarkLastDone() {
+        const last = stepsBox.querySelector('.tstep.running');
+        if (last) { last.classList.remove('running'); last.classList.add('ok'); }
+      }
+      function stepsAdd(label) {
+        stepsBox.hidden = false;
+        stepsMarkLastDone();
+        const row = document.createElement('div');
+        row.className = 'tstep running';
+        row.innerHTML = '<span class="tstep-ico"></span><span class="tstep-label"></span><span class="tstep-detail"></span>';
+        row.querySelector('.tstep-label').textContent = label || '';
+        stepsBox.appendChild(row);
+        messages.scrollTop = messages.scrollHeight;
+        return row;
+      }
+      function stepsDetail(txt) {
+        const last = stepsBox.querySelector('.tstep:last-child .tstep-detail');
+        if (last && txt) last.textContent = '— ' + txt;
+      }
+      function stepsFinishAll() { stepsMarkLastDone(); }
 
       // Update timestamp every minute
       const timeEl = aiMsg.querySelector('.msg-time');
@@ -3221,38 +3276,47 @@
       messages.scrollTop = messages.scrollHeight;
 
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
+      let gotReply = false;
+      function applyReply(reply) {
+        gotReply = true;
+        if (reply) { assistantRaw = reply; bubble.innerHTML = renderMarkdown(reply); }
+        else { bubble.textContent = (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)'); }
+        if (reply && typeof wvAutoSaveArtifacts === 'function') wvAutoSaveArtifacts(reply, currentChatId);
+      }
+      function handleEvent(ev) {
+        if (!ev || !ev.t) return;
+        if (ev.t === 'step') { stepsAdd(ev.label); }
+        else if (ev.t === 'detail') { stepsDetail(ev.detail); }
+        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); }
+        else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
+        else if (ev.t === 'done') { stepsFinishAll(); }
+      }
       try {
         const effortEl = document.getElementById('effortSelect');
-        // send the earlier turns as history so the model remembers the whole
-        // conversation (currentMessages already ends with this user message,
-        // which the backend appends itself — so drop the last entry here)
         const history = currentMessages.slice(0, -1).slice(-30);
-        const res = await fetch('/api/chat', {
+        const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ message: text, history: history, effort: effortEl ? effortEl.value : 'medium' })
         });
-        const data = await res.json();
-        if (data && data.error) {
-          if (data.error === 'no_key') {
-            bubble.textContent = isAr
-              ? 'لم يتم ضبط مفتاح API بعد. أضِف مفتاحك من قسم Keys في القائمة الجانبية.'
-              : 'No API key is set yet. Add your key from the Keys section in the sidebar.';
-          } else {
-            bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (data.message || data.error);
-          }
-        } else {
-          if (data && data.reply) {
-            assistantRaw = data.reply;
-            bubble.innerHTML = renderMarkdown(data.reply);
-          } else {
-            bubble.textContent = (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)');
-          }
-          if (data && data.reply && typeof wvAutoSaveArtifacts === 'function') {
-            wvAutoSaveArtifacts(data.reply, currentChatId);
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let sep;
+          while ((sep = buf.indexOf('\n\n')) >= 0) {
+            const chunk = buf.slice(0, sep); buf = buf.slice(sep + 2);
+            const line = chunk.split('\n').find(l => l.startsWith('data:'));
+            if (!line) continue;
+            try { handleEvent(JSON.parse(line.slice(5).trim())); } catch (e) {}
           }
         }
+        if (!gotReply) bubble.textContent = (isAr ? '(لا يوجد رد)' : '(no reply)');
       } catch (err) {
+        stepsFinishAll();
         bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
       }
       // persist the RAW reply (markdown) so reloads re-render the formatting;

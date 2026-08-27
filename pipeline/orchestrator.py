@@ -751,13 +751,28 @@ class WeaverOrchestrator:
             "status": getattr(task.status, "value", str(task.status)),
         }
 
+    def _emit(self, kind: str, label: str = "", detail: str = ""):
+        """Push a progress event to the optional progress callback (used by the
+        streaming chat endpoint to show tool-use steps live and in order)."""
+        cb = getattr(self, "_progress", None)
+        if not cb:
+            return
+        try:
+            cb({"t": kind, "label": label, "detail": detail})
+        except Exception:
+            pass
+
     async def run_once(self, description: str, input_files: list = None,
-                       sandbox: bool = False) -> dict:
+                       sandbox: bool = False, progress=None) -> dict:
         """Run ONE request through the full pipeline (layers 0→8) and return the
         reply + output file path. Used by the web chat and the terminal so every
         request goes through the whole system. Isolated: its own task memory,
         created and closed here. Sandbox is off by default (text chat needs no
-        package installs); pass sandbox=True for tasks with input files."""
+        package installs); pass sandbox=True for tasks with input files.
+        `progress(ev)` receives step events for a live tool-use timeline."""
+        self._progress = progress
+        ar = (self._detect_lang(description) == "ar")
+        L = (lambda a, e: a if ar else e)  # localized label helper
         task = Task(description=description, input_files=input_files or [])
         task.started_at = time.time()
         mem = self.memory.create_task(task.task_id)
@@ -791,18 +806,47 @@ class WeaverOrchestrator:
                 await self._layer_2(task, mem)
             except Exception as e:
                 mem.set_status(2, f"إدخال (تخطّي: {e})")
+
+            self._emit("step", L("فهم الطلب", "Understanding the request"))
             await self._layer_3(task, mem)
+            self._emit("detail", "",
+                       L("الأدوات: ", "Tools: ") + ", ".join(task.tools or []))
+
+            if "academic_search" in task.tools or task.task_card.get("needs_academic_search"):
+                self._emit("step", L("بحث أكاديمي", "Academic search"))
+            if "web_search" in task.tools:
+                self._emit("step", L("بحث في الويب", "Searching the web"))
             await self._layer_4(task, mem)
+            _nsrc = len(task.task_card.get("sources", []) or [])
+            if _nsrc:
+                self._emit("detail", "",
+                           L(f"{_nsrc} مصدر", f"{_nsrc} sources"))
+
+            self._emit("step", L("فحص مصداقية المصادر", "Checking source credibility"))
             await self._layer_5(task, mem)
+
+            self._emit("step", L("كتابة المحتوى", "Writing the content"))
             await self._layer_6(task, mem)
+            self._emit("detail", "",
+                       L(f"{len(task.sections or [])} قسم",
+                         f"{len(task.sections or [])} sections"))
+
+            self._emit("step", L("تنظيف وأنسنة النص", "Cleaning up the text"))
             await self._layer_6_5(task, mem)
+
+            self._emit("step", L("التحقق من التوثيق", "Verifying citations"))
             await self._layer_7(task, mem)
+
+            self._emit("step", L("توليد الملف", "Generating the file"))
             await self._layer_8(task, mem)
+            if task.output_path:
+                self._emit("detail", "", task.output_path)
 
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.time()
             return self._result(task)
         finally:
+            self._progress = None
             try:
                 if sb is not None:
                     await self.sandbox.destroy(task.task_id)
@@ -875,12 +919,13 @@ _SHARED_ORCH = None
 
 
 def run_pipeline_sync(description: str, input_files: list = None,
-                      llm_fn=None) -> dict:
+                      llm_fn=None, progress=None) -> dict:
     """Run one request through the full pipeline and return the reply dict.
     Safe to call from a synchronous context (a threaded HTTP handler, or the
     CLI): it spins its own event loop and its own isolated task memory. Each
     call builds the LLM client fresh from config/.env, so a key added at
-    runtime is picked up without a restart."""
+    runtime is picked up without a restart. `progress(ev)` streams step
+    events (used by the streaming chat endpoint)."""
     import asyncio
     import tempfile
 
@@ -889,7 +934,8 @@ def run_pipeline_sync(description: str, input_files: list = None,
     orch = WeaverOrchestrator(db_path=db, llm_fn=llm_fn)
     try:
         return asyncio.run(orch.run_once(description, input_files,
-                                         sandbox=bool(input_files)))
+                                         sandbox=bool(input_files),
+                                         progress=progress))
     finally:
         try:
             os.remove(db)
