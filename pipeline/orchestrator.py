@@ -66,6 +66,12 @@ class Task:
     # بطاقة المهمة (تُملأ في طبقة الفهم)
     task_card: dict = field(default_factory=dict)
 
+    # ما يُوجَّه إليه في طبقة الفهم (Phase 3) ويُستهلك في الطبقات التالية
+    tools: list = field(default_factory=list)     # أسماء الأدوات المطلوبة
+    skills: list = field(default_factory=list)    # أسماء المهارات المطلوبة
+    draft: str = ""                                # مسودة النص (طبقة ٦)
+    sections: list = field(default_factory=list)   # أقسام الوثيقة النهائية
+
     def elapsed(self) -> float:
         if self.started_at:
             end = self.completed_at or time.time()
@@ -90,9 +96,36 @@ class WeaverOrchestrator:
         db_path: str = "./weaver_memory.db",
         sandbox_domain: str = "localhost:8080",
         sandbox_key: str = "",
+        llm_fn=None,
+        vision_fn=None,
     ):
         self.memory = MemoryManager(db_path=db_path)
         self.sandbox = SandboxManager(domain=sandbox_domain, api_key=sandbox_key)
+
+        # The one LLM client, built from config/.env. May be None (no key) →
+        # every layer then keeps its offline placeholder behaviour.
+        try:
+            from core.llm import get_llm_fn, get_vision_fn
+            self.llm_fn = llm_fn or get_llm_fn()
+            self.vision_fn = vision_fn or get_vision_fn()
+        except Exception:
+            self.llm_fn = llm_fn
+            self.vision_fn = vision_fn
+        self.caps = _CAPABILITIES
+
+        # main system prompt + the professional-conduct rule (rule 10), so the
+        # MODEL itself also stays calm under hostility
+        try:
+            from pipeline.prompts import SYSTEM_PROMPT_MAIN
+            from capabilities.skills.conduct_guard.scripts.conduct_guard import (
+                CONDUCT_SYSTEM_RULE)
+            self.system_main = SYSTEM_PROMPT_MAIN + "\n\n" + CONDUCT_SYSTEM_RULE
+        except Exception:
+            try:
+                from pipeline.prompts import SYSTEM_PROMPT_MAIN
+                self.system_main = SYSTEM_PROMPT_MAIN
+            except Exception:
+                self.system_main = None
 
         self._queue: list[Task] = []
         self._active: dict[str, Task] = {}      # task_id → Task
@@ -145,6 +178,21 @@ class WeaverOrchestrator:
         sb = self.sandbox.get(task.task_id)
 
         try:
+            # ── conduct guard (before Layer 0): stay professional under abuse ──
+            try:
+                lang0 = self._detect_lang(task.description)
+                g = self._skill_call("conduct_guard", "conduct_guard",
+                                     "guard_response", task.description, lang0)
+                task.task_card["conduct"] = g
+                if g.get("hostile") and not g.get("do_task"):
+                    # abuse only, no task: calm redirect, do nothing else
+                    task.task_card["reply"] = g.get("reply_prefix", "")
+                    task.status = TaskStatus.COMPLETED
+                    task.completed_at = time.time()
+                    return
+            except Exception:
+                pass
+
             # الطبقات بالتسلسل
             await self._layer_0(task, mem)
             await self._layer_1(task, mem, sb)
@@ -217,37 +265,218 @@ class WeaverOrchestrator:
                     page=page.page,
                 )
 
-    async def _layer_3(self, task: Task, mem: TaskMemory):
-        """٣: الفهم — تحليل المهمة وبناء بطاقتها."""
-        task.status = TaskStatus.LAYER_3
-        mem.set_status(3, "تحليل المهمة")
-        from core.thinking import ThinkingEngine
-        from pipeline.prompts import SYSTEM_PROMPT_MAIN
-        thinking = ThinkingEngine()
-        cot = thinking.cot_prompt(task.description)
-        # النموذج سيُجيب هنا — task.task_card تُملأ بالنتيجة
-        task.task_card = {
+    @staticmethod
+    def _detect_lang(text: str) -> str:
+        """Cheap language guess for the conduct guard: Arabic if any Arabic
+        letter is present, else English."""
+        for ch in (text or ""):
+            if "؀" <= ch <= "ۿ":
+                return "ar"
+        return "en"
+
+    @staticmethod
+    def _skill_call(skill: str, module: str, func: str, *args, **kwargs):
+        """Dynamically import capabilities/skills/<skill>/scripts/<module>.py
+        and call <func>(*args, **kwargs). Raises on failure — callers guard it
+        so the pipeline degrades to placeholder behaviour."""
+        import os as _os, sys as _sys, importlib
+        sp = _os.path.abspath(_os.path.join(
+            _os.path.dirname(__file__), "..", "capabilities", "skills",
+            skill, "scripts"))
+        if sp not in _sys.path:
+            _sys.path.insert(0, sp)
+        mod = importlib.import_module(module)
+        return getattr(mod, func)(*args, **kwargs)
+
+    @staticmethod
+    def _primary_format(task_card: dict) -> str:
+        """The first requested output format as a lowercase string (docx/pptx/
+        xlsx/pdf), tolerating either a list or a bare string in the card."""
+        of = task_card.get("output_format", ["DOCX"])
+        if isinstance(of, list):
+            of = of[0] if of else "DOCX"
+        return str(of).lower()
+
+    def _placeholder_card(self, task: Task) -> dict:
+        """The offline fallback task card (used when llm_fn is None or fails)."""
+        return {
             "task_type": "بحث",
             "topic": task.description,
             "language": "ar",
             "citation_style": "APA",
-            "output_format": "DOCX",
+            "output_format": ["DOCX"],
         }
 
+    def _route(self, task: Task):
+        """Phase 3: from the understood task_card, compute ONCE the tools &
+        skills the task needs, so later layers act only on what's required
+        (each tool/skill invoked only when needed — no overlap)."""
+        card = task.task_card
+        of = card.get("output_format", [])
+        of = of if isinstance(of, list) else [of]
+        text = f"{card.get('topic','')} {task.description} " \
+               f"{card.get('task_type','')} {' '.join(str(x) for x in of)}"
+        if self.caps:
+            task.tools = [t.name for t in self.caps.match_tools(text)]
+            task.skills = [s.name for s in self.caps.match_skills(text)]
+        else:
+            task.tools, task.skills = [], []
+        # always-on skills by task type
+        cs = str(card.get("citation_style", "")).upper()
+        if cs and cs != "UNSPECIFIED":
+            task.skills.append("apa_formatter" if cs == "APA" else "mla_formatter")
+        task.skills.append("arabic_rewriter"
+                           if card.get("language", "ar") == "ar"
+                           else "english_rewriter")
+        task.tools = list(dict.fromkeys(task.tools))   # dedupe, keep order
+        task.skills = list(dict.fromkeys(task.skills))
+
+    async def _layer_3(self, task: Task, mem: TaskMemory):
+        """٣: الفهم — تحليل المهمة وبناء بطاقتها ثم توجيه الأدوات/المهارات."""
+        task.status = TaskStatus.LAYER_3
+        mem.set_status(3, "تحليل المهمة")
+
+        if self.llm_fn:
+            from pipeline.prompts import PROMPT_LAYER_3_UNDERSTAND
+            from core.llm import extract_json
+            prompt = PROMPT_LAYER_3_UNDERSTAND.format(
+                task_description=task.description)
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.2)
+                task.task_card = extract_json(raw)
+            except Exception as e:
+                mem.set_status(3, f"فهم (تخطّي للنموذج: {e})")
+                task.task_card = self._placeholder_card(task)
+        else:
+            task.task_card = self._placeholder_card(task)
+
+        # normalize output_format to a list (prompt/canonical form)
+        of = task.task_card.get("output_format")
+        if isinstance(of, str):
+            task.task_card["output_format"] = [of]
+        elif not of:
+            task.task_card["output_format"] = ["DOCX"]
+
+        # Phase 3: route tools & skills once
+        self._route(task)
+
     async def _layer_4(self, task: Task, mem: TaskMemory):
-        """٤: البحث الأكاديمي — PaperQA2 + استشهاد دقيق برقم الصفحة."""
+        """٤: البحث الأكاديمي — PaperQA2 + استشهاد دقيق برقم الصفحة.
+        يُشغَّل فقط إذا وجّهت طبقة الفهم المهمة إلى academic_search."""
+        if ("academic_search" not in task.tools
+                and not task.task_card.get("needs_academic_search")):
+            task.status = TaskStatus.LAYER_4
+            mem.set_status(4, "لا يلزم بحث أكاديمي — تخطّي")
+            return
         from pipeline.layers.layer_4_research import run as _layer4_run
         await _layer4_run(task, mem)
 
     async def _layer_5(self, task: Task, mem: TaskMemory):
-        """٥: المصداقية — تصنيف المصادر."""
+        """٥: المصداقية — تمرير كل مصدر عبر check_source وإسقاط المرفوض."""
         task.status = TaskStatus.LAYER_5
         mem.set_status(5, "تقييم مصداقية المصادر")
 
+        sources = task.task_card.get("sources") or []
+        if not sources:
+            return  # لا مصادر مُنظّمة لتصفيتها — أبقِ السلوك الافتراضي
+        try:
+            import os as _os, sys as _sys
+            sp = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "capabilities", "skills",
+                "credibility_scorer", "scripts"))
+            if sp not in _sys.path:
+                _sys.path.insert(0, sp)
+            import source_reliability as _sr
+        except Exception as e:
+            mem.set_status(5, f"مصداقية (تخطّي: {e})")
+            return
+        lang = task.task_card.get("language", "ar")
+        kept, dropped = [], []
+        for s in sources:
+            url = s.get("url", "") if isinstance(s, dict) else str(s)
+            r = _sr.check_source(url, task.task_card, lang)
+            if r.get("allowed"):
+                kept.append(s)
+            else:
+                dropped.append({"source": s, "reason": r.get("reason"),
+                                "alternative": r.get("alternative")})
+        task.task_card["sources"] = kept
+        task.task_card["credibility"] = {"kept": len(kept), "dropped": dropped}
+        mem.set_status(5, f"مصداقية: قُبل {len(kept)}، رُفض {len(dropped)}")
+
     async def _layer_6(self, task: Task, mem: TaskMemory):
-        """٦: الصياغة — توليد البحث مع استشهادات."""
+        """٦: الصياغة — بناء البنية ثم المنهجية ثم كتابة كل قسم.
+        كل خطوة تستخدم مهارة/قالباً موجوداً؛ عند غياب النموذج تبقى مسودة فارغة."""
         task.status = TaskStatus.LAYER_6
         mem.set_status(6, "صياغة البحث")
+        card = task.task_card
+        lang = card.get("language", "ar")
+
+        # techniques for the model strength — shown in the tool-call/thinking UI,
+        # never written into the output document. We already write per-section.
+        try:
+            card["reliability"] = self._skill_call(
+                "weak_model_support", "weak_model_support", "reliability_plan",
+                card.get("model_strength", "medium"))
+        except Exception:
+            pass
+
+        # 1) البنية — تخطّى إذا كانت المهمة تُحدّد بنيتها بنفسها (build_structure→None)
+        sections_plan = card.get("sections")
+        if not sections_plan:
+            try:
+                plan = self._skill_call("research_structure", "structures",
+                                        "build_structure", card, lang)
+                if plan and plan.get("sections"):
+                    sections_plan = plan["sections"]
+                    card["sections"] = sections_plan
+                    card.setdefault("tier", plan.get("tier"))
+            except Exception as e:
+                mem.set_status(6, f"بنية (تخطّي: {e})")
+        if not sections_plan:
+            sections_plan = [{"title": card.get("topic", "") or task.description,
+                              "level": 1}]
+
+        # 2) المنهجية — إن لزمت وغابت
+        try:
+            has_m = self._skill_call("research_methodology", "methodology",
+                                     "has_methodology", card)
+            if (not has_m and card.get("task_type", "") in
+                    ("بحث", "research", "دراسة", "thesis", "report", "تقرير",
+                     "analysis", "تحليل")):
+                m = self._skill_call("research_methodology", "methodology",
+                                     "build_methodology", card, lang)
+                if m:
+                    card["methodology"] = m
+        except Exception as e:
+            mem.set_status(6, f"منهجية (تخطّي: {e})")
+
+        # 3) كتابة كل قسم بحقن سياقات RAG الخاصة به
+        rag = mem.get_references(card.get("topic", "") or task.description,
+                                 limit=20) or []
+        rag_ctx = "\n".join(str(x) for x in rag)
+        parts, out_sections = [], []
+        for sec in sections_plan:
+            title = sec.get("title") or sec.get("heading") or ""
+            body = ""
+            if self.llm_fn:
+                from pipeline.prompts import PROMPT_LAYER_6_WRITE
+                prompt = PROMPT_LAYER_6_WRITE.format(
+                    section_name=title, topic=card.get("topic", ""),
+                    citation_style=card.get("citation_style", ""),
+                    length=card.get("page_count", ""),
+                    rag_contexts=rag_ctx or "(none)", prior_content="")
+                try:
+                    body = self.llm_fn(prompt, system=self.system_main,
+                                       temperature=0.5)
+                except Exception as e:
+                    mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
+            parts.append((f"{title}\n{body}").strip())
+            out_sections.append({"heading": title, "body": body})
+        task.draft = "\n\n".join(p for p in parts if p)
+        task.sections = out_sections
+        mem.set_status(6, f"صياغة: {len(out_sections)} قسم")
 
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
@@ -260,7 +489,7 @@ class WeaverOrchestrator:
         mem.set_status(65, "إعادة الصياغة والتنظيف")
 
         lang = task.task_card.get("language", "ar")
-        fmt = task.task_card.get("output_format", "DOCX").lower()
+        fmt = self._primary_format(task.task_card)
         file_type = {"pptx": "pptx", "xlsx": "xlsx", "pdf": "pdf"}.get(fmt, "docx")
 
         import os, sys
@@ -274,24 +503,129 @@ class WeaverOrchestrator:
             sys.path.insert(0, scripts)
         try:
             mod = __import__(fname)
-            draft = mem.get_draft() if hasattr(mem, "get_draft") else task.task_card.get("draft", "")
+            draft = task.draft or task.task_card.get("draft", "")
             if draft:
                 result = mod.humanize_text(draft, file_type=file_type)
-                if hasattr(mem, "set_draft"):
-                    mem.set_draft(result["text"])
+                task.draft = result["text"]
                 task.task_card["humanized"] = True
                 task.task_card["cleaning_issues"] = result.get("issues", [])
         except Exception as e:
             mem.set_status(65, f"إعادة الصياغة (تخطّي: {e})")
 
+    @staticmethod
+    def _allowed_keys(task: Task) -> list:
+        """Citation keys that really exist in the retrieved references."""
+        keys = []
+        for s in task.task_card.get("sources", []) or []:
+            if isinstance(s, dict) and s.get("key"):
+                keys.append(s["key"])
+        pq = task.task_card.get("paperqa_result", {}) or {}
+        for c in (pq.get("citations") or []):
+            if isinstance(c, dict) and c.get("key"):
+                keys.append(c["key"])
+        return keys
+
     async def _layer_7(self, task: Task, mem: TaskMemory):
-        """٧: التحقق من التوثيق — PaperQA truth-check."""
+        """٧: التحقق من التوثيق — PaperQA truth-check ثم strict-RAG صارم:
+        يُسقط أي استشهاد مفتاحه غير موجود فعلاً في المراجع المسترجَعة."""
         from pipeline.layers.layer_7_verify import run as _layer7_run
         await _layer7_run(task, mem)
 
+        allowed = self._allowed_keys(task)
+        # نُطبّق strict-RAG فقط حين توجد مفاتيح فعلية — وإلا فقد نحذف كل شيء
+        if task.draft and allowed:
+            try:
+                res = self._skill_call("weak_model_support", "weak_model_support",
+                                       "enforce_strict_rag", task.draft, allowed)
+                task.draft = res["text"]
+                task.task_card["citations_removed"] = res.get("removed", [])
+                if res.get("removed"):
+                    mem.set_status(7, f"حُذف {len(res['removed'])} استشهاد مُختلَق")
+            except Exception as e:
+                mem.set_status(7, f"تحقق صارم (تخطّي: {e})")
+
+
+    def _export_fallback(self, out_dir: str, safe: str, task: Task) -> str:
+        """Always writes a REAL file to disk (Markdown) even when a format's
+        library is missing — so an output always exists in outputs/."""
+        import os
+        out = os.path.join(out_dir, safe + ".md")
+        body = task.draft or ""
+        if not body and task.sections:
+            body = "\n\n".join(f"# {s.get('heading','')}\n{s.get('body','')}"
+                               for s in task.sections)
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(body or "(لا يوجد محتوى بعد — لم يُضبط مفتاح النموذج)")
+        return out
+
+    def _export(self, task: Task) -> str:
+        """Route to the right builder by output_format and WRITE the file into
+        the project's outputs/ folder (no download links). Any builder failure
+        (e.g. a missing library) degrades to a real Markdown file."""
+        import os, re
+        card = task.task_card
+        lang = card.get("language", "ar")
+        fmt = self._primary_format(card)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        out_dir = os.path.join(root, "outputs")
+        os.makedirs(out_dir, exist_ok=True)
+        topic = (card.get("topic") or task.description or "document").strip()
+        safe = re.sub(r'[\\/:*?"<>|]+', "", topic)
+        safe = re.sub(r"\s+", "_", safe)[:60] or "document"
+        title = topic
+        sections = task.sections or [{"heading": title, "body": task.draft}]
+        references = (card.get("paperqa_result") or {}).get("references")
+
+        try:
+            if fmt == "docx":
+                out = os.path.join(out_dir, safe + ".docx")
+                cover = (card.get("cover") if self._skill_call(
+                    "docx_builder", "docx_frontmatter", "should_add_cover", card)
+                    else None)
+                toc_pos = self._skill_call(
+                    "docx_builder", "docx_frontmatter", "resolve_toc_position",
+                    card) or "after_cover"
+                self._skill_call(
+                    "docx_builder", "docx_advanced", "build_rich_docx",
+                    title=title, sections=sections, output_path=out, lang=lang,
+                    references=references, toc=bool(card.get("toc")),
+                    cover=cover, toc_position=toc_pos)
+                return out
+            if fmt == "pdf":
+                out = os.path.join(out_dir, safe + ".pdf")
+                self._skill_call("pdf_builder", "build_pdf", "build_pdf",
+                                 sections=sections, output_path=out,
+                                 title=title, lang=lang, references=references)
+                return out
+            if fmt == "pptx":
+                out = os.path.join(out_dir, safe + ".pptx")
+                slides = [{"title": s.get("heading", ""),
+                           "bullets": [ln for ln in
+                                       (s.get("body", "") or "").split("\n")
+                                       if ln.strip()]}
+                          for s in sections]
+                self._skill_call("pptx_builder", "build_pptx", "build_pptx",
+                                 slides=slides, output_path=out, lang=lang,
+                                 title=title)
+                return out
+            if fmt == "xlsx":
+                out = os.path.join(out_dir, safe + ".xlsx")
+                data = card.get("data") or [[s.get("heading", ""),
+                                             s.get("body", "")]
+                                            for s in sections]
+                headers = card.get("headers") or (
+                    ["القسم", "المحتوى"] if lang == "ar"
+                    else ["Section", "Content"])
+                self._skill_call("xlsx_builder", "build_xlsx", "build_xlsx",
+                                 data=data, output_path=out, headers=headers,
+                                 lang=lang)
+                return out
+        except Exception:
+            return self._export_fallback(out_dir, safe, task)
+        return self._export_fallback(out_dir, safe, task)
 
     async def _layer_8(self, task: Task, mem: TaskMemory):
-        """٨: الإخراج — توليد الملف النهائي."""
+        """٨: الإخراج — كتابة الملف النهائي على القرص في outputs/."""
         task.status = TaskStatus.LAYER_8
         mem.set_status(8, "توليد الملف النهائي")
         # إضافة تقرير التحقق للوثيقة النهائية
@@ -301,9 +635,15 @@ class WeaverOrchestrator:
                 task.task_card, lang=task.task_card.get("language", "ar")
             )
             if verify_text:
-                mem.add_reference(f"[تقرير التحقق]\n{verify_text}", source="layer_8")
+                mem.add_reference(f"[تقرير التحقق]\n{verify_text}", source_key="layer_8")
         except Exception:
             pass
+        # كتابة الملف الفعلي على القرص
+        try:
+            task.output_path = self._export(task)
+            mem.set_status(8, f"أُخرج الملف: {task.output_path}")
+        except Exception as e:
+            mem.set_status(8, f"إخراج (تخطّي: {e})")
 
     # ── حالة النظام ──
 
