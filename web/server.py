@@ -635,6 +635,90 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
 
+        if path == "/api/chat/stream":
+            # Server-Sent Events: streams tool-use steps live and in order,
+            # then the final reply. Falls back to /api/chat semantics.
+            msg = (body.get("message") or "").strip()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            def sse(obj):
+                try:
+                    self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False)
+                                      + "\n\n").encode("utf-8"))
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+            if not msg:
+                sse({"t": "error", "message": "empty"})
+                return
+            try:
+                from pipeline.orchestrator import is_document_task, run_pipeline_sync
+                _is_task = is_document_task(msg)
+            except Exception:
+                _is_task = True
+
+            isar = any("؀" <= c <= "ۿ" for c in msg)
+            # quick question → answer directly (one step)
+            if not _is_task:
+                sse({"t": "step", "label": "التفكير" if isar else "Thinking"})
+                r = _chat(msg, body.get("history"),
+                          effort=body.get("effort", "medium"))
+                if r.get("error"):
+                    if r.get("error") == "no_key":
+                        sse({"t": "reply", "reply": (
+                            "لم يتم ضبط مفتاح API بعد. أضِف مفتاحك من قسم Keys."
+                            if isar else
+                            "No API key is set yet. Add your key in the Keys section.")})
+                    else:
+                        sse({"t": "reply", "reply": ("خطأ: " if isar else "Error: ")
+                             + (r.get("message") or r.get("error"))})
+                else:
+                    sse({"t": "reply", "reply": r.get("reply") or ""})
+                sse({"t": "done"})
+                return
+
+            # document task → full pipeline with live steps
+            keysync.load_env()
+            if not os.environ.get("WEAVER_API_KEY", "").strip():
+                sse({"t": "reply", "reply": (
+                    "لم يتم ضبط مفتاح API بعد. أضِف مفتاحك من قسم Keys."
+                    if isar else
+                    "No API key is set yet. Add your key in the Keys section.")})
+                sse({"t": "done"})
+                return
+            history = body.get("history") or []
+            desc = msg
+            if history:
+                ctx = "\n".join(f"{h.get('role','user')}: {h.get('content','')}"
+                                for h in history[-6:] if isinstance(h, dict))
+                if ctx.strip():
+                    desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
+                            f"[الطلب الحالي]\n{msg}")
+            try:
+                res = run_pipeline_sync(desc, progress=sse)
+            except Exception as e:
+                sse({"t": "reply", "reply": ("خطأ: " if isar else "Error: ") + str(e)})
+                sse({"t": "done"})
+                return
+            reply = (res.get("reply") or "").strip()
+            out = res.get("output_path")
+            if out:
+                note = "📄 تم حفظ الملف: " + out
+                reply = (reply + "\n\n" + note) if reply else note
+            if not reply:
+                reply = "(لم يُنتج النظام رداً)"
+            sse({"t": "reply", "reply": reply, "output_path": out,
+                 "pipeline": {"tools": res.get("tools"), "skills": res.get("skills"),
+                              "task_type": res.get("task_type"),
+                              "topic": res.get("topic")}})
+            sse({"t": "done"})
+            return
+
         if path == "/api/chat":
             msg = (body.get("message") or "").strip()
             if not msg:
