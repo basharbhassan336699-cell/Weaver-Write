@@ -328,6 +328,18 @@ class WeaverOrchestrator:
         task.skills.append("arabic_rewriter"
                            if card.get("language", "ar") == "ar"
                            else "english_rewriter")
+        # gather live web sources for any task that needs references — its
+        # triggers rarely appear in a plain "اكتب بحثاً…", so add it explicitly
+        needs_sources = (
+            card.get("needs_academic_search")
+            or "academic_search" in task.tools
+            or (cs and cs != "UNSPECIFIED")
+            or card.get("reference_count")
+            or str(card.get("task_type", "")).lower() in
+            ("بحث", "research", "دراسة", "report", "تقرير", "مراجعة أدبيات",
+             "literature review", "analysis", "تحليل", "أطروحة", "thesis"))
+        if needs_sources:
+            task.tools.append("web_search")
         task.tools = list(dict.fromkeys(task.tools))   # dedupe, keep order
         task.skills = list(dict.fromkeys(task.skills))
 
@@ -362,15 +374,61 @@ class WeaverOrchestrator:
         self._route(task)
 
     async def _layer_4(self, task: Task, mem: TaskMemory):
-        """٤: البحث الأكاديمي — PaperQA2 + استشهاد دقيق برقم الصفحة.
-        يُشغَّل فقط إذا وجّهت طبقة الفهم المهمة إلى academic_search."""
-        if ("academic_search" not in task.tools
-                and not task.task_card.get("needs_academic_search")):
-            task.status = TaskStatus.LAYER_4
-            mem.set_status(4, "لا يلزم بحث أكاديمي — تخطّي")
+        """٤: البحث — أكاديمي (PaperQA) + بحث ويب حي (SearXNG). يُشغَّل ما وُجّهت
+        إليه طبقة الفهم فقط، ونتائج الويب تُخزَّن كمصادر للطبقتين ٥ و٦."""
+        task.status = TaskStatus.LAYER_4
+        want_academic = ("academic_search" in task.tools
+                         or task.task_card.get("needs_academic_search"))
+        want_web = "web_search" in task.tools
+        if not want_academic and not want_web:
+            mem.set_status(4, "لا يلزم بحث — تخطّي")
             return
-        from pipeline.layers.layer_4_research import run as _layer4_run
-        await _layer4_run(task, mem)
+        if want_academic:
+            from pipeline.layers.layer_4_research import run as _layer4_run
+            await _layer4_run(task, mem)
+        if want_web:
+            await self._web_search(task, mem)
+
+    async def _web_search(self, task: Task, mem: TaskMemory):
+        """Live web search via the SearXNG tool. Results become structured
+        sources (filtered in Layer 5) and references (injected in Layer 6)."""
+        card = task.task_card
+        query = (card.get("topic") or task.description or "").strip()
+        if not query:
+            return
+        try:
+            from capabilities.tools import tool_web_search
+        except Exception as e:
+            mem.set_status(4, f"بحث ويب (تعذّر التحميل: {e})")
+            return
+        inputs = {"query": query,
+                  "language": "ar" if card.get("language", "ar") == "ar" else "en",
+                  "limit": int(card.get("reference_count") or 8)}
+        inst = os.environ.get("WEAVER_SEARXNG_URL", "").strip()
+        if inst:
+            inputs["instance"] = inst
+        try:
+            res = await tool_web_search.run(inputs)
+        except Exception as e:
+            mem.set_status(4, f"بحث ويب (خطأ: {e})")
+            task.task_card["web_search_error"] = str(e)
+            return
+        if not getattr(res, "ok", False):
+            err = getattr(res, "error", "unknown")
+            mem.set_status(4, f"بحث ويب فشل: {err}")
+            task.task_card["web_search_error"] = err
+            return
+        results = (res.data or {}).get("results", [])
+        srcs = card.setdefault("sources", [])
+        for r in results:
+            url = r.get("url", "")
+            title = r.get("title", "")
+            snippet = r.get("content", "")
+            srcs.append({"key": (title or url)[:60], "url": url,
+                         "title": title, "content": snippet})
+            mem.add_reference(f"[ويب] {title} — {snippet[:200]} ({url})",
+                              source_key=url)
+        mem.set_status(4, f"بحث ويب: {len(results)} نتيجة")
 
     async def _layer_5(self, task: Task, mem: TaskMemory):
         """٥: المصداقية — تمرير كل مصدر عبر check_source وإسقاط المرفوض."""
