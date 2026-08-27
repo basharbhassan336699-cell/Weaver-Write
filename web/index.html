@@ -441,6 +441,51 @@
   .msg.ai .bubble { color: var(--text); padding: 4px 0; }
   .msg.ai .msg-logo { flex-shrink: 0; margin-top: 2px; }
 
+  /* ── Rendered Markdown inside AI replies ─────── */
+  .msg.ai .bubble > :first-child { margin-top: 0; }
+  .msg.ai .bubble > :last-child { margin-bottom: 0; }
+  .msg.ai .bubble p { margin: 0 0 10px; line-height: 1.7; }
+  .msg.ai .bubble h1,
+  .msg.ai .bubble h2,
+  .msg.ai .bubble h3,
+  .msg.ai .bubble h4,
+  .msg.ai .bubble h5,
+  .msg.ai .bubble h6 { margin: 16px 0 8px; line-height: 1.3; font-weight: 700; }
+  .msg.ai .bubble h1 { font-size: 1.4em; }
+  .msg.ai .bubble h2 { font-size: 1.25em; }
+  .msg.ai .bubble h3 { font-size: 1.12em; }
+  .msg.ai .bubble h4,
+  .msg.ai .bubble h5,
+  .msg.ai .bubble h6 { font-size: 1em; }
+  .msg.ai .bubble ul,
+  .msg.ai .bubble ol { margin: 0 0 10px; padding-inline-start: 1.5em; }
+  .msg.ai .bubble li { margin: 3px 0; line-height: 1.6; }
+  .msg.ai .bubble strong { font-weight: 700; }
+  .msg.ai .bubble em { font-style: italic; }
+  .msg.ai .bubble a { color: var(--accent-blue); text-decoration: underline; }
+  .msg.ai .bubble code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9em; background: var(--surface-hover);
+    border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
+  }
+  .msg.ai .bubble pre.md-pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px; margin: 0 0 10px;
+    overflow-x: auto; direction: ltr; text-align: left;
+  }
+  .msg.ai .bubble pre.md-pre code {
+    background: none; border: 0; padding: 0; font-size: 0.88em;
+    white-space: pre; color: var(--text);
+  }
+  .msg.ai .bubble blockquote {
+    margin: 0 0 10px; padding: 4px 12px;
+    border-inline-start: 3px solid var(--accent);
+    color: var(--text-muted);
+  }
+  .msg.ai .bubble hr {
+    border: 0; border-top: 1px solid var(--border); margin: 14px 0;
+  }
+
   /* ── AI message actions bar ─────────────────── */
   .msg-wrapper {
     display: flex;
@@ -2868,6 +2913,44 @@
     if (currentChatId === id) { currentChatId = null; currentMessages = []; newChat(); }
     refreshChats();
   }
+  // ── Safe Markdown renderer for AI replies ──
+  // HTML is escaped FIRST (so model output can never inject markup), then a
+  // small, safe subset of Markdown is rendered.
+  function mdEscapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function mdInline(s){
+    s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+    s=s.replace(/\*\*([^*]+?)\*\*/g,'<strong>$1</strong>');
+    s=s.replace(/__([^_]+?)__/g,'<strong>$1</strong>');
+    s=s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g,'$1<em>$2</em>');
+    s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    return s;
+  }
+  function renderMarkdown(src){
+    if(src==null) return '';
+    const lines=mdEscapeHtml(String(src)).split('\n');
+    const out=[]; let para=[], listTag=null, inCode=false, code=[];
+    const flushPara=()=>{ if(para.length){ out.push('<p>'+mdInline(para.join(' '))+'</p>'); para=[]; } };
+    const closeList=()=>{ if(listTag){ out.push('</'+listTag+'>'); listTag=null; } };
+    for(let raw of lines){
+      const line=raw.replace(/\s+$/,'');
+      const fence=line.match(/^```(.*)$/);
+      if(fence){ if(inCode){ out.push('<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>'); code=[]; inCode=false; } else { flushPara(); closeList(); inCode=true; } continue; }
+      if(inCode){ code.push(line); continue; }
+      if(/^\s*$/.test(line)){ flushPara(); closeList(); continue; }
+      let m;
+      if((m=line.match(/^(#{1,6})\s+(.*)$/))){ flushPara(); closeList(); const n=m[1].length; out.push('<h'+n+'>'+mdInline(m[2])+'</h'+n+'>'); continue; }
+      if(/^\s*([-*_])\1{2,}\s*$/.test(line)){ flushPara(); closeList(); out.push('<hr>'); continue; }
+      if((m=line.match(/^&gt;\s?(.*)$/))){ flushPara(); closeList(); out.push('<blockquote>'+mdInline(m[1])+'</blockquote>'); continue; }
+      if((m=line.match(/^\s*[-*+]\s+(.*)$/))){ flushPara(); if(listTag!=='ul'){ closeList(); out.push('<ul>'); listTag='ul'; } out.push('<li>'+mdInline(m[1])+'</li>'); continue; }
+      if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ flushPara(); if(listTag!=='ol'){ closeList(); out.push('<ol>'); listTag='ol'; } out.push('<li>'+mdInline(m[1])+'</li>'); continue; }
+      para.push(line);
+    }
+    if(inCode){ out.push('<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>'); }
+    flushPara(); closeList();
+    return out.join('\n');
+  }
+
   function makeUserMsg(text) {
     const d = document.createElement('div'); d.className = 'msg user';
     d.innerHTML = '<div class="bubble"></div>'; d.querySelector('.bubble').textContent = text; return d;
@@ -2875,7 +2958,7 @@
   function makeAiMsg(text) {
     const d = document.createElement('div'); d.className = 'msg ai';
     d.innerHTML = '<div class="msg-wrapper"><div class="bubble"></div></div>';
-    d.querySelector('.bubble').textContent = text; return d;
+    d.querySelector('.bubble').innerHTML = renderMarkdown(text); return d;
   }
   // renderChatsList renders straight from chatsCache (no fetch) so an
   // optimistic new chat isn't wiped before it's saved. refreshChats() pulls
@@ -3019,6 +3102,7 @@
       messages.appendChild(aiMsg);
       messages.scrollTop = messages.scrollHeight;
 
+      let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
       try {
         const effortEl = document.getElementById('effortSelect');
         // send the earlier turns as history so the model remembers the whole
@@ -3040,9 +3124,12 @@
             bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (data.message || data.error);
           }
         } else {
-          bubble.textContent = (data && data.reply)
-            ? data.reply
-            : (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)');
+          if (data && data.reply) {
+            assistantRaw = data.reply;
+            bubble.innerHTML = renderMarkdown(data.reply);
+          } else {
+            bubble.textContent = (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)');
+          }
           if (data && data.reply && typeof wvAutoSaveArtifacts === 'function') {
             wvAutoSaveArtifacts(data.reply, currentChatId);
           }
@@ -3050,8 +3137,9 @@
       } catch (err) {
         bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
       }
-      // persist the assistant reply to the server so the chat survives restarts
-      currentMessages.push({ role: 'assistant', content: bubble.textContent || '' });
+      // persist the RAW reply (markdown) so reloads re-render the formatting;
+      // fall back to the shown text for error/empty replies
+      currentMessages.push({ role: 'assistant', content: assistantRaw || bubble.textContent || '' });
       saveCurrentChat();
       messages.scrollTop = messages.scrollHeight;
     })();
