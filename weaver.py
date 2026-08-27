@@ -667,23 +667,37 @@ def cmd_test(args):
 
 
 def cmd_ask(args):
-    """Ask the model a question directly from the terminal."""
+    """Ask the model from the terminal — routed through the FULL pipeline
+    (WeaverOrchestrator): understand → route → research → write → clean →
+    verify → export. Any output file is written to the project's outputs/."""
     q = " ".join(args.text) if getattr(args, "text", None) else ""
     if not q:
         q = _prompt_line("Your message")
     if not q:
         return
     try:
-        chat = _load_chat()
+        from config.keysync import get_settings
+        if not (get_settings().get("WEAVER_API_KEY") or "").strip():
+            print("No API key set. Add one with:  weaver keys add")
+            return
+    except Exception:
+        pass
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        from pipeline.orchestrator import run_pipeline_sync
+        res = run_pipeline_sync(q)
     except Exception as e:
-        print(f"Could not load chat: {e}")
+        print(f"[pipeline error] {e}")
         return
-    r = chat(q, timeout=120)
-    if r.get("error"):
-        print(f"[error: {r.get('error')}] {r.get('message','')}"
-              + ("\nAdd your key with: weaver keys add" if r.get("error") == "no_key" else ""))
-    else:
-        print("\n" + (r.get("reply") or "").strip() + "\n")
+    reply = (res.get("reply") or "").strip()
+    if reply:
+        print("\n" + reply + "\n")
+    if res.get("output_path"):
+        print(f"📄 الملف: {res['output_path']}")
+    if not reply and not res.get("output_path"):
+        print("(no reply — check your key with:  weaver keys add)")
 
 
 def cmd_version(args):
