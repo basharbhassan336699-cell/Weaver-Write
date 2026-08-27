@@ -450,13 +450,31 @@
   .msg.ai .bubble h3,
   .msg.ai .bubble h4,
   .msg.ai .bubble h5,
-  .msg.ai .bubble h6 { margin: 16px 0 8px; line-height: 1.3; font-weight: 700; }
-  .msg.ai .bubble h1 { font-size: 1.4em; }
-  .msg.ai .bubble h2 { font-size: 1.25em; }
-  .msg.ai .bubble h3 { font-size: 1.12em; }
-  .msg.ai .bubble h4,
+  .msg.ai .bubble h6 { margin: 18px 0 10px; line-height: 1.3; font-weight: 800; }
+  .msg.ai .bubble h1 { font-size: 1.7em; font-weight: 800; }
+  .msg.ai .bubble h2 { font-size: 1.5em; font-weight: 800; }
+  .msg.ai .bubble h3 { font-size: 1.28em; }
+  .msg.ai .bubble h4 { font-size: 1.12em; }
   .msg.ai .bubble h5,
   .msg.ai .bubble h6 { font-size: 1em; }
+
+  /* tables */
+  .msg.ai .bubble .md-table-wrap { overflow-x: auto; margin: 0 0 12px; }
+  .msg.ai .bubble table.md-table {
+    border-collapse: collapse; width: auto; min-width: 60%;
+    font-size: 0.95em;
+  }
+  .msg.ai .bubble table.md-table th,
+  .msg.ai .bubble table.md-table td {
+    border: 1px solid var(--border); padding: 7px 12px; text-align: start;
+    vertical-align: top;
+  }
+  .msg.ai .bubble table.md-table thead th {
+    background: var(--surface-hover); font-weight: 700; color: var(--text);
+  }
+  .msg.ai .bubble table.md-table tbody tr:nth-child(even) td {
+    background: rgba(127,127,127,0.05);
+  }
   .msg.ai .bubble ul,
   .msg.ai .bubble ol { margin: 0 0 10px; padding-inline-start: 1.5em; }
   .msg.ai .bubble li { margin: 3px 0; line-height: 1.6; }
@@ -523,6 +541,13 @@
   }
   .msg-action-btn:hover { background: var(--surface-hover); color: var(--text); }
   .msg-action-btn svg { width: 15px; height: 15px; stroke-width: 1.6; }
+  /* active like/dislike + copied feedback */
+  .msg-action-btn[data-act="like"].active { color: var(--accent-blue); }
+  .msg-action-btn[data-act="like"].active svg { fill: var(--accent-blue); stroke: var(--accent-blue); }
+  .msg-action-btn[data-act="dislike"].active { color: #d9694f; }
+  .msg-action-btn[data-act="dislike"].active svg { fill: #d9694f; stroke: #d9694f; }
+  .msg-action-btn.done { color: #4caf7d; }
+  .msg-action-btn.done svg { stroke: #4caf7d; }
 
   /* When chatting: hide hero decorations, dock the input */
   .main.chat-mode { justify-content: flex-start; overflow: hidden; }
@@ -2926,17 +2951,51 @@
         '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     return s;
   }
+  function mdTableCells(line){
+    let s=line.trim();
+    if(s.startsWith('|')) s=s.slice(1);
+    if(s.endsWith('|')) s=s.slice(0,-1);
+    return s.split('|').map(c=>c.trim());
+  }
+  function mdIsTableSep(line){
+    return /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/.test(line) && line.indexOf('-')>=0;
+  }
   function renderMarkdown(src){
     if(src==null) return '';
     const lines=mdEscapeHtml(String(src)).split('\n');
-    const out=[]; let para=[], listTag=null, inCode=false, code=[];
+    const out=[]; let para=[], listTag=null;
     const flushPara=()=>{ if(para.length){ out.push('<p>'+mdInline(para.join(' '))+'</p>'); para=[]; } };
     const closeList=()=>{ if(listTag){ out.push('</'+listTag+'>'); listTag=null; } };
-    for(let raw of lines){
-      const line=raw.replace(/\s+$/,'');
-      const fence=line.match(/^```(.*)$/);
-      if(fence){ if(inCode){ out.push('<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>'); code=[]; inCode=false; } else { flushPara(); closeList(); inCode=true; } continue; }
-      if(inCode){ code.push(line); continue; }
+    for(let idx=0; idx<lines.length; idx++){
+      let line=lines[idx].replace(/\s+$/,'');
+      // fenced code block
+      if(/^```(.*)$/.test(line)){
+        flushPara(); closeList();
+        const code=[]; idx++;
+        while(idx<lines.length && !/^```/.test(lines[idx])){ code.push(lines[idx].replace(/\s+$/,'')); idx++; }
+        out.push('<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>');
+        continue;
+      }
+      // pipe table: header row + separator row
+      if(line.indexOf('|')>=0 && idx+1<lines.length && mdIsTableSep(lines[idx+1]) && line.replace(/[^|]/g,'').length>=1){
+        flushPara(); closeList();
+        const headers=mdTableCells(line);
+        const aligns=mdTableCells(lines[idx+1]).map(c=>{
+          const l=c.startsWith(':'), r=c.endsWith(':');
+          return (l&&r)?'center':(r?'right':(l?'left':''));
+        });
+        idx+=2;
+        const rows=[];
+        while(idx<lines.length && lines[idx].indexOf('|')>=0 && lines[idx].trim()!==''){ rows.push(mdTableCells(lines[idx])); idx++; }
+        idx--; // step back; loop will ++
+        let html='<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+        headers.forEach((h,i)=>{ const a=aligns[i]?(' style="text-align:'+aligns[i]+'"'):''; html+='<th'+a+'>'+mdInline(h)+'</th>'; });
+        html+='</tr></thead><tbody>';
+        rows.forEach(r=>{ html+='<tr>'; headers.forEach((_,i)=>{ const a=aligns[i]?(' style="text-align:'+aligns[i]+'"'):''; html+='<td'+a+'>'+mdInline(r[i]!=null?r[i]:'')+'</td>'; }); html+='</tr>'; });
+        html+='</tbody></table></div>';
+        out.push(html);
+        continue;
+      }
       if(/^\s*$/.test(line)){ flushPara(); closeList(); continue; }
       let m;
       if((m=line.match(/^(#{1,6})\s+(.*)$/))){ flushPara(); closeList(); const n=m[1].length; out.push('<h'+n+'>'+mdInline(m[2])+'</h'+n+'>'); continue; }
@@ -2946,9 +3005,31 @@
       if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ flushPara(); if(listTag!=='ol'){ closeList(); out.push('<ol>'); listTag='ol'; } out.push('<li>'+mdInline(m[1])+'</li>'); continue; }
       para.push(line);
     }
-    if(inCode){ out.push('<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>'); }
     flushPara(); closeList();
     return out.join('\n');
+  }
+
+  // Shared reply action bar (regenerate / dislike / like / copy) with data-act
+  // hooks so one delegated handler on #messages can drive them all.
+  function wvActionsBar(lang) {
+    const t = (lang === 'ar')
+      ? { re: 'إعادة توليد', dl: 'لا أحب', lk: 'أحب', cp: 'نسخ', now: 'الآن' }
+      : { re: 'Regenerate', dl: 'Dislike', lk: 'Like', cp: 'Copy', now: 'just now' };
+    return '<div class="msg-actions">' +
+      '<span class="msg-time">' + t.now + '</span>' +
+      '<button class="msg-action-btn" data-act="regen" title="' + t.re + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M1 4v6h6M23 20v-6h-6" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>' +
+      '<button class="msg-action-btn" data-act="dislike" title="' + t.dl + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>' +
+      '<button class="msg-action-btn" data-act="like" title="' + t.lk + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 22H4.72A2.31 2.31 0 0 1 2.4 20V13a2.31 2.31 0 0 1 2.33-2H7" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>' +
+      '<button class="msg-action-btn" data-act="copy" title="' + t.cp + '">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      '</button>' +
+    '</div>';
   }
 
   function makeUserMsg(text) {
@@ -2957,9 +3038,64 @@
   }
   function makeAiMsg(text) {
     const d = document.createElement('div'); d.className = 'msg ai';
-    d.innerHTML = '<div class="msg-wrapper"><div class="bubble"></div></div>';
-    d.querySelector('.bubble').innerHTML = renderMarkdown(text); return d;
+    const lang = document.documentElement.lang || 'en';
+    d.innerHTML = '<div class="msg-wrapper"><div class="bubble"></div>' + wvActionsBar(lang) + '</div>';
+    d.querySelector('.bubble').innerHTML = renderMarkdown(text);
+    d.dataset.raw = text == null ? '' : String(text);
+    return d;
   }
+
+  // Redo the last exchange: drop this AI reply and its user message, then
+  // re-send the same prompt for a fresh reply.
+  function regenerateFrom(msg) {
+    let el = msg.previousElementSibling, userNode = null, userText = '';
+    while (el) {
+      if (el.classList && el.classList.contains('user')) {
+        userNode = el; userText = (el.querySelector('.bubble') || {}).textContent || ''; break;
+      }
+      el = el.previousElementSibling;
+    }
+    if (!userText) { userText = msg.dataset.prompt || ''; }
+    if (!userText) return;
+    msg.remove();
+    if (userNode) userNode.remove();
+    if (currentMessages.length && currentMessages[currentMessages.length - 1].role === 'assistant') currentMessages.pop();
+    if (currentMessages.length && currentMessages[currentMessages.length - 1].role === 'user') currentMessages.pop();
+    const input = document.getElementById('mainInput');
+    if (input) { input.value = userText; sendMessage(); }
+  }
+
+  // One delegated handler drives every reply's action buttons.
+  (function () {
+    const box = document.getElementById('messages');
+    if (!box || box._wvActionsWired) return;
+    box._wvActionsWired = true;
+    box.addEventListener('click', function (e) {
+      const btn = e.target.closest && e.target.closest('.msg-action-btn[data-act]');
+      if (!btn) return;
+      const msg = btn.closest('.msg.ai');
+      if (!msg) return;
+      const act = btn.getAttribute('data-act');
+      if (act === 'copy') {
+        const raw = msg.dataset.raw || (msg.querySelector('.bubble') || {}).textContent || '';
+        const done = () => { btn.classList.add('done'); setTimeout(() => btn.classList.remove('done'), 1200); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(raw).then(done).catch(done);
+        } else {
+          try { const ta = document.createElement('textarea'); ta.value = raw; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch (e) {}
+          done();
+        }
+      } else if (act === 'like') {
+        btn.classList.toggle('active');
+        const o = msg.querySelector('.msg-action-btn[data-act="dislike"]'); if (o) o.classList.remove('active');
+      } else if (act === 'dislike') {
+        btn.classList.toggle('active');
+        const o = msg.querySelector('.msg-action-btn[data-act="like"]'); if (o) o.classList.remove('active');
+      } else if (act === 'regen') {
+        regenerateFrom(msg);
+      }
+    });
+  })();
   // renderChatsList renders straight from chatsCache (no fetch) so an
   // optimistic new chat isn't wiped before it's saved. refreshChats() pulls
   // the authoritative list from the server, then renders.
@@ -3055,26 +3191,8 @@
         '<svg class="msg-logo" width="22" height="22" viewBox="0 0 256 256" fill="#C97A5A">' +
         '<path d="M119 235 C120 235 120 233 120 232 C120 221 166 204 191 205 C203 206 204 207 210 214 C214 219 217 221 218 218 C218 218 216 215 214 212 C203 199 207 152 222 133 C223 131 225 129 225 128 C225 128 227 127 230 127 C234 126 250 122 253 121 C262 118 238 120 224 124 C223 124 222 123 217 115 C205 95 203 88 203 61 L203 51 L208 46 C217 37 214 36 205 44 C201 47 197 51 195 52 C189 56 161 54 152 49 C149 48 143 46 139 44 C135 42 130 40 128 39 L124 38 L124 30 C124 20 122 17 122 25 C120 39 120 39 115 44 C104 54 85 61 66 61 C54 61 53 60 44 53 C38 48 32 45 38 51 C39 52 43 55 45 57 L50 62 L50 71 C50 86 44 105 33 119 L31 122 L16 121 C6 121 2 121 3 122 C4 122 7 123 9 123 C17 123 27 124 26 125 C26 126 28 129 31 132 C44 145 53 175 48 189 C47 192 45 196 36 204 C24 217 24 219 37 207 L45 199 L51 199 C81 199 116 218 116 233 C116 237 118 239 119 235 Z  M120 217 C120 195 136 184 171 181 L177 180 L187 190 C199 202 199 200 186 201 C163 201 137 209 124 221 L120 225 L120 217 Z  M114 218 C107 208 82 197 62 196 C50 196 50 195 56 189 C70 173 114 191 116 214 C117 222 117 222 114 218 Z  M119 193 C119 178 133 167 153 165 L160 165 L166 170 L172 176 L167 176 C148 179 133 186 123 196 L119 200 L119 193 Z  M112 195 C103 186 90 181 76 181 L65 180 L70 176 L75 170 L84 171 C100 171 112 175 114 182 C116 185 117 199 116 199 C115 199 114 197 112 195 Z  M192 189 C187 184 182 179 182 178 C181 177 181 176 180 176 C177 176 180 157 184 149 C189 137 196 132 209 130 C220 129 221 129 218 133 C207 148 198 186 202 198 C203 201 201 199 192 189 Z  M54 178 C54 163 45 141 35 131 C29 125 29 125 34 125 C41 125 42 126 47 133 C60 152 65 179 57 184 L54 186 L54 178 Z  M119 173 C119 164 126 158 142 156 L149 155 L152 158 L156 161 L150 162 C142 163 131 169 124 175 L119 179 L119 173 Z  M64 173 C63 170 63 166 62 163 C61 152 56 141 48 130 L44 125 L47 125 C56 125 71 146 72 161 L72 170 L68 173 L64 177 L64 173 Z  M113 174 C110 171 94 168 86 168 L79 168 L84 163 C91 155 106 158 115 169 C117 172 116 176 113 174 Z  M169 168 C163 162 162 160 162 152 C162 137 166 132 182 132 L193 132 L188 137 C181 145 175 159 175 169 C175 173 174 173 169 168 Z  M76 164 C76 164 75 162 75 160 C74 147 69 138 58 129 L52 125 L55 125 C57 125 62 125 65 126 L72 126 L77 133 C81 140 85 150 85 155 C85 159 77 167 76 164 Z  M114 162 C112 160 100 156 95 156 C91 156 91 156 92 154 C94 154 96 152 98 150 C103 145 112 146 115 151 C116 154 116 164 114 162 Z  M119 158 C119 145 131 139 141 147 L144 151 L139 152 C134 153 124 158 121 161 C119 162 119 162 119 158 Z  M155 155 C148 148 152 132 160 131 C166 131 166 132 164 135 C160 139 159 144 159 152 C160 160 159 160 155 155 Z  M89 152 C88 151 88 148 87 146 C85 140 83 135 79 131 C75 126 75 126 80 126 C92 126 101 142 93 150 C90 152 89 153 89 152 Z  M144 146 C139 141 139 139 144 133 C148 128 151 129 149 136 C148 139 148 141 149 145 C150 151 150 151 144 146 Z  M115 146 C114 145 111 145 109 144 L105 144 L111 138 L117 132 L117 139 C117 144 117 147 117 147 C117 147 116 146 115 146 Z  M119 140 C119 128 119 128 127 135 L133 140 L129 142 C127 142 124 144 122 145 L119 147 L119 140 Z  M99 140 C99 137 97 133 93 130 L90 127 L96 127 C99 127 105 127 108 128 L115 128 L108 136 C100 144 99 144 99 140 Z  M130 134 L124 129 L133 130 C143 130 142 130 140 135 C137 141 138 141 130 134 Z  M156 127 C153 125 151 117 151 107 L150 98 L155 94 C161 88 161 88 160 97 C160 109 166 123 173 127 C175 128 174 128 166 128 C162 128 157 128 156 127 Z  M175 122 C163 109 159 91 167 83 C174 75 179 71 179 74 C175 87 183 121 191 125 C193 127 192 128 186 128 L180 128 L175 122 Z  M132 126 C123 126 123 125 131 117 L138 111 L138 114 C138 116 139 120 140 122 C141 126 141 127 140 127 C140 127 136 126 132 126 Z  M145 125 C140 119 138 110 143 106 L146 103 L146 107 C146 112 150 124 151 125 C153 126 152 127 150 127 C148 127 146 126 145 125 Z  M195 124 C186 115 181 98 182 81 L183 68 L187 64 C200 53 200 53 200 71 C200 91 202 101 213 117 L217 124 L214 125 C205 128 199 127 195 124 Z  M108 124 C108 124 103 124 98 124 C87 123 87 123 91 118 C92 115 93 111 94 109 L94 104 L105 114 C110 120 115 124 115 125 C115 125 110 125 108 124 Z  M61 115 C69 104 74 86 70 81 C69 78 72 81 77 86 L82 92 L81 99 C80 107 78 113 73 119 L70 123 L63 123 L56 123 L61 115 Z  M74 123 C74 122 75 121 77 119 C81 115 84 108 85 101 L86 96 L89 98 C93 102 91 113 86 121 C85 123 74 124 74 123 Z  M120 114 C120 100 120 99 124 103 C126 105 128 107 130 108 C134 110 134 110 126 117 L120 123 L120 114 Z  M37 119 C41 114 50 97 52 93 C53 90 53 83 54 77 L54 65 L58 68 C64 73 62 83 51 107 C45 121 44 122 39 122 L35 122 L37 119 Z  M47 121 C58 100 64 83 63 76 L62 72 L66 75 L69 78 L69 87 C68 101 57 122 49 122 C48 122 47 122 47 121 Z  M106 111 C97 103 96 101 99 102 C102 103 111 103 116 101 C118 101 118 101 118 110 C118 123 118 123 106 111 Z  M130 105 C124 102 122 98 121 92 L121 87 L127 92 C131 96 135 98 137 99 C143 101 143 101 139 104 C136 108 135 108 130 105 Z  M103 100 C102 100 100 100 98 100 C96 99 93 98 91 97 L89 94 L97 94 C104 94 106 93 112 90 L119 86 L119 91 C119 97 111 102 103 100 Z  M136 95 C134 94 130 91 127 88 L121 83 L121 75 C121 65 121 65 126 70 C132 76 147 85 153 86 L157 86 L152 92 C146 98 143 98 136 95 Z  M80 85 C76 82 74 79 76 79 C86 83 106 79 117 71 L120 69 L120 75 C119 78 119 81 119 81 C106 89 101 91 93 92 L86 92 L80 85 Z  M142 77 C131 72 122 63 122 59 C122 55 123 55 127 57 C133 63 158 71 169 71 C173 71 173 72 167 77 C159 84 155 84 142 77 Z  M73 77 C71 77 69 76 67 74 L65 71 L73 71 C78 71 82 71 83 71 C83 70 87 69 91 69 C99 67 112 62 116 59 C120 56 120 57 120 60 C120 71 93 81 73 77 Z  M61 68 C59 66 61 66 71 66 C87 65 93 63 108 56 C117 51 120 50 120 51 C120 59 69 74 61 68 Z  M162 66 C130 60 123 56 124 47 C124 44 124 42 124 42 C125 42 131 45 139 49 C153 55 160 57 179 59 L186 59 L182 63 C179 67 171 68 162 66 Z" fill-rule="evenodd"/></svg>';
 
-      const actionsHTML =
-        '<div class="msg-actions">' +
-          '<span class="msg-time">' + relativeTime() + '</span>' +
-          // Regenerate
-          '<button class="msg-action-btn" title="إعادة توليد">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M1 4v6h6M23 20v-6h-6" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</button>' +
-          // Dislike
-          '<button class="msg-action-btn" title="لا أحب">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3H10z" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 2h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</button>' +
-          // Like
-          '<button class="msg-action-btn" title="أحب">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 22H4.72A2.31 2.31 0 0 1 2.4 20V13a2.31 2.31 0 0 1 2.33-2H7" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</button>' +
-          // Copy
-          '<button class="msg-action-btn" title="نسخ">' +
-            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
-          '</button>' +
-        '</div>';
+      const isAr = (document.documentElement.lang || 'en') === 'ar';
+      const actionsHTML = wvActionsBar(isAr ? 'ar' : 'en');
 
       aiMsg.innerHTML =
         logoSVG +
@@ -3082,9 +3200,9 @@
           '<div class="bubble"></div>' +
           actionsHTML +
         '</div>';
+      aiMsg.dataset.prompt = text;  // for the Regenerate button
 
       const bubble = aiMsg.querySelector('.bubble');
-      const isAr = (document.documentElement.lang || 'en') === 'ar';
       bubble.textContent = '…';
 
       // Update timestamp every minute
@@ -3139,7 +3257,9 @@
       }
       // persist the RAW reply (markdown) so reloads re-render the formatting;
       // fall back to the shown text for error/empty replies
-      currentMessages.push({ role: 'assistant', content: assistantRaw || bubble.textContent || '' });
+      const finalText = assistantRaw || bubble.textContent || '';
+      aiMsg.dataset.raw = finalText;  // Copy button uses the raw markdown
+      currentMessages.push({ role: 'assistant', content: finalText });
       saveCurrentChat();
       messages.scrollTop = messages.scrollHeight;
     })();
