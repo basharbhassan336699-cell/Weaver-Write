@@ -652,12 +652,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "shown": len(out), "connectors": out,
                         "connected_count": len(state)})
             return
-        # static files (js/css/img) from web/
+        # static files (js/css/img/favicon) from web/
         safe = path.lstrip("/").replace("..", "")
         if safe and os.path.exists(os.path.join(_HERE, safe)):
-            ctype = ("application/javascript" if safe.endswith(".js")
-                     else "text/css" if safe.endswith(".css")
-                     else "application/octet-stream")
+            ext = os.path.splitext(safe)[1].lower()
+            ctype = (_MIME.get(ext) or
+                     ("application/javascript" if ext == ".js"
+                      else "text/css" if ext == ".css"
+                      else "image/x-icon" if ext == ".ico"
+                      else "application/octet-stream"))
             self._serve_file(safe, ctype)
             return
         self._json({"error": "not found"}, 404)
