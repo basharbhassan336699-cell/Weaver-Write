@@ -56,6 +56,40 @@ def sort_works_cited(refs):
     return sorted(refs, key=key)
 
 
+def build_bibliography(sources, lang="ar", extra=None):
+    """Build a full, sorted, numbered MLA Works-Cited list from retrieved
+    sources (list of dicts). `extra` is pre-formatted text appended as-is.
+    Returns a string, or "" when empty."""
+    entries = []
+    for s in (sources or []):
+        if not isinstance(s, dict):
+            s = {"title": str(s)}
+        title = (s.get("title") or s.get("key") or s.get("url") or "").strip()
+        if not title:
+            continue
+        author = s.get("author") or ("" if lang == "ar" else "")
+        site = s.get("site") or s.get("journal") or ""
+        year = s.get("year") or "n.d."
+        if author:
+            entries.append(format_mla_website(author, title, site, year,
+                                              s.get("url")))
+        else:
+            u = f" {s.get('url')}." if s.get("url") else ""
+            sp = f" *{site}*," if site else ""
+            entries.append(f'"{title}."{sp} {year}.{u}'.strip())
+    seen, uniq = set(), []
+    for e in entries:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    uniq = sort_works_cited(uniq)
+    out = "\n".join(f"{i}. {e}" for i, e in enumerate(uniq, 1))
+    if extra:
+        extra = str(extra).strip()
+        out = (out + "\n" + extra).strip() if out else extra
+    return out
+
+
 def format_mla(ref_data):
     """Dispatch by type. ref_data: dict with 'type' and fields."""
     t = ref_data.get("type", "article")
