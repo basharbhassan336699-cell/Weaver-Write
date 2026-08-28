@@ -287,6 +287,53 @@ class WeaverOrchestrator:
         return "en"
 
     @staticmethod
+    def _sourcing_mode(text: str) -> str:
+        """How the user wants sourcing handled — conservative: only an EXPLICIT
+        request flips away from the default.
+          "none"    → write WITHOUT any sources/references/studies.
+          "uncited" → research FROM sources but DON'T document/cite them.
+          "cited"   → default: research, cite in-text, and list references.
+        """
+        t = " " + (text or "").lower() + " "
+        # sources are USED but must NOT be documented/cited
+        uncited = (
+            "بدون توثيق", "بلا توثيق", "دون توثيق", "من غير توثيق",
+            "لا توثقها", "لا توثق", "بدون توثيقها", "دون توثيقها",
+            "بدون ذكر المراجع", "دون ذكر المراجع", "بدون ذكر المصادر",
+            "دون ذكر المصادر", "لا تذكر المراجع", "لا تذكر المصادر",
+            "بدون ان توثقها", "بدون أن توثقها", "لكن لا توثقها",
+            "without citing", "without documenting", "don't cite",
+            "do not cite", "no in-text citation", "no in text citation",
+            "uncited", "without a references list", "no references list",
+        )
+        # NO sources at all
+        none_src = (
+            "بدون مصادر", "بلا مصادر", "دون مصادر", "من غير مصادر",
+            "بدون أي مصادر", "بدون اي مصادر", "بدون مراجع", "بلا مراجع",
+            "دون مراجع", "من غير مراجع", "بدون دراسات", "بلا دراسات",
+            "دون دراسات", "من غير دراسات", "بدون مصادر ومراجع",
+            "without sources", "without references", "no sources",
+            "no references", "no citations", "source-free", "without any sources",
+        )
+        if any(p in t for p in uncited):
+            return "uncited"
+        if any(p in t for p in none_src):
+            return "none"
+        return "cited"
+
+    @staticmethod
+    def _strip_citations(text: str) -> str:
+        """Remove parenthesised in-text citations (…, YEAR) / (key, p. N) /
+        (…، ص. N) from prose. Used in the no-citation writing modes so an
+        accidental citation from the model never survives to the output."""
+        import re
+        if not text:
+            return text
+        text = re.sub(
+            r"\s*\([^()]*(?:\b\d{4}\b|p\.?\s*\d+|ص\.?\s*\d+)[^()]*\)", "", text)
+        return re.sub(r"[ \t]{2,}", " ", text)
+
+    @staticmethod
     def _skill_call(skill: str, module: str, func: str, *args, **kwargs):
         """Dynamically import capabilities/skills/<skill>/scripts/<module>.py
         and call <func>(*args, **kwargs). Raises on failure — callers guard it
@@ -333,25 +380,35 @@ class WeaverOrchestrator:
             task.skills = [s.name for s in self.caps.match_skills(text)]
         else:
             task.tools, task.skills = [], []
+        # sourcing mode decides whether we gather and/or document sources
+        mode = card.get("sourcing_mode", "cited")
         # always-on skills by task type
         cs = str(card.get("citation_style", "")).upper()
-        if cs and cs != "UNSPECIFIED":
+        # a citation-style formatter runs ONLY when sources will be documented
+        if mode == "cited" and cs and cs != "UNSPECIFIED":
             task.skills.append("apa_formatter" if cs == "APA" else "mla_formatter")
         task.skills.append("arabic_rewriter"
                            if card.get("language", "ar") == "ar"
                            else "english_rewriter")
         # gather live web sources for any task that needs references — its
-        # triggers rarely appear in a plain "اكتب بحثاً…", so add it explicitly
-        needs_sources = (
+        # triggers rarely appear in a plain "اكتب بحثاً…", so add it explicitly.
+        # "cited" and "uncited" both gather (uncited uses them to inform the
+        # text but won't cite them); "none" gathers nothing.
+        needs_sources = mode != "none" and (
             card.get("needs_academic_search")
             or "academic_search" in task.tools
-            or (cs and cs != "UNSPECIFIED")
+            or (mode == "cited" and cs and cs != "UNSPECIFIED")
             or card.get("reference_count")
             or str(card.get("task_type", "")).lower() in
             ("بحث", "research", "دراسة", "report", "تقرير", "مراجعة أدبيات",
              "literature review", "analysis", "تحليل", "أطروحة", "thesis"))
         if needs_sources:
             task.tools.append("web_search")
+        if mode == "none":
+            # explicit no-sources request: strip every source-gathering tool
+            task.tools = [t for t in task.tools
+                          if t not in ("web_search", "academic_search")]
+            card.pop("needs_academic_search", None)
         task.tools = list(dict.fromkeys(task.tools))   # dedupe, keep order
         task.skills = list(dict.fromkeys(task.skills))
 
@@ -381,6 +438,11 @@ class WeaverOrchestrator:
             task.task_card["output_format"] = [of]
         elif not of:
             task.task_card["output_format"] = ["DOCX"]
+
+        # how the user wants sourcing handled (cited / uncited / none). Detected
+        # from the RAW request so an explicit "بدون مصادر" / "دون توثيقها" is
+        # honoured even if the model didn't surface it in the card.
+        task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
 
         # Phase 3: route tools & skills once
         self._route(task)
@@ -425,6 +487,84 @@ class WeaverOrchestrator:
         return [{"title": r.get("title", ""), "url": r.get("url", ""),
                  "content": r.get("content", "")}
                 for r in (data.get("results", []) or [])[:limit]]
+
+    @staticmethod
+    def _ddg_search(query: str, lang: str, limit: int, timeout: int = 12):
+        """Direct DuckDuckGo search — NO server required (works on the phone as
+        is). Hits the html.duckduckgo.com endpoint over plain HTTP, decoding
+        DDG's redirect links. Prefers UniWeb/curl_impersonate (real browser
+        fingerprint, beats bot-blocking) and falls back to urllib. Returns a
+        list of {title,url,content} or None when nothing usable comes back."""
+        import urllib.parse
+        import urllib.request
+        import html as _html
+        import re
+        q = (query or "").strip()
+        if not q:
+            return None
+        params = {"q": q}
+        if lang == "ar":
+            params["kl"] = "xa-ar"      # region/language hint (best-effort)
+        endpoint = ("https://html.duckduckgo.com/html/?"
+                    + urllib.parse.urlencode(params))
+        ua = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
+        raw = None
+        # 1) UniWeb (curl_impersonate) — best chance against anti-bot
+        try:
+            import os as _os, sys as _sys
+            uw = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "engines", "uniweb-core"))
+            if uw not in _sys.path:
+                _sys.path.insert(0, uw)
+            import uniweb as _uniweb
+            html = _uniweb.fetch(endpoint)
+            if html and isinstance(html, str) and "result" in html:
+                raw = html
+        except Exception:
+            raw = None
+        # 2) plain urllib fallback
+        if not raw:
+            try:
+                req = urllib.request.Request(endpoint, headers={
+                    "User-Agent": ua, "Accept": "text/html",
+                    "Accept-Language": ("ar,en;q=0.8" if lang == "ar"
+                                        else "en-US,en;q=0.8")})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    raw = resp.read().decode("utf-8", "replace")
+            except Exception:
+                return None
+        if not raw:
+            return None
+
+        def _clean(s: str) -> str:
+            return _html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", s))).strip()
+
+        def _real_url(href: str) -> str:
+            href = _html.unescape(href)
+            m = re.search(r"[?&]uddg=([^&]+)", href)
+            if m:
+                return urllib.parse.unquote(m.group(1))
+            if href.startswith("//"):
+                return "https:" + href
+            return href
+
+        results = []
+        for m in re.finditer(
+                r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>'
+                r'(.*?)</a>', raw, re.S):
+            url = _real_url(m.group(1))
+            if not url.startswith("http"):
+                continue
+            results.append({"title": _clean(m.group(2)), "url": url,
+                            "content": ""})
+            if len(results) >= limit:
+                break
+        # attach snippets (aligned by document order, best-effort)
+        snips = re.findall(r'class="result__snippet"[^>]*>(.*?)</a>', raw, re.S)
+        for i, s in enumerate(snips[:len(results)]):
+            results[i]["content"] = _clean(s)
+        return results or None
 
     async def _tool_web_search(self, query: str, lang: str, limit: int):
         """Fallback: the packaged web_search tool. Returns a results list
@@ -521,8 +661,14 @@ class WeaverOrchestrator:
         instance = os.environ.get("WEAVER_SEARXNG_URL", "").strip() or "http://127.0.0.1:8080"
         results = self._searx_query(instance, query, lang, limit)
         used = "searxng:" + instance
-        # 2) fall back to the packaged tool if SearXNG isn't reachable
-        if results is None:
+        # 2) DuckDuckGo direct — NO server needed (works on the phone as is)
+        if not results:
+            ddg = self._ddg_search(query, lang, limit)
+            if ddg:
+                results = ddg
+                used = "duckduckgo"
+        # 3) fall back to the packaged tool as a last resort
+        if not results:
             results = await self._tool_web_search(query, lang, limit)
             used = "web_search"
         if not results:
@@ -635,27 +781,47 @@ class WeaverOrchestrator:
         rag = mem.get_references(card.get("topic", "") or task.description,
                                  limit=20) or []
         rag_ctx = "\n".join(str(x) for x in rag)
+        no_ctx = (not rag_ctx) or rag_ctx.strip() in ("", "(none)")
+        mode = card.get("sourcing_mode", "cited")
+        # In "cited" mode with NO retrieved context, don't refuse — write from
+        # the model's knowledge and flag it so a clear note is added later.
+        if mode == "cited" and no_ctx:
+            card["sources_unavailable"] = True
         parts, out_sections = [], []
         for sec in sections_plan:
             title = sec.get("title") or sec.get("heading") or ""
             body = ""
             if self.llm_fn:
-                from pipeline.prompts import PROMPT_LAYER_6_WRITE
-                prompt = PROMPT_LAYER_6_WRITE.format(
-                    section_name=title, topic=card.get("topic", ""),
-                    citation_style=card.get("citation_style", ""),
-                    length=card.get("page_count", ""),
-                    rag_contexts=rag_ctx or "(none)", prior_content="")
+                from pipeline import prompts as _p
+                if mode == "uncited":
+                    prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
+                        section_name=title, topic=card.get("topic", ""),
+                        length=card.get("page_count", ""),
+                        rag_contexts=rag_ctx or "(none)", prior_content="")
+                    system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
+                elif mode == "none" or no_ctx:
+                    # explicit no-sources request, OR sources were required but
+                    # none could be retrieved — write from knowledge, no refusal
+                    prompt = _p.PROMPT_LAYER_6_WRITE_NO_SOURCES.format(
+                        section_name=title, topic=card.get("topic", ""),
+                        length=card.get("page_count", ""), prior_content="")
+                    system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
+                else:
+                    prompt = _p.PROMPT_LAYER_6_WRITE.format(
+                        section_name=title, topic=card.get("topic", ""),
+                        citation_style=card.get("citation_style", ""),
+                        length=card.get("page_count", ""),
+                        rag_contexts=rag_ctx or "(none)", prior_content="")
+                    system = self.system_main
                 try:
-                    body = self.llm_fn(prompt, system=self.system_main,
-                                       temperature=0.5)
+                    body = self.llm_fn(prompt, system=system, temperature=0.5)
                 except Exception as e:
                     mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
             parts.append((f"{title}\n{body}").strip())
             out_sections.append({"heading": title, "body": body})
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
-        mem.set_status(6, f"صياغة: {len(out_sections)} قسم")
+        mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
 
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
@@ -740,6 +906,16 @@ class WeaverOrchestrator:
         يُسقط أي استشهاد مفتاحه غير موجود فعلاً في المراجع المسترجَعة."""
         from pipeline.layers.layer_7_verify import run as _layer7_run
         await _layer7_run(task, mem)
+
+        # No-citation modes: the text must carry NO in-text citations. Strip any
+        # the model produced anyway (none / uncited / sources-were-unavailable).
+        card = task.task_card
+        if task.draft and (card.get("sourcing_mode") in ("none", "uncited")
+                           or card.get("sources_unavailable")):
+            task.draft = self._strip_citations(task.draft)
+            task.sections = [{**s, "body": self._strip_citations(s.get("body", ""))}
+                             for s in (task.sections or [])]
+            return
 
         allowed = self._allowed_keys(task)
         # نُطبّق strict-RAG فقط حين توجد مفاتيح فعلية — وإلا فقد نحذف كل شيء
@@ -933,6 +1109,37 @@ class WeaverOrchestrator:
             return self._export_fallback(out_dir, safe, task)
         return self._export_fallback(out_dir, safe, task)
 
+    def _source_note(self, task: Task):
+        """Prepend a short, honest note when the document was written without
+        external sources: either because the user asked for that ("none"), or
+        because sources were required but none could be retrieved on the device
+        ("cited" + sources_unavailable). The "uncited" mode gets no note — the
+        user deliberately chose not to document sources."""
+        card = task.task_card
+        mode = card.get("sourcing_mode", "cited")
+        lang = card.get("language", "ar")
+        note = None
+        if mode == "none":
+            note = ("أُعدّ هذا المستند دون مصادر خارجية بناءً على طلبك."
+                    if lang == "ar" else
+                    "This document was prepared without external sources, as "
+                    "requested.")
+        elif mode != "uncited" and card.get("sources_unavailable"):
+            note = ("تعذّر الوصول إلى مصادر خارجية أثناء الإعداد، فحُرّر المحتوى "
+                    "من المعرفة العامة."
+                    if lang == "ar" else
+                    "External sources could not be retrieved, so the content was "
+                    "written from general knowledge.")
+        if not note:
+            return
+        head = "ملاحظة" if lang == "ar" else "Note"
+        if task.sections and (task.sections[0].get("heading") or "") == head:
+            return
+        task.sections = [{"heading": head, "body": note}] + (task.sections or [])
+        if task.draft:
+            task.draft = note + "\n\n" + task.draft
+        card["source_note"] = note
+
     @staticmethod
     def _is_ref_heading(h: str) -> bool:
         h = (h or "").strip().lower()
@@ -945,6 +1152,9 @@ class WeaverOrchestrator:
         LAST section of the report, replacing any placeholder references
         heading. No sources → nothing added."""
         card = task.task_card
+        # no-citation modes never get a references list
+        if card.get("sourcing_mode") in ("none", "uncited"):
+            return
         sources = card.get("sources") or []
         pq_refs = (card.get("paperqa_result") or {}).get("references")
         if not sources and not pq_refs:
@@ -982,6 +1192,11 @@ class WeaverOrchestrator:
         """٨: الإخراج — كتابة الملف النهائي على القرص في outputs/."""
         task.status = TaskStatus.LAYER_8
         mem.set_status(8, "توليد الملف النهائي")
+        # honest note when the document was written without external sources
+        try:
+            self._source_note(task)
+        except Exception as e:
+            mem.set_status(8, f"ملاحظة المصادر (تخطّي: {e})")
         # append the full reference list at the very end of the report
         try:
             self._append_references(task)

@@ -117,6 +117,76 @@ sentence; repetitive tells ("moreover"/"furthermore" / Arabic equivalents).
 Write the {section_name}:"""
 
 
+# System prompt for the two "no visible citations" writing modes (the user
+# asked for NO sources, or for sources that inform the text but are NOT
+# documented). It deliberately RELAXES the strict-RAG rule so the model writes
+# a real document instead of refusing — while still forbidding fabricated
+# references and AI fingerprints.
+SYSTEM_PROMPT_WRITE_NO_SOURCES = """You are Weaver Write, an academic writing system.
+
+For THIS task the user does not want external sources cited. Rules:
+1. Write substantive, accurate, academic content from your established
+   knowledge. Do NOT refuse, do NOT ask the user for sources, and do NOT tell
+   the user that sources are missing or insufficient.
+2. Do NOT fabricate references, DOIs, page numbers, or in-text citations.
+   Include no citations at all.
+3. Style: academic, objective, human-toned, with varied rhythm, and FREE OF AI
+   fingerprints (no long dashes, no decorative symbols, no language mixing
+   inside a word or sentence, no repetitive tells like "moreover" /
+   "furthermore" or their Arabic equivalents).
+4. Language: follow the task (formal Arabic / academic English), no mixing.
+5. Stay professional and calm regardless of the user's tone."""
+
+
+# Write a section WITHOUT any sources — from the model's own knowledge.
+PROMPT_LAYER_6_WRITE_NO_SOURCES = """Write the {section_name} for the following work.
+
+Topic: {topic}
+Required length: {length}
+
+This section must be written WITHOUT external sources or references, using your
+own well-established knowledge of the subject.
+
+Mandatory:
+- Write a substantive, accurate, academic section from established knowledge.
+- Do NOT refuse, do NOT ask for sources, and do NOT state that sources are
+  missing — the user explicitly wants a source-free piece.
+- Do NOT invent references or in-text citations. Include no citations at all.
+- Academic, human-toned, varied rhythm.
+
+FORBIDDEN (AI fingerprints): long dashes; decorative symbols (stars, arrows,
+pipe, backtick); language mixing inside a word or sentence; repetitive tells
+("moreover"/"furthermore" / Arabic equivalents).
+
+{prior_content}
+Write the {section_name}:"""
+
+
+# Write a section INFORMED by sources but WITHOUT documenting/citing them.
+PROMPT_LAYER_6_WRITE_UNCITED = """Write the {section_name} for the following work.
+
+Topic: {topic}
+Required length: {length}
+
+Background material gathered from research (use it to keep facts accurate, but
+do NOT quote any citation key or turn it into a reference):
+{rag_contexts}
+
+Mandatory:
+- Let the background inform accuracy, but write flowing prose WITHOUT any
+  in-text citations and WITHOUT a references list — the user asked to use
+  sources WITHOUT documenting them.
+- Do NOT write "(Author, Year)", "(key, p. N)", or any bracketed citation.
+- Do NOT refuse or ask for sources. Academic, human-toned, varied rhythm.
+
+FORBIDDEN (AI fingerprints): long dashes; decorative symbols; language mixing
+inside a word or sentence; repetitive tells ("moreover"/"furthermore" / Arabic
+equivalents).
+
+{prior_content}
+Write the {section_name}:"""
+
+
 PROMPT_LAYER_6_5_REWRITE = """Rewrite the following text in a natural academic style.
 
 Text:
