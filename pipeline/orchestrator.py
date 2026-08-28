@@ -389,46 +389,116 @@ class WeaverOrchestrator:
         if want_web:
             await self._web_search(task, mem)
 
-    async def _web_search(self, task: Task, mem: TaskMemory):
-        """Live web search via the SearXNG tool. Results become structured
-        sources (filtered in Layer 5) and references (injected in Layer 6)."""
-        card = task.task_card
-        query = (card.get("topic") or task.description or "").strip()
-        if not query:
-            return
+    @staticmethod
+    def _searx_query(instance: str, query: str, lang: str, limit: int,
+                     timeout: int = 8):
+        """Direct SearXNG JSON search. Returns a list of {title,url,content}
+        or None when the instance is unreachable / returns nothing usable."""
+        import urllib.parse
+        import urllib.request
+        import json as _json
+        instance = (instance or "").rstrip("/")
+        if not instance:
+            return None
+        params = {"q": query, "format": "json", "categories": "general"}
+        if lang:
+            params["language"] = lang
+        url = instance + "/search?" + urllib.parse.urlencode(params)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "WeaverWrite/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+        return [{"title": r.get("title", ""), "url": r.get("url", ""),
+                 "content": r.get("content", "")}
+                for r in (data.get("results", []) or [])[:limit]]
+
+    async def _tool_web_search(self, query: str, lang: str, limit: int):
+        """Fallback: the packaged web_search tool. Returns a results list
+        (possibly empty) and never raises."""
         try:
             from capabilities.tools import tool_web_search
-        except Exception as e:
-            mem.set_status(4, f"بحث ويب (تعذّر التحميل: {e})")
-            return
-        inputs = {"query": query,
-                  "language": "ar" if card.get("language", "ar") == "ar" else "en",
-                  "limit": int(card.get("reference_count") or 8)}
+        except Exception:
+            return []
+        inputs = {"query": query, "language": lang, "limit": limit}
         inst = os.environ.get("WEAVER_SEARXNG_URL", "").strip()
         if inst:
             inputs["instance"] = inst
         try:
             res = await tool_web_search.run(inputs)
-        except Exception as e:
-            mem.set_status(4, f"بحث ويب (خطأ: {e})")
-            task.task_card["web_search_error"] = str(e)
-            return
+        except Exception:
+            return []
         if not getattr(res, "ok", False):
-            err = getattr(res, "error", "unknown")
-            mem.set_status(4, f"بحث ويب فشل: {err}")
-            task.task_card["web_search_error"] = err
+            return []
+        return [{"title": r.get("title", ""), "url": r.get("url", ""),
+                 "content": r.get("content", "")}
+                for r in (res.data or {}).get("results", [])]
+
+    async def _extract_full(self, url: str):
+        """Read a page's full clean text via tool_web_extract (trafilatura).
+        Returns the text, or None when the library/page is unavailable."""
+        if not url:
+            return None
+        try:
+            from capabilities.tools import tool_web_extract
+        except Exception:
+            return None
+        try:
+            res = await tool_web_extract.run({"url": url, "format": "markdown"})
+        except Exception:
+            return None
+        if getattr(res, "ok", False):
+            return (res.data or {}).get("text")
+        return None
+
+    async def _web_search(self, task: Task, mem: TaskMemory):
+        """Live web research. If a SearXNG instance is reachable (WEAVER_SEARXNG_URL
+        or the default http://127.0.0.1:8080), query it directly, take the top 3
+        links and READ each page in full via tool_web_extract; the rest are kept
+        as snippets. If SearXNG is unreachable, fall back to the packaged
+        web_search tool. Everything degrades safely — a missing library or a
+        down service just yields fewer/no sources, never an error."""
+        card = task.task_card
+        query = (card.get("topic") or task.description or "").strip()
+        if not query:
             return
-        results = (res.data or {}).get("results", [])
+        lang = "ar" if card.get("language", "ar") == "ar" else "en"
+        limit = int(card.get("reference_count") or 8)
+
+        # 1) SearXNG (env or default 8080), probed by actually querying it
+        instance = os.environ.get("WEAVER_SEARXNG_URL", "").strip() or "http://127.0.0.1:8080"
+        results = self._searx_query(instance, query, lang, limit)
+        used = "searxng:" + instance
+        # 2) fall back to the packaged tool if SearXNG isn't reachable
+        if results is None:
+            results = await self._tool_web_search(query, lang, limit)
+            used = "web_search"
+        if not results:
+            mem.set_status(4, "بحث ويب: لا نتائج (تدهور آمن)")
+            return
+
         srcs = card.setdefault("sources", [])
-        for r in results:
+        full_reads = 0
+        for i, r in enumerate(results):
             url = r.get("url", "")
             title = r.get("title", "")
             snippet = r.get("content", "")
-            srcs.append({"key": (title or url)[:60], "url": url,
-                         "title": title, "content": snippet})
-            mem.add_reference(f"[ويب] {title} — {snippet[:200]} ({url})",
+            content = snippet
+            is_full = False
+            if i < 3:  # read the top 3 links in full
+                text = await self._extract_full(url)
+                if text:
+                    content = text
+                    is_full = True
+                    full_reads += 1
+            srcs.append({"key": (title or url)[:60], "url": url, "title": title,
+                         "content": content, "full": is_full})
+            mem.add_reference(f"[ويب] {title} — {content[:300]} ({url})",
                               source_key=url)
-        mem.set_status(4, f"بحث ويب: {len(results)} نتيجة")
+        card["web_full_reads"] = full_reads
+        mem.set_status(4, f"بحث ويب ({used}): {len(results)} نتيجة، "
+                          f"قراءة كاملة لـ {full_reads} صفحة")
 
     async def _layer_5(self, task: Task, mem: TaskMemory):
         """٥: المصداقية — تمرير كل مصدر عبر check_source وإسقاط المرفوض."""
@@ -818,9 +888,12 @@ class WeaverOrchestrator:
                 self._emit("step", L("بحث في الويب", "Searching the web"))
             await self._layer_4(task, mem)
             _nsrc = len(task.task_card.get("sources", []) or [])
+            _nfull = task.task_card.get("web_full_reads", 0)
             if _nsrc:
-                self._emit("detail", "",
-                           L(f"{_nsrc} مصدر", f"{_nsrc} sources"))
+                d = L(f"{_nsrc} مصدر", f"{_nsrc} sources")
+                if _nfull:
+                    d += L(f" (قراءة كاملة لـ {_nfull})", f" ({_nfull} read in full)")
+                self._emit("detail", "", d)
 
             self._emit("step", L("فحص مصداقية المصادر", "Checking source credibility"))
             await self._layer_5(task, mem)
