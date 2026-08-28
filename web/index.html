@@ -486,11 +486,37 @@
     font-size: 0.9em; background: var(--surface-hover);
     border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px;
   }
-  .msg.ai .bubble pre.md-pre {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 10px; padding: 12px 14px; margin: 0 0 10px;
-    overflow-x: auto; direction: ltr; text-align: left;
+  /* code block card: header toolbar (lang + copy + expand) over the <pre> */
+  .msg.ai .bubble .code-card {
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    margin: 0 0 12px; background: var(--surface);
   }
+  .msg.ai .bubble .code-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 5px 10px; background: var(--surface-hover);
+    border-bottom: 1px solid var(--border);
+  }
+  .msg.ai .bubble .code-lang {
+    font-size: 0.75em; color: var(--text-muted); text-transform: lowercase;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: .3px;
+  }
+  .msg.ai .bubble .code-tools { display: flex; gap: 2px; }
+  .msg.ai .bubble .code-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+    background: transparent; color: var(--text-muted); cursor: pointer;
+  }
+  .msg.ai .bubble .code-btn:hover { background: var(--bg); color: var(--text); }
+  .msg.ai .bubble .code-btn svg { width: 14px; height: 14px; stroke-width: 2; }
+  .msg.ai .bubble .code-btn.done { color: #4caf7d; }
+  .msg.ai .bubble pre.md-pre {
+    background: var(--surface); border: 0; border-radius: 0;
+    padding: 12px 14px; margin: 0;
+    overflow: auto; direction: ltr; text-align: left;
+    max-height: 340px;
+  }
+  .msg.ai .bubble .code-card.expanded pre.md-pre { max-height: none; }
   .msg.ai .bubble pre.md-pre code {
     background: none; border: 0; padding: 0; font-size: 0.88em;
     white-space: pre; color: var(--text);
@@ -500,6 +526,21 @@
     border-inline-start: 3px solid var(--accent);
     color: var(--text-muted);
   }
+  /* scroll-to-bottom floating action button */
+  .scroll-bottom-fab {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    bottom: 120px; z-index: 40;
+    width: 38px; height: 38px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); cursor: pointer;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+    opacity: 0; pointer-events: none;
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .scroll-bottom-fab.show { opacity: 1; pointer-events: auto; }
+  .scroll-bottom-fab:hover { background: var(--surface-hover); }
+  .scroll-bottom-fab svg { width: 18px; height: 18px; }
   .msg.ai .bubble hr {
     border: 0; border-top: 1px solid var(--border); margin: 14px 0;
   }
@@ -1875,6 +1916,14 @@
       <!-- Messages (chat mode) -->
       <div class="messages" id="messages"></div>
 
+      <!-- Scroll-to-bottom floating action button (FAB) -->
+      <button id="scrollBottomBtn" class="scroll-bottom-fab" type="button"
+              title="التمرير للأسفل" aria-label="Scroll to bottom" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path d="M12 5v14M19 12l-7 7-7-7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
+
       <!-- Input card -->
       <div class="input-card">
         <div class="attach-chips" id="attachChips"></div>
@@ -2999,12 +3048,26 @@
     const closeList=()=>{ if(listTag){ out.push('</'+listTag+'>'); listTag=null; } };
     for(let idx=0; idx<lines.length; idx++){
       let line=lines[idx].replace(/\s+$/,'');
-      // fenced code block
-      if(/^```(.*)$/.test(line)){
+      // fenced code block → a Card with a header toolbar (lang + copy + expand)
+      const fence = line.match(/^```(.*)$/);
+      if(fence){
         flushPara(); closeList();
+        const lang=(fence[1]||'').trim();
         const code=[]; idx++;
         while(idx<lines.length && !/^```/.test(lines[idx])){ code.push(lines[idx].replace(/\s+$/,'')); idx++; }
-        out.push('<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>');
+        const copyIco='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+        const expIco='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>';
+        out.push(
+          '<div class="code-card">'+
+            '<div class="code-head">'+
+              '<span class="code-lang">'+(lang||'code')+'</span>'+
+              '<span class="code-tools">'+
+                '<button class="code-btn" data-code="copy" title="نسخ">'+copyIco+'</button>'+
+                '<button class="code-btn" data-code="expand" title="تكبير">'+expIco+'</button>'+
+              '</span>'+
+            '</div>'+
+            '<pre class="md-pre"><code>'+code.join('\n')+'</code></pre>'+
+          '</div>');
         continue;
       }
       // pipe table: header row + separator row
@@ -3102,6 +3165,23 @@
     if (!box || box._wvActionsWired) return;
     box._wvActionsWired = true;
     box.addEventListener('click', function (e) {
+      // code-block toolbar (copy / expand)
+      const cbtn = e.target.closest && e.target.closest('.code-btn[data-code]');
+      if (cbtn) {
+        const card = cbtn.closest('.code-card');
+        if (!card) return;
+        const kind = cbtn.getAttribute('data-code');
+        if (kind === 'copy') {
+          const codeText = (card.querySelector('pre code') || {}).textContent || '';
+          const done = () => { cbtn.classList.add('done'); setTimeout(() => cbtn.classList.remove('done'), 1200); };
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(codeText).then(done).catch(done);
+          else { try { const ta = document.createElement('textarea'); ta.value = codeText; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); } catch (e) {} done(); }
+        } else if (kind === 'expand') {
+          card.classList.toggle('expanded');
+          cbtn.title = card.classList.contains('expanded') ? 'تصغير' : 'تكبير';
+        }
+        return;
+      }
       const btn = e.target.closest && e.target.closest('.msg-action-btn[data-act]');
       if (!btn) return;
       const msg = btn.closest('.msg.ai');
@@ -3126,6 +3206,31 @@
         regenerateFrom(msg);
       }
     });
+  })();
+
+  // Scroll-to-bottom FAB: show when the user has scrolled up, hide at bottom.
+  (function () {
+    const box = document.getElementById('messages');
+    const fab = document.getElementById('scrollBottomBtn');
+    if (!box || !fab || box._wvFabWired) return;
+    box._wvFabWired = true;
+    function isAtBottom() {
+      return (box.scrollHeight - box.scrollTop - box.clientHeight) < 80;
+    }
+    function updateFab() {
+      const hasContent = box.scrollHeight > box.clientHeight + 40;
+      const showScrollButton = hasContent && !isAtBottom();  // isScrolledUp
+      fab.hidden = !showScrollButton;
+      fab.classList.toggle('show', showScrollButton);
+    }
+    box.addEventListener('scroll', updateFab, { passive: true });
+    window.addEventListener('resize', updateFab);
+    // reflect new messages / streaming growth without a scroll event
+    try { new MutationObserver(updateFab).observe(box, { childList: true, subtree: true }); } catch (e) {}
+    fab.addEventListener('click', function () {
+      box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+    });
+    updateFab();
   })();
   // renderChatsList renders straight from chatsCache (no fetch) so an
   // optimistic new chat isn't wiped before it's saved. refreshChats() pulls
