@@ -802,7 +802,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
             try:
-                res = run_pipeline_sync(desc, progress=sse)
+                from pipeline.orchestrator import task_priority
+                prio = body.get("priority")
+                prio = int(prio) if prio is not None else task_priority(msg)
+                res = run_pipeline_sync(desc, progress=sse, priority=prio)
             except Exception as e:
                 sse({"t": "reply", "reply": ("خطأ: " if isar else "Error: ") + str(e)})
                 sse({"t": "done"})
@@ -854,8 +857,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
             try:
-                from pipeline.orchestrator import run_pipeline_sync
-                res = run_pipeline_sync(desc)
+                from pipeline.orchestrator import run_pipeline_sync, task_priority
+                prio = body.get("priority")
+                prio = int(prio) if prio is not None else task_priority(msg)
+                res = run_pipeline_sync(desc, priority=prio)
             except Exception as e:
                 self._json({"error": "pipeline_error", "message": str(e)})
                 return

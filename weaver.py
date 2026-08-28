@@ -734,8 +734,8 @@ def cmd_ask(args):
             print("\n" + (r.get("reply") or "").strip() + "\n")
         return
     try:
-        from pipeline.orchestrator import run_pipeline_sync
-        res = run_pipeline_sync(q)
+        from pipeline.orchestrator import run_pipeline_sync, task_priority
+        res = run_pipeline_sync(q, priority=task_priority(q))
     except Exception as e:
         print(f"[pipeline error] {e}")
         return

@@ -1169,33 +1169,84 @@ def is_document_task(text: str) -> bool:
 # ── synchronous entry point (used by web/server.py and weaver.py) ──
 _SHARED_ORCH = None
 
-# At most MAX_TASKS pipelines run at once across all request threads; the rest
-# wait for a free slot (five-in-parallel, like the async orchestrator).
 import threading as _threading  # noqa: E402
-_PIPELINE_SEM = _threading.BoundedSemaphore(MAX_TASKS)
+import heapq as _heapq  # noqa: E402
+import itertools as _itertools  # noqa: E402
+
+
+class _PriorityGate:
+    """A concurrency gate of `limit` slots with a PRIORITY wait queue: when all
+    slots are busy, waiting callers are admitted highest-priority-first (FIFO on
+    ties) as slots free — not in arrival order. Thread-safe; used to gate the
+    sync pipeline across all request threads."""
+
+    def __init__(self, limit):
+        self.limit = limit
+        self._lock = _threading.Lock()
+        self._running = 0
+        self._heap = []                      # (-priority, seq, Event)
+        self._seq = _itertools.count()
+
+    def acquire(self, priority: int = 0):
+        with self._lock:
+            if self._running < self.limit:
+                self._running += 1
+                return
+            ev = _threading.Event()
+            _heapq.heappush(self._heap, (-int(priority), next(self._seq), ev))
+        ev.wait()   # a releaser hands us the slot (running already counts us)
+
+    def release(self):
+        with self._lock:
+            if self._heap:
+                _, _, ev = _heapq.heappop(self._heap)  # highest priority next
+                ev.set()                                # slot handed over
+            else:
+                self._running = max(0, self._running - 1)
+
+    def free_slots(self):
+        with self._lock:
+            return max(0, self.limit - self._running)
+
+    def waiting(self):
+        with self._lock:
+            return len(self._heap)
+
+
+# At most MAX_TASKS pipelines run at once across all request threads; extras
+# wait in a priority queue (highest priority admitted first).
+_PIPELINE_GATE = _PriorityGate(MAX_TASKS)
+
+# words that bump a request's priority (so "عاجل …" jumps the queue)
+_URGENT_WORDS = ("عاجل", "مستعجل", "أولوية عالية", "urgent", "asap",
+                 "high priority", "بسرعة")
+
+
+def task_priority(text: str) -> int:
+    """Priority for a request: higher = admitted sooner when the 5 slots are
+    full. Bumped by urgent keywords; default 0."""
+    t = (text or "").lower()
+    return 10 if any(w in t for w in _URGENT_WORDS) else 0
 
 
 def pipeline_slots():
-    """Best-effort count of free parallel slots (for diagnostics)."""
-    try:
-        return _PIPELINE_SEM._value
-    except Exception:
-        return None
+    """Free parallel slots right now (for diagnostics)."""
+    return _PIPELINE_GATE.free_slots()
 
 
 def run_pipeline_sync(description: str, input_files: list = None,
-                      llm_fn=None, progress=None) -> dict:
+                      llm_fn=None, progress=None, priority: int = 0) -> dict:
     """Run one request through the full pipeline and return the reply dict.
     Safe to call from a synchronous context (a threaded HTTP handler, or the
     CLI): it spins its own event loop and its own isolated task memory. Each
     call builds the LLM client fresh from config/.env, so a key added at
     runtime is picked up without a restart. `progress(ev)` streams step
-    events (used by the streaming chat endpoint). At most MAX_TASKS (5) run
-    concurrently; extra requests wait for a slot."""
+    events. At most MAX_TASKS (5) run concurrently; extras wait in a PRIORITY
+    queue — higher `priority` is admitted first."""
     import asyncio
     import tempfile
 
-    _PIPELINE_SEM.acquire()
+    _PIPELINE_GATE.acquire(priority)
     try:
         fd, db = tempfile.mkstemp(prefix="weaver_", suffix=".db")
         os.close(fd)
@@ -1210,4 +1261,4 @@ def run_pipeline_sync(description: str, input_files: list = None,
             except OSError:
                 pass
     finally:
-        _PIPELINE_SEM.release()
+        _PIPELINE_GATE.release()
