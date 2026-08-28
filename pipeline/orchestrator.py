@@ -448,13 +448,35 @@ class WeaverOrchestrator:
                 for r in (res.data or {}).get("results", [])]
 
     async def _extract_full(self, url: str):
-        """Read a page's full text. Uses tool_web_document, which handles HTML
-        (trafilatura), text PDFs (pdfplumber), SCANNED PDFs and images (OCR via
-        pytesseract) — so scanned references/studies found on the web are read
-        too. Falls back to the plain trafilatura extractor, then to None. Every
+        """Read a page's full text. Order: (0) UniWeb browser (curl_impersonate)
+        → (1) tool_web_document (HTML via trafilatura, text PDFs via pdfplumber,
+        SCANNED PDFs & images via OCR) → (2) plain trafilatura → None. Every
         branch degrades safely when a library/service is missing."""
         if not url:
             return None
+        # 0) UniWeb browser (curl_impersonate: real browser fingerprint, beats
+        #    bot-blocking). firecrawl is removed; needs curl_cffi on the device.
+        try:
+            import os as _os, sys as _sys
+            uw = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "engines", "uniweb-core"))
+            if uw not in _sys.path:
+                _sys.path.insert(0, uw)
+            import uniweb as _uniweb
+            html = _uniweb.fetch(url)
+            if html and isinstance(html, str) and len(html.strip()) > 200:
+                # clean the fetched HTML to article text via trafilatura
+                try:
+                    from trafilatura import extract as _tex
+                    txt = _tex(html, output_format="markdown",
+                               include_comments=False, include_tables=True)
+                    if txt and txt.strip():
+                        return txt
+                except Exception:
+                    pass
+                return html
+        except Exception:
+            pass
         # 1) web_document: HTML + text-PDF + scanned-PDF(OCR) + image(OCR)
         try:
             from capabilities.tools import tool_web_document

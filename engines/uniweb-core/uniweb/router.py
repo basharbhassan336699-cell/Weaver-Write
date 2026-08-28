@@ -167,56 +167,39 @@ def route(
             task=Task.SCRAPE,
         )
 
-    # ── ٤. scraping ذكي / Markdown نظيف / crawl → firecrawl ──
-    if need_clean_markdown or task == Task.CRAWL:
-        if caps.has_firecrawl_key:
-            return RouteDecision(
-                engine=Engine.FIRECRAWL,
-                reason=(
-                    "زحف متعدد الصفحات" if task == Task.CRAWL
-                    else "Markdown نظيف مطلوب"
-                ) + " — firecrawl",
-                task=task,
-                fallback=Engine.CURL_IMPERSONATE,
-            )
-        # لا API key — بديل
-        if task == Task.CRAWL:
-            raise RuntimeError(
-                "الزحف يحتاج firecrawl API key. "
-                "احصل عليه من firecrawl.dev أو استخدم autoscraper للاستخلاص."
-            )
+    # ── ٤. Markdown نظيف / crawl ──
+    # firecrawl حُذف (يتطلب مفتاح API خاصاً به ولا يعمل على مفتاح النظام).
+    # نظافة الـMarkdown نتركها لـ curl_impersonate + trafilatura بالأعلى في
+    # خط الأنابيب؛ والزحف متعدد الصفحات لم يعد مدعوماً.
+    if task == Task.CRAWL:
+        raise RuntimeError(
+            "الزحف متعدد الصفحات غير مدعوم (أُزيل firecrawl). "
+            "استخدم fetch لصفحة واحدة أو autoscraper للاستخلاص."
+        )
+    if need_clean_markdown:
+        return RouteDecision(
+            engine=Engine.CURL_IMPERSONATE,
+            reason="Markdown نظيف — curl_impersonate (firecrawl مُزال)",
+            task=task,
+        )
 
-    # ── ٥. استخلاص عام بلا قواعد → firecrawl إن متاح، وإلا autoscraper ──
+    # ── ٥. استخلاص عام بلا قواعد → autoscraper (firecrawl مُزال) ──
     if task == Task.SCRAPE:
-        if caps.has_firecrawl_key:
-            return RouteDecision(
-                engine=Engine.FIRECRAWL,
-                reason="استخلاص ذكي بلا قواعد — firecrawl",
-                task=Task.SCRAPE,
-            )
         return RouteDecision(
             engine=Engine.AUTOSCRAPER,
             reason="استخلاص بلا API — autoscraper (يحتاج أمثلة أولاً)",
             task=Task.SCRAPE,
         )
 
-    # ── ٦. جلب HTML بسيط → curl_impersonate (افتراضي) ──
+    # ── ٦. جلب HTML بسيط → curl_impersonate (افتراضي، firecrawl مُزال) ──
     if caps.has_curl_impersonate:
         return RouteDecision(
             engine=Engine.CURL_IMPERSONATE,
             reason="جلب HTML مع انتحال بصمة متصفح (يتجاوز مكافحة البوتات)",
             task=Task.FETCH,
-            fallback=Engine.FIRECRAWL if caps.has_firecrawl_key else None,
-        )
-
-    # ── لا curl — بديل firecrawl ──
-    if caps.has_firecrawl_key:
-        return RouteDecision(
-            engine=Engine.FIRECRAWL,
-            reason="curl_impersonate غير مبني — firecrawl كبديل للجلب",
-            task=Task.FETCH,
+            fallback=None,
         )
 
     raise RuntimeError(
-        "لا محرك متاح للجلب. ابنِ curl_impersonate أو وفّر firecrawl API key."
+        "لا محرك متاح للجلب. ابنِ curl_impersonate (pip install curl_cffi)."
     )
