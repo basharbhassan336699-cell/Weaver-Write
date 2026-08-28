@@ -318,6 +318,54 @@ def _chat_remove(cid):
         pass
 
 
+# ── output files (generated documents) — list / preview / download ──
+def _output_dir():
+    """The directory the pipeline writes finished files to — the SAME resolver
+    the orchestrator uses (WEAVER_OUTPUT_DIR, phone shared storage, else the
+    project's outputs/)."""
+    try:
+        from pipeline.orchestrator import WeaverOrchestrator
+        return WeaverOrchestrator._resolve_output_dir()
+    except Exception:
+        d = os.path.join(_ROOT, "outputs")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+
+_MIME = {
+    ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+    ".csv": "text/csv; charset=utf-8", ".json": "application/json; charset=utf-8",
+    ".html": "text/html; charset=utf-8", ".htm": "text/html; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+_PREVIEWABLE = {"text/markdown", "text/plain", "text/csv", "application/json",
+                "text/html", "application/pdf",
+                "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
+
+
+def _safe_output_file(path_or_name: str):
+    """Resolve a requested file to an absolute path INSIDE the output dir.
+    Accepts a bare filename or an absolute path; returns None if it escapes the
+    output directory or isn't a regular file (path-traversal safe)."""
+    if not path_or_name:
+        return None
+    d = os.path.realpath(_output_dir())
+    cand = path_or_name
+    if not os.path.isabs(cand):
+        cand = os.path.join(d, cand)
+    real = os.path.realpath(cand)
+    if real != d and not real.startswith(d + os.sep):
+        return None
+    if not os.path.isfile(real):
+        return None
+    return real
+
+
 def _connectors_state():
     try:
         return json.loads(open(_CONN_STATE, encoding="utf-8").read())
@@ -504,6 +552,57 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 n = 0
             self._json({"ok": True, "server": "full",
                         "chats_dir": _CHATS_DIR, "chats": n})
+            return
+        if path == "/api/outputs":
+            # list generated files (present_files): name, size, type, mtime
+            d = _output_dir()
+            items = []
+            try:
+                for name in os.listdir(d):
+                    fp = os.path.join(d, name)
+                    if not os.path.isfile(fp):
+                        continue
+                    ext = os.path.splitext(name)[1].lower()
+                    ctype = _MIME.get(ext, "application/octet-stream")
+                    base = ctype.split(";")[0].strip()
+                    st = os.stat(fp)
+                    items.append({"name": name, "size": st.st_size,
+                                  "mtime": int(st.st_mtime), "ext": ext,
+                                  "type": ctype,
+                                  "previewable": base in _PREVIEWABLE})
+            except OSError:
+                pass
+            items.sort(key=lambda x: x["mtime"], reverse=True)
+            self._json({"dir": d, "files": items})
+            return
+        if path == "/api/output":
+            # view / download a single generated file (view + present_files)
+            q = parse_qs(urlparse(self.path).query)
+            real = _safe_output_file(q.get("path", [""])[0])
+            if not real:
+                self._json({"error": "not_found"}, 404)
+                return
+            ext = os.path.splitext(real)[1].lower()
+            ctype = _MIME.get(ext, "application/octet-stream")
+            base = ctype.split(";")[0].strip()
+            download = q.get("download", ["0"])[0] in ("1", "true", "yes")
+            try:
+                with open(real, "rb") as f:
+                    data = f.read()
+            except OSError:
+                self._json({"error": "read_failed"}, 500)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            if download or base not in _PREVIEWABLE:
+                import urllib.parse as _up
+                fn = _up.quote(os.path.basename(real))
+                self.send_header("Content-Disposition",
+                                 f"attachment; filename*=UTF-8''{fn}")
+            self.end_headers()
+            self.wfile.write(data)
             return
         if path == "/api/chats":
             self._json({"chats": _chats_index()})

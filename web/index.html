@@ -541,6 +541,65 @@
   .scroll-bottom-fab.show { opacity: 1; pointer-events: auto; }
   .scroll-bottom-fab:hover { background: var(--surface-hover); }
   .scroll-bottom-fab svg { width: 18px; height: 18px; }
+
+  /* generated-file card (present_files) */
+  .file-card {
+    display: flex; align-items: center; gap: 10px;
+    margin: 8px 0 2px; padding: 8px 12px;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); max-width: 420px;
+  }
+  .file-card .fc-icon { font-size: 20px; line-height: 1; }
+  .file-card .fc-name {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-size: 0.9em; color: var(--text); direction: ltr;
+    text-align: start;
+  }
+  .file-card .fc-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .file-card .fc-btn {
+    font-size: 0.8em; padding: 4px 10px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--surface-hover);
+    color: var(--text); cursor: pointer; text-decoration: none;
+  }
+  .file-card .fc-btn:hover { background: var(--bg); }
+
+  /* file preview modal (view) */
+  .file-preview-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center; padding: 16px;
+  }
+  .file-preview-overlay .fp-modal {
+    width: min(860px, 96vw); height: min(88vh, 900px);
+    display: flex; flex-direction: column;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 14px; overflow: hidden;
+  }
+  .fp-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .fp-title { font-size: 0.92em; color: var(--text); overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; direction: ltr; }
+  .fp-tools { display: flex; gap: 6px; }
+  .fp-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 30px; height: 30px; padding: 0 8px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-hover);
+    color: var(--text); cursor: pointer; text-decoration: none; font-size: 14px;
+  }
+  .fp-btn:hover { background: var(--bg); }
+  .fp-body { flex: 1; overflow: auto; padding: 14px; background: var(--bg); }
+  .fp-img { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .fp-frame { width: 100%; height: 100%; border: 0; background: #fff; }
+  .fp-text {
+    white-space: pre-wrap; word-break: break-word; direction: ltr;
+    text-align: start; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.85em; color: var(--text);
+  }
+  .fp-md { color: var(--text); }
+  .fp-loading { color: var(--text-muted); text-align: center; padding: 30px; }
   .msg.ai .bubble hr {
     border: 0; border-top: 1px solid var(--border); margin: 14px 0;
   }
@@ -3141,6 +3200,82 @@
 
   // Redo the last exchange: drop this AI reply and its user message, then
   // re-send the same prompt for a fresh reply.
+  // ── Output file card + preview (present_files / view / download) ──
+  function wvBasename(p){ return String(p||'').split(/[\\/]/).pop(); }
+  function wvExt(name){ const i=String(name||'').lastIndexOf('.'); return i>=0?name.slice(i).toLowerCase():''; }
+  function wvPreviewable(ext){ return ['.md','.txt','.csv','.json','.html','.htm','.pdf','.png','.jpg','.jpeg','.gif','.webp','.svg'].indexOf(ext)>=0; }
+  function wvFileEmoji(ext){
+    if(['.png','.jpg','.jpeg','.gif','.webp','.svg'].indexOf(ext)>=0) return '🖼️';
+    if(ext==='.pdf') return '📕'; if(ext==='.docx') return '📘';
+    if(ext==='.pptx') return '📙'; if(ext==='.xlsx') return '📗';
+    if(['.md','.txt'].indexOf(ext)>=0) return '📄'; return '📎';
+  }
+  function addFileCard(aiMsg, path){
+    if(!aiMsg || !path) return;
+    const wrap = aiMsg.querySelector('.msg-wrapper'); if(!wrap) return;
+    const name = wvBasename(path); const ext = wvExt(name);
+    const isAr = (document.documentElement.lang||'en')==='ar';
+    const card = document.createElement('div');
+    card.className = 'file-card';
+    const dl = '/api/output?path='+encodeURIComponent(name)+'&download=1';
+    card.innerHTML =
+      '<span class="fc-icon">'+wvFileEmoji(ext)+'</span>'+
+      '<span class="fc-name"></span>'+
+      '<span class="fc-actions">'+
+        (wvPreviewable(ext)?'<button class="fc-btn" data-fc="preview">'+(isAr?'معاينة':'Preview')+'</button>':'')+
+        '<a class="fc-btn" href="'+dl+'" download>'+(isAr?'تحميل':'Download')+'</a>'+
+      '</span>';
+    card.querySelector('.fc-name').textContent = name;
+    card.dataset.name = name;
+    const pv = card.querySelector('[data-fc="preview"]');
+    if(pv) pv.addEventListener('click', ()=> wvOpenPreview(name));
+    const actions = wrap.querySelector('.msg-actions');
+    if(actions) wrap.insertBefore(card, actions); else wrap.appendChild(card);
+    aiMsg.dataset.file = name;
+  }
+  function wvEnsurePreviewModal(){
+    let m = document.getElementById('filePreview');
+    if(m) return m;
+    m = document.createElement('div');
+    m.id = 'filePreview'; m.className = 'file-preview-overlay'; m.hidden = true;
+    m.innerHTML =
+      '<div class="fp-modal">'+
+        '<div class="fp-head">'+
+          '<span class="fp-title"></span>'+
+          '<span class="fp-tools">'+
+            '<a class="fp-btn fp-download" href="#" download>⬇︎</a>'+
+            '<button class="fp-btn fp-close" title="إغلاق">✕</button>'+
+          '</span>'+
+        '</div>'+
+        '<div class="fp-body"></div>'+
+      '</div>';
+    document.body.appendChild(m);
+    m.addEventListener('click', e=>{ if(e.target===m) m.hidden=true; });
+    m.querySelector('.fp-close').addEventListener('click', ()=> m.hidden=true);
+    return m;
+  }
+  async function wvOpenPreview(name){
+    const m = wvEnsurePreviewModal();
+    const body = m.querySelector('.fp-body');
+    const ext = wvExt(name);
+    const url = '/api/output?path='+encodeURIComponent(name);
+    m.querySelector('.fp-title').textContent = name;
+    m.querySelector('.fp-download').href = url+'&download=1';
+    body.innerHTML = '<div class="fp-loading">…</div>';
+    m.hidden = false;
+    try{
+      if(['.png','.jpg','.jpeg','.gif','.webp','.svg'].indexOf(ext)>=0){
+        body.innerHTML=''; const img=document.createElement('img'); img.className='fp-img'; img.src=url; body.appendChild(img);
+      } else if(ext==='.pdf'){
+        body.innerHTML=''; const fr=document.createElement('iframe'); fr.className='fp-frame'; fr.src=url; body.appendChild(fr);
+      } else {
+        const txt = await (await fetch(url)).text();
+        if(ext==='.md'){ const d=document.createElement('div'); d.className='bubble fp-md'; d.innerHTML=renderMarkdown(txt); body.innerHTML=''; body.appendChild(d); }
+        else { const pre=document.createElement('pre'); pre.className='fp-text'; pre.textContent=txt; body.innerHTML=''; body.appendChild(pre); }
+      }
+    }catch(e){ body.innerHTML = '<div class="fp-loading">تعذّرت المعاينة</div>'; }
+  }
+
   function regenerateFrom(msg) {
     let el = msg.previousElementSibling, userNode = null, userText = '';
     while (el) {
@@ -3392,7 +3527,7 @@
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
-        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); }
+        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) addFileCard(aiMsg, ev.output_path); }
         else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
       }
