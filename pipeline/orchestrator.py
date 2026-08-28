@@ -63,6 +63,9 @@ class Task:
     output_path: Optional[str] = None
     error: Optional[str] = None
 
+    # أولوية الدور في الطابور — الأعلى يُنفَّذ أولاً (افتراضي 0)
+    priority: int = 0
+
     # بطاقة المهمة (تُملأ في طبقة الفهم)
     task_card: dict = field(default_factory=dict)
 
@@ -134,22 +137,31 @@ class WeaverOrchestrator:
 
     # ── إضافة مهمة ──
 
-    async def submit(self, description: str, input_files: list[str] = None) -> Task:
+    async def submit(self, description: str, input_files: list[str] = None,
+                     priority: int = 0) -> Task:
         """
-        يُضيف مهمة جديدة.
-        إن كانت الخانات الخمس ممتلئة → طابور انتظار.
+        يُضيف مهمة جديدة. حتى ٥ مهام تعمل بالتوازي؛ الزائد يدخل طابور أولوية:
+        الأعلى `priority` يُنفَّذ أولاً (وعند التساوي: الأقدم أولاً).
         """
         task = Task(
             description=description,
             input_files=input_files or [],
+            priority=priority,
         )
 
         async with self._lock:
             if len(self._active) < MAX_TASKS:
                 await self._start_task(task)
             else:
-                self._queue.append(task)
-                print(f"📋 مهمة [{task.task_id}] في الطابور ({len(self._queue)} بالانتظار)")
+                # priority insert: place before the first lower-priority task
+                idx = len(self._queue)
+                for i, q in enumerate(self._queue):
+                    if q.priority < task.priority:
+                        idx = i
+                        break
+                self._queue.insert(idx, task)
+                print(f"📋 مهمة [{task.task_id}] في الطابور "
+                      f"(أولوية {task.priority}، {len(self._queue)} بالانتظار)")
 
         return task
 
@@ -765,6 +777,65 @@ class WeaverOrchestrator:
             f.write(body or "(لا يوجد محتوى بعد — لم يُضبط مفتاح النموذج)")
         return out
 
+    @staticmethod
+    def _resolve_font(card: dict) -> str:
+        """Resolve the document font through fonts-core (engines/fonts-core).
+        Keeps the requested name (Office renders it) but validates it against
+        the bundled families. Falls back to a sane per-language default."""
+        import os as _os, sys as _sys
+        lang = card.get("language", "ar")
+        requested = card.get("font") or (
+            "Kufyan Arabic" if lang == "ar" else "Times New Roman")
+        try:
+            fc = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "engines", "fonts-core"))
+            if fc not in _sys.path:
+                _sys.path.insert(0, fc)
+            import fonts as _fonts
+            info = _fonts.resolve_named_font(requested)
+            return info.get("requested") or requested
+        except Exception:
+            return requested
+
+    def _maybe_chart(self, task: Task, out_dir: str):
+        """Build a chart PNG via chart_builder when the task provides a chart
+        spec, or when charts are requested and tabular data exists. Returns the
+        image path or None. Degrades safely if matplotlib is missing."""
+        import os as _os, re as _re
+        card = task.task_card
+        spec = card.get("chart")
+        if not spec:
+            extras = card.get("extras") or {}
+            data = card.get("data")
+            if extras.get("charts") and isinstance(data, list) and len(data) >= 2:
+                labels, vals = [], []
+                for r in data:
+                    if isinstance(r, (list, tuple)) and len(r) >= 2:
+                        try:
+                            vals.append(float(r[1]))
+                            labels.append(str(r[0]))
+                        except (TypeError, ValueError):
+                            labels, vals = [], []
+                            break
+                if labels and vals and len(labels) == len(vals):
+                    spec = {"type": "bar",
+                            "data": {"labels": labels, "values": vals},
+                            "title": card.get("topic", "")}
+        if not spec or not spec.get("data"):
+            return None
+        base = _re.sub(r"\W+", "", (card.get("topic") or "chart"))[:30] or "chart"
+        png = _os.path.join(out_dir, "chart_" + base + ".png")
+        try:
+            res = self._skill_call(
+                "chart_builder", "build_chart", "build_chart",
+                spec.get("type", "bar"), spec["data"], png,
+                title=spec.get("title", ""), lang=card.get("language", "ar"))
+            if isinstance(res, dict) and res.get("ok") is False:
+                return None
+            return png if _os.path.exists(png) else None
+        except Exception:
+            return None
+
     def _export(self, task: Task) -> str:
         """Route to the right builder by output_format and WRITE the file to
         the resolved output directory (the phone's "Weaver Write" folder on
@@ -781,6 +852,16 @@ class WeaverOrchestrator:
         title = topic
         sections = task.sections or [{"heading": title, "body": task.draft}]
         references = (card.get("paperqa_result") or {}).get("references")
+        font = self._resolve_font(card)
+
+        # generate a chart when requested/derivable and append it as an image
+        chart_png = self._maybe_chart(task, out_dir)
+        if chart_png:
+            sections = sections + [{
+                "heading": ("الرسم البياني" if lang == "ar" else "Chart"),
+                "body": "",
+                "image": {"path": chart_png, "caption": card.get("topic", "")}}]
+            card["chart_path"] = chart_png
 
         try:
             if fmt == "docx":
@@ -794,7 +875,7 @@ class WeaverOrchestrator:
                 self._skill_call(
                     "docx_builder", "docx_advanced", "build_rich_docx",
                     title=title, sections=sections, output_path=out, lang=lang,
-                    references=references, toc=bool(card.get("toc")),
+                    font=font, references=references, toc=bool(card.get("toc")),
                     cover=cover, toc_position=toc_pos)
                 return out
             if fmt == "pdf":
@@ -1088,6 +1169,19 @@ def is_document_task(text: str) -> bool:
 # ── synchronous entry point (used by web/server.py and weaver.py) ──
 _SHARED_ORCH = None
 
+# At most MAX_TASKS pipelines run at once across all request threads; the rest
+# wait for a free slot (five-in-parallel, like the async orchestrator).
+import threading as _threading  # noqa: E402
+_PIPELINE_SEM = _threading.BoundedSemaphore(MAX_TASKS)
+
+
+def pipeline_slots():
+    """Best-effort count of free parallel slots (for diagnostics)."""
+    try:
+        return _PIPELINE_SEM._value
+    except Exception:
+        return None
+
 
 def run_pipeline_sync(description: str, input_files: list = None,
                       llm_fn=None, progress=None) -> dict:
@@ -1096,19 +1190,24 @@ def run_pipeline_sync(description: str, input_files: list = None,
     CLI): it spins its own event loop and its own isolated task memory. Each
     call builds the LLM client fresh from config/.env, so a key added at
     runtime is picked up without a restart. `progress(ev)` streams step
-    events (used by the streaming chat endpoint)."""
+    events (used by the streaming chat endpoint). At most MAX_TASKS (5) run
+    concurrently; extra requests wait for a slot."""
     import asyncio
     import tempfile
 
-    fd, db = tempfile.mkstemp(prefix="weaver_", suffix=".db")
-    os.close(fd)
-    orch = WeaverOrchestrator(db_path=db, llm_fn=llm_fn)
+    _PIPELINE_SEM.acquire()
     try:
-        return asyncio.run(orch.run_once(description, input_files,
-                                         sandbox=bool(input_files),
-                                         progress=progress))
-    finally:
+        fd, db = tempfile.mkstemp(prefix="weaver_", suffix=".db")
+        os.close(fd)
+        orch = WeaverOrchestrator(db_path=db, llm_fn=llm_fn)
         try:
-            os.remove(db)
-        except OSError:
-            pass
+            return asyncio.run(orch.run_once(description, input_files,
+                                             sandbox=bool(input_files),
+                                             progress=progress))
+        finally:
+            try:
+                os.remove(db)
+            except OSError:
+                pass
+    finally:
+        _PIPELINE_SEM.release()
