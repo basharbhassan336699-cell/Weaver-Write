@@ -436,27 +436,44 @@ class WeaverOrchestrator:
                 for r in (res.data or {}).get("results", [])]
 
     async def _extract_full(self, url: str):
-        """Read a page's full clean text via tool_web_extract (trafilatura).
-        Returns the text, or None when the library/page is unavailable."""
+        """Read a page's full text. Uses tool_web_document, which handles HTML
+        (trafilatura), text PDFs (pdfplumber), SCANNED PDFs and images (OCR via
+        pytesseract) — so scanned references/studies found on the web are read
+        too. Falls back to the plain trafilatura extractor, then to None. Every
+        branch degrades safely when a library/service is missing."""
         if not url:
             return None
+        # 1) web_document: HTML + text-PDF + scanned-PDF(OCR) + image(OCR)
+        try:
+            from capabilities.tools import tool_web_document
+            res = await tool_web_document.run({"url": url, "ocr_lang": "ara+eng"})
+            if getattr(res, "ok", False):
+                d = res.data or {}
+                if d.get("text"):
+                    return d["text"]
+                pages = d.get("pages") or []
+                joined = "\n\n".join(p.get("text", "") for p in pages
+                                     if p.get("text"))
+                if joined.strip():
+                    return joined
+        except Exception:
+            pass
+        # 2) fallback: plain HTML extractor (trafilatura only)
         try:
             from capabilities.tools import tool_web_extract
-        except Exception:
-            return None
-        try:
             res = await tool_web_extract.run({"url": url, "format": "markdown"})
+            if getattr(res, "ok", False):
+                return (res.data or {}).get("text")
         except Exception:
-            return None
-        if getattr(res, "ok", False):
-            return (res.data or {}).get("text")
+            pass
         return None
 
     async def _web_search(self, task: Task, mem: TaskMemory):
         """Live web research. If a SearXNG instance is reachable (WEAVER_SEARXNG_URL
         or the default http://127.0.0.1:8080), query it directly, take the top 3
-        links and READ each page in full via tool_web_extract; the rest are kept
-        as snippets. If SearXNG is unreachable, fall back to the packaged
+        links and READ each page in full via tool_web_document (HTML, text/
+        scanned PDFs with OCR, images); the rest are kept as snippets. If
+        SearXNG is unreachable, fall back to the packaged
         web_search tool. Everything degrades safely — a missing library or a
         down service just yields fewer/no sources, never an error."""
         card = task.task_card
