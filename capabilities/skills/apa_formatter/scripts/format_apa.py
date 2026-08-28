@@ -33,9 +33,58 @@ def format_apa_book(author, year, title, publisher):
     return f"{author} ({year}). *{title}*. {publisher}."
 
 
+def format_apa_website(title, url="", year=None, site=None):
+    """APA 7th for a web page / online source."""
+    y = f" ({year})." if year else "."
+    s = f" *{site}*." if site else ""
+    u = f" {url}" if url else ""
+    return f"{title}{y}{s}{u}".strip()
+
+
 def sort_references(refs: list[str]) -> list[str]:
     """Alphabetical order by first character."""
     return sorted(refs, key=lambda r: r.strip().lower())
+
+
+def build_bibliography(sources, lang="ar", extra=None):
+    """Build a full, sorted, numbered APA reference list from retrieved sources.
+
+    `sources` is a list of dicts (title/url/author/year/journal/publisher/…) as
+    gathered by the pipeline's web/academic search. `extra` is any pre-formatted
+    references text (e.g. from PaperQA) appended as-is. Returns a string, or ""
+    when there is nothing to list.
+    """
+    entries = []
+    for s in (sources or []):
+        if not isinstance(s, dict):
+            s = {"title": str(s)}
+        author = s.get("author")
+        year = s.get("year")
+        title = (s.get("title") or s.get("key") or s.get("url") or "").strip()
+        if not title:
+            continue
+        if author and s.get("journal"):
+            entries.append(format_apa_article(
+                author, year or "n.d.", title, s["journal"],
+                s.get("volume"), s.get("issue"), s.get("pages"), s.get("doi")))
+        elif author and s.get("publisher"):
+            entries.append(format_apa_book(author, year or "n.d.", title,
+                                           s["publisher"]))
+        else:
+            entries.append(format_apa_website(title, s.get("url", ""), year,
+                                              s.get("site")))
+    # de-dup then sort
+    seen, uniq = set(), []
+    for e in entries:
+        if e not in seen:
+            seen.add(e)
+            uniq.append(e)
+    uniq = sort_references(uniq)
+    out = "\n".join(f"{i}. {e}" for i, e in enumerate(uniq, 1))
+    if extra:
+        extra = str(extra).strip()
+        out = (out + "\n" + extra).strip() if out else extra
+    return out
 
 
 def _main():

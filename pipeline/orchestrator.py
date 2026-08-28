@@ -830,10 +830,60 @@ class WeaverOrchestrator:
             return self._export_fallback(out_dir, safe, task)
         return self._export_fallback(out_dir, safe, task)
 
+    @staticmethod
+    def _is_ref_heading(h: str) -> bool:
+        h = (h or "").strip().lower()
+        return any(k in h for k in ("مراجع", "مصادر", "references", "works cited",
+                                    "bibliography"))
+
+    def _append_references(self, task: Task):
+        """Build the full reference list from the retrieved sources via the
+        citation-style skill (apa_formatter / mla_formatter) and put it as the
+        LAST section of the report, replacing any placeholder references
+        heading. No sources → nothing added."""
+        card = task.task_card
+        sources = card.get("sources") or []
+        pq_refs = (card.get("paperqa_result") or {}).get("references")
+        if not sources and not pq_refs:
+            return
+        lang = card.get("language", "ar")
+        style = str(card.get("citation_style", "APA")).upper()
+        skill = "mla_formatter" if style == "MLA" else "apa_formatter"
+        module = "format_mla" if style == "MLA" else "format_apa"
+        try:
+            refs = self._skill_call(skill, module, "build_bibliography",
+                                    sources, lang, pq_refs)
+        except Exception:
+            # minimal fallback list if the skill can't be loaded
+            lines = []
+            for i, s in enumerate(sources, 1):
+                if isinstance(s, dict):
+                    lines.append(f"{i}. {s.get('title') or s.get('key') or ''} "
+                                 f"{s.get('url','')}".strip())
+            refs = "\n".join(lines)
+            if pq_refs:
+                refs = (refs + "\n" + str(pq_refs)).strip()
+        if not (refs or "").strip():
+            return
+        head = "قائمة المراجع" if lang == "ar" else "References"
+        # drop any earlier placeholder references section, then append the real one
+        task.sections = [s for s in (task.sections or [])
+                         if not self._is_ref_heading(s.get("heading", ""))]
+        task.sections.append({"heading": head, "body": refs})
+        # also reflect it at the end of the chat draft
+        if task.draft:
+            task.draft = task.draft.rstrip() + "\n\n" + head + "\n" + refs
+        card["references_list"] = refs
+
     async def _layer_8(self, task: Task, mem: TaskMemory):
         """٨: الإخراج — كتابة الملف النهائي على القرص في outputs/."""
         task.status = TaskStatus.LAYER_8
         mem.set_status(8, "توليد الملف النهائي")
+        # append the full reference list at the very end of the report
+        try:
+            self._append_references(task)
+        except Exception as e:
+            mem.set_status(8, f"قائمة المراجع (تخطّي: {e})")
         # إضافة تقرير التحقق للوثيقة النهائية
         try:
             from pipeline.layers.layer_7_verify import format_verification_report
