@@ -26,14 +26,15 @@ def _has_curl_impersonate() -> bool:
 
 
 def _has_browser() -> bool:
-    """فحص وجود متصفح + playwright."""
+    """فحص وجود متصفح فعلي قابل للتشغيل (يشمل Termux/Playwright)."""
     try:
-        import playwright  # type: ignore
-        return True
+        from .termux_browser import detect_chromium
+        if detect_chromium():
+            return True
     except Exception:
         pass
-    # متصفح مثبت مباشرة
-    return any(shutil.which(b) for b in ("chromium", "google-chrome", "chrome"))
+    return any(shutil.which(b) for b in
+               ("chromium", "chromium-browser", "google-chrome", "chrome"))
 
 
 def _detect_llm() -> tuple[bool, str | None]:

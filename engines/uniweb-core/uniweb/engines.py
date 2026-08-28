@@ -205,9 +205,26 @@ def _run_browser_use(
             "(مثل ChatAnthropic أو ChatOpenAI)."
         )
 
+    # Termux/phone: inject a Chromium profile with phone-safe launch flags so
+    # the browser can actually start (no sandbox/zygote, headless, low memory).
+    if not any(k in kwargs for k in
+               ("browser_profile", "browser", "browser_session", "page")):
+        try:
+            from .termux_browser import build_browser_profile
+            prof = build_browser_profile()
+            if prof is not None:
+                kwargs["browser_profile"] = prof
+        except Exception:
+            pass
+
     # browser_use غير متزامن — نعيد coroutine للمستدعي ليشغّله
     async def _task():
-        agent = Agent(task=instruction, llm=llm, **kwargs)
+        try:
+            agent = Agent(task=instruction, llm=llm, **kwargs)
+        except TypeError:
+            # this browser_use version doesn't accept browser_profile= — retry
+            kwargs.pop("browser_profile", None)
+            agent = Agent(task=instruction, llm=llm, **kwargs)
         history = await agent.run()
         return history
 
