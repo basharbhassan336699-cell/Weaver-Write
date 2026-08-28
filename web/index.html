@@ -600,6 +600,37 @@
   }
   .fp-md { color: var(--text); }
   .fp-loading { color: var(--text-muted); text-align: center; padding: 30px; }
+
+  /* artifacts chip (top bar) + badge count */
+  .artifacts-chip { position: relative; }
+  .artifacts-badge {
+    position: absolute; top: -3px; inset-inline-end: -3px;
+    min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px;
+    background: var(--accent); color: #fff;
+    font-size: 9px; line-height: 15px; text-align: center; font-weight: 700;
+  }
+  /* artifacts grid inside the modal */
+  .artifacts-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 12px;
+  }
+  .art-card {
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    background: var(--surface); cursor: pointer;
+  }
+  .art-card:hover { border-color: var(--accent); }
+  .art-thumb {
+    display: block; width: 100%; height: 92px; object-fit: cover;
+    background: var(--surface-hover);
+  }
+  .art-thumb.art-ico {
+    display: flex; align-items: center; justify-content: center; font-size: 34px;
+  }
+  .art-name {
+    padding: 7px 9px; font-size: 0.78em; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: ltr;
+    text-align: start;
+  }
   .msg.ai .bubble hr {
     border: 0; border-top: 1px solid var(--border); margin: 14px 0;
   }
@@ -1950,13 +1981,15 @@
         </button>
       </div>
       <div class="top-right">
-        <button class="icon-btn" title="Export" onclick="void(0)">
+        <button class="icon-btn artifacts-chip" id="artifactsBtn" title="Artifacts"
+                onclick="wvOpenArtifactsBar()">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
             <polyline points="14 2 14 8 20 8"/>
             <line x1="9" y1="13" x2="15" y2="13"/>
             <line x1="9" y1="17" x2="13" y2="17"/>
           </svg>
+          <span class="artifacts-badge" id="artifactsBadge" hidden>0</span>
         </button>
         <button class="share-btn" id="shareBtn" onclick="void(0)" title="Share">Share</button>
       </div>
@@ -3065,11 +3098,17 @@
     const box = document.getElementById('messages');
     if (box) {
       box.innerHTML = '';
-      currentMessages.forEach(m => box.appendChild(m.role === 'user' ? makeUserMsg(m.content) : makeAiMsg(m.content)));
+      currentMessages.forEach(m => {
+        if (m.role === 'user') { box.appendChild(makeUserMsg(m.content)); return; }
+        const el = makeAiMsg(m.content);
+        box.appendChild(el);
+        if (m.file) addFileCard(el, m.file);   // re-create the artifact card
+      });
       box.scrollTop = box.scrollHeight;
     }
     const titleEl = document.getElementById('chatTitleText'); if (titleEl && d.title) titleEl.textContent = d.title;
     renderChatsList();
+    if (typeof wvUpdateArtifactsBadge === 'function') wvUpdateArtifactsBadge();
   }
   async function deleteChat(id) {
     try { await fetch('/api/chats/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: id }) }); } catch (e) {}
@@ -3232,6 +3271,7 @@
     const actions = wrap.querySelector('.msg-actions');
     if(actions) wrap.insertBefore(card, actions); else wrap.appendChild(card);
     aiMsg.dataset.file = name;
+    if (typeof wvUpdateArtifactsBadge === 'function') wvUpdateArtifactsBadge();
   }
   function wvEnsurePreviewModal(){
     let m = document.getElementById('filePreview');
@@ -3274,6 +3314,52 @@
         else { const pre=document.createElement('pre'); pre.className='fp-text'; pre.textContent=txt; body.innerHTML=''; body.appendChild(pre); }
       }
     }catch(e){ body.innerHTML = '<div class="fp-loading">تعذّرت المعاينة</div>'; }
+  }
+
+  // ── Artifacts chip: browse THIS conversation's files/images (Claude-style) ──
+  function wvConvFiles(){
+    const out=[], seen={};
+    document.querySelectorAll('#messages .file-card[data-name]').forEach(function(c){
+      const n=c.dataset.name; if(n && !seen[n]){ seen[n]=1; out.push(n); }
+    });
+    return out;
+  }
+  function wvUpdateArtifactsBadge(){
+    const b=document.getElementById('artifactsBadge'); if(!b) return;
+    const n=wvConvFiles().length;
+    b.textContent=n; b.hidden=(n===0);
+  }
+  function wvEnsureArtifactsBar(){
+    let m=document.getElementById('convArtifacts'); if(m) return m;
+    m=document.createElement('div'); m.id='convArtifacts'; m.className='file-preview-overlay'; m.hidden=true;
+    m.innerHTML='<div class="fp-modal"><div class="fp-head"><span class="fp-title"></span><span class="fp-tools"><button class="fp-btn fp-close" title="إغلاق">✕</button></span></div><div class="fp-body"><div class="artifacts-grid"></div></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener('click', function(e){ if(e.target===m) m.hidden=true; });
+    m.querySelector('.fp-close').addEventListener('click', function(){ m.hidden=true; });
+    return m;
+  }
+  function wvOpenArtifactsBar(){
+    const isAr=(document.documentElement.lang||'en')==='ar';
+    const m=wvEnsureArtifactsBar();
+    m.querySelector('.fp-title').textContent=isAr?'أعمال المحادثة':'Conversation artifacts';
+    const grid=m.querySelector('.artifacts-grid');
+    const files=wvConvFiles();
+    if(!files.length){
+      grid.innerHTML='<div class="fp-loading">'+(isAr?'لا توجد أعمال في هذه المحادثة بعد':'No artifacts in this conversation yet')+'</div>';
+    } else {
+      grid.innerHTML=files.map(function(name){
+        const ext=wvExt(name);
+        const url='/api/output?path='+encodeURIComponent(name);
+        const isImg=['.png','.jpg','.jpeg','.gif','.webp','.svg'].indexOf(ext)>=0;
+        const thumb=isImg?'<img class="art-thumb" src="'+url+'" alt="">':'<div class="art-thumb art-ico">'+wvFileEmoji(ext)+'</div>';
+        return '<div class="art-card" data-name="'+name.replace(/"/g,'&quot;')+'">'+thumb+'<div class="art-name"></div></div>';
+      }).join('');
+      grid.querySelectorAll('.art-card').forEach(function(c){
+        c.querySelector('.art-name').textContent=c.dataset.name;
+        c.addEventListener('click', function(){ m.hidden=true; wvOpenPreview(c.dataset.name); });
+      });
+    }
+    m.hidden=false;
   }
 
   function regenerateFrom(msg) {
@@ -3408,6 +3494,7 @@
     renderChatsList();
     const titleEl = document.getElementById('chatTitleText');
     if (titleEl) titleEl.textContent = 'New chat';
+    if (typeof wvUpdateArtifactsBadge === 'function') wvUpdateArtifactsBadge();
   }
 
   function sendMessage() {
@@ -3516,6 +3603,7 @@
       messages.scrollTop = messages.scrollHeight;
 
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
+      let assistantFile = '';  // produced file name (for the artifacts card)
       let gotReply = false;
       function applyReply(reply) {
         gotReply = true;
@@ -3527,7 +3615,7 @@
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
-        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) addFileCard(aiMsg, ev.output_path); }
+        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); } }
         else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
       }
@@ -3563,7 +3651,9 @@
       // fall back to the shown text for error/empty replies
       const finalText = assistantRaw || bubble.textContent || '';
       aiMsg.dataset.raw = finalText;  // Copy button uses the raw markdown
-      currentMessages.push({ role: 'assistant', content: finalText });
+      const amsg = { role: 'assistant', content: finalText };
+      if (assistantFile) amsg.file = assistantFile;  // persist the artifact
+      currentMessages.push(amsg);
       saveCurrentChat();
       messages.scrollTop = messages.scrollHeight;
     })();
