@@ -650,12 +650,43 @@ class WeaverOrchestrator:
             mod = __import__(fname)
             draft = task.draft or task.task_card.get("draft", "")
             if draft:
-                result = mod.humanize_text(draft, file_type=file_type)
-                task.draft = result["text"]
+                # Protect citations from the AI-fingerprint cleaner (which would
+                # otherwise strip "(Smith, 2023)" as a Latin-in-Arabic mix). We
+                # mask them, humanize, then restore them intact.
+                masked, cites = self._mask_citations(draft)
+                result = mod.humanize_text(masked, file_type=file_type)
+                task.draft = self._unmask_citations(result["text"], cites)
                 task.task_card["humanized"] = True
                 task.task_card["cleaning_issues"] = result.get("issues", [])
         except Exception as e:
             mem.set_status(65, f"إعادة الصياغة (تخطّي: {e})")
+
+    # citation guards — keep (Author, Year) / (key, p. N) / (…، ص. N) intact
+    _CITE_RE = None
+
+    @classmethod
+    def _mask_citations(cls, text: str):
+        """Replace parenthesised citations with digit-only placeholders so the
+        humanizer's Latin/decoration cleaning can't damage them."""
+        import re
+        if cls._CITE_RE is None:
+            cls._CITE_RE = re.compile(
+                r"\([^()]*(?:\b\d{4}\b|p\.?\s*\d+|ص\.?\s*\d+)[^()]*\)")
+        cites = []
+
+        def _sub(m):
+            cites.append(m.group(0))
+            return "" + str(len(cites) - 1) + ""
+        return cls._CITE_RE.sub(_sub, text), cites
+
+    @staticmethod
+    def _unmask_citations(text: str, cites: list) -> str:
+        import re
+        if not cites:
+            return text
+        return re.sub(r"(\d+)",
+                      lambda m: cites[int(m.group(1))]
+                      if int(m.group(1)) < len(cites) else m.group(0), text)
 
     @staticmethod
     def _allowed_keys(task: Task) -> list:
