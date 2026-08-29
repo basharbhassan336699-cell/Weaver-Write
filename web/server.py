@@ -285,6 +285,71 @@ def _chats_index():
     return items
 
 
+def _chats_search(query, limit=50):
+    """Search stored chats by TITLE and by MESSAGE CONTENT. Returns matches
+    newest-first, each with a short snippet around the first content hit so the
+    user sees WHY it matched. Case-insensitive; Arabic tolerant (strips the
+    Arabic diacritics/tatweel so 'ذكاء' matches 'ذكاءً')."""
+    q = _normalize_ar((query or "").strip().lower())
+    if not q:
+        return []
+    try:
+        names = os.listdir(_CHATS_DIR)
+    except OSError:
+        names = []
+    out = []
+    for fn in names:
+        if not fn.endswith(".json"):
+            continue
+        try:
+            d = json.load(open(os.path.join(_CHATS_DIR, fn), encoding="utf-8"))
+        except Exception:
+            continue
+        title = d.get("title", "") or ""
+        title_hit = q in _normalize_ar(title.lower())
+        snippet, hits = "", 0
+        for m in d.get("messages", []) or []:
+            body = m.get("content", "") if isinstance(m, dict) else str(m)
+            norm = _normalize_ar(body.lower())
+            pos = norm.find(q)
+            if pos != -1:
+                hits += 1
+                if not snippet:
+                    start = max(0, pos - 40)
+                    end = min(len(body), pos + len(q) + 60)
+                    snippet = ("…" if start else "") + body[start:end].strip() \
+                              + ("…" if end < len(body) else "")
+        if title_hit or hits:
+            out.append({"id": d.get("id"), "title": title,
+                        "ts": d.get("ts", 0), "windowId": d.get("windowId"),
+                        "projectId": d.get("projectId"),
+                        "snippet": snippet, "hits": hits,
+                        "titleHit": bool(title_hit)})
+    out.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    return out[:limit]
+
+
+def _normalize_ar(s):
+    """Fold Arabic diacritics, tatweel, and alef/hamza variants so search is
+    forgiving. ASCII text passes through unchanged."""
+    if not s:
+        return s
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if 0x064B <= o <= 0x0652 or ch == "ـ":   # harakat + tatweel
+            continue
+        if ch in "أإآ":
+            out.append("ا")
+        elif ch == "ى":
+            out.append("ي")
+        elif ch == "ة":
+            out.append("ه")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _chat_read(cid):
     if not (cid and _ID_RE.match(cid)):
         return None
@@ -611,6 +676,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             cid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
             d = _chat_read(cid)
             self._json(d if d else {"error": "not_found"})
+            return
+        if path == "/api/chats/search":
+            q = parse_qs(urlparse(self.path).query).get("q", [""])[0]
+            self._json({"results": _chats_search(q)})
             return
         if path == "/api/providers":
             reg = []
