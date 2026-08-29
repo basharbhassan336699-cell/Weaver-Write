@@ -2673,12 +2673,19 @@
     clearTimeout(_csearchTimer);
     const seq = ++_csearchSeq;
     _csearchTimer = setTimeout(async () => {
-      let results = [];
+      let ok = false, results = [];
       try {
-        const d = await (await fetch('/api/chats/search?q=' + encodeURIComponent(q))).json();
-        results = d.results || [];
-      } catch (e) { results = []; }
-      if (seq === _csearchSeq) renderChatSearchResults(results, q);
+        const resp = await fetch('/api/chats/search?q=' + encodeURIComponent(q));
+        if (resp.ok) {
+          const d = await resp.json();
+          if (d && Array.isArray(d.results)) { results = d.results; ok = true; }
+        }
+      } catch (e) { ok = false; }
+      if (seq !== _csearchSeq) return;
+      // if the content-search endpoint is missing (old server not restarted),
+      // fall back to a client-side TITLE search so something still works.
+      if (ok) renderChatSearchResults(results, q);
+      else renderChatSearchList(q);
     }, 180);
   }
 
