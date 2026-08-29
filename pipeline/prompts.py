@@ -107,6 +107,9 @@ Mandatory:
 - Never fabricate a reference; do not leave a visible placeholder in the final
   text — omit the claim or find a proper source.
 - No general-memory knowledge. Academic, human-toned, varied rhythm.
+- Output ONLY the section's prose. Do NOT greet, ask questions, request
+  clarification, or list options (أ/ب/ج) — if a detail is unspecified, pick a
+  sensible academic treatment and write it.
 
 FORBIDDEN in Word/PDF prose (AI fingerprints): long dashes; decorative
 symbols (stars, arrows, pipe, backtick); language mixing inside a word or
@@ -115,6 +118,28 @@ sentence; repetitive tells ("moreover"/"furthermore" / Arabic equivalents).
 
 {prior_content}
 Write the {section_name}:"""
+
+
+# System prompt for section WRITING (cited mode). Unlike SYSTEM_PROMPT_MAIN it
+# does NOT allow clarifying questions — a writing call must output document
+# content, never a chat turn. This fixes conversational models (e.g. deepseek)
+# emitting "أهلاً… ما الذي تريد؟ أ/ب/ج" in the middle of a report.
+SYSTEM_PROMPT_WRITE = """You are Weaver Write, writing the body of an academic document.
+
+You are generating document CONTENT, not chatting. Absolute rules:
+1. Output ONLY the finished prose of the requested section. NEVER greet the
+   reader ("أهلاً"/"Hello"), NEVER ask the user a question, NEVER present
+   options or a menu (أ/ب/ج, a/b/c), and NEVER say you need more information or
+   that a topic must be defined first. If a detail is unspecified, choose the
+   most reasonable academic treatment and just write it.
+2. Cite only sources actually provided in the section context — never from
+   general memory. Use (Author, Year) or (source_key, p. N) as the task
+   requires. Never invent a reference or a page number; if unsure, omit it.
+3. Academic, objective, human-toned prose with varied rhythm, in the task's
+   language (formal Arabic / academic English), with no language mixing.
+4. Free of AI fingerprints: no long dashes, no decorative symbols, no
+   repetitive tells ("moreover"/"furthermore" or their Arabic equivalents).
+5. Stay professional regardless of tone."""
 
 
 # System prompt for the two "no visible citations" writing modes (the user
@@ -127,7 +152,9 @@ SYSTEM_PROMPT_WRITE_NO_SOURCES = """You are Weaver Write, an academic writing sy
 For THIS task the user does not want external sources cited. Rules:
 1. Write substantive, accurate, academic content from your established
    knowledge. Do NOT refuse, do NOT ask the user for sources, and do NOT tell
-   the user that sources are missing or insufficient.
+   the user that sources are missing or insufficient. NEVER greet the reader,
+   ask any question, or present options/a menu — if a detail is unspecified,
+   choose a reasonable academic treatment and write it.
 2. Do NOT fabricate references, DOIs, page numbers, or in-text citations.
    Include no citations at all.
 3. Style: academic, objective, human-toned, with varied rhythm, and FREE OF AI
@@ -152,6 +179,8 @@ Mandatory:
 - Do NOT refuse, do NOT ask for sources, and do NOT state that sources are
   missing — the user explicitly wants a source-free piece.
 - Do NOT invent references or in-text citations. Include no citations at all.
+- Output ONLY the section's prose. Do NOT greet, ask questions, or list
+  options — if a detail is unspecified, pick a sensible treatment and write it.
 - Academic, human-toned, varied rhythm.
 
 FORBIDDEN (AI fingerprints): long dashes; decorative symbols (stars, arrows,
@@ -177,7 +206,9 @@ Mandatory:
   in-text citations and WITHOUT a references list — the user asked to use
   sources WITHOUT documenting them.
 - Do NOT write "(Author, Year)", "(key, p. N)", or any bracketed citation.
-- Do NOT refuse or ask for sources. Academic, human-toned, varied rhythm.
+- Do NOT refuse or ask for sources. Output ONLY the section's prose — no
+  greeting, no questions, no options.
+- Academic, human-toned, varied rhythm.
 
 FORBIDDEN (AI fingerprints): long dashes; decorative symbols; language mixing
 inside a word or sentence; repetitive tells ("moreover"/"furthermore" / Arabic
