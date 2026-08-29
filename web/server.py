@@ -278,6 +278,7 @@ def _chats_index():
             d = json.load(open(os.path.join(_CHATS_DIR, fn), encoding="utf-8"))
             items.append({"id": d.get("id"), "title": d.get("title", ""),
                           "ts": d.get("ts", 0), "projectId": d.get("projectId"),
+                          "windowId": d.get("windowId"),
                           "count": len(d.get("messages", []))})
         except Exception:
             pass
@@ -381,6 +382,42 @@ def _chat_remove(cid):
         os.remove(os.path.join(_CHATS_DIR, cid + ".json"))
     except OSError:
         pass
+
+
+# ── windows (workspaces): each groups its own chats; the main list shows all ──
+_WINDOWS_FILE = os.path.join(_ROOT, "config", "windows.json")
+
+
+def _windows_read():
+    try:
+        d = json.load(open(_WINDOWS_FILE, encoding="utf-8"))
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def _windows_write(items):
+    try:
+        os.makedirs(os.path.dirname(_WINDOWS_FILE), exist_ok=True)
+        with open(_WINDOWS_FILE, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def _windows_list():
+    """Windows with a live chat count (from the chats index)."""
+    wins = _windows_read()
+    counts = {}
+    for c in _chats_index():
+        wid = c.get("windowId")
+        if wid:
+            counts[str(wid)] = counts.get(str(wid), 0) + 1
+    for w in wins:
+        w["count"] = counts.get(str(w.get("id")), 0)
+    wins.sort(key=lambda x: x.get("ts", 0), reverse=True)
+    return wins
 
 
 # ── output files (generated documents) — list / preview / download ──
@@ -681,6 +718,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query).get("q", [""])[0]
             self._json({"results": _chats_search(q)})
             return
+        if path == "/api/windows":
+            self._json({"windows": _windows_list()})
+            return
         if path == "/api/providers":
             reg = []
             try:
@@ -798,12 +838,46 @@ class Handler(http.server.BaseHTTPRequestHandler):
             rec = {"id": cid, "title": body.get("title", ""),
                    "ts": body.get("ts") or int(time.time() * 1000),
                    "projectId": body.get("projectId"),
+                   "windowId": body.get("windowId"),
                    "messages": body.get("messages", [])}
             self._json({"ok": _chat_write(rec), "id": cid})
             return
         if path == "/api/chats/delete":
             _chat_remove((body.get("id") or "").strip())
             self._json({"ok": True})
+            return
+        if path == "/api/windows/save":
+            wid = (str(body.get("id") or "")).strip()
+            name = (body.get("name") or "").strip()
+            if not name:
+                self._json({"error": "missing_name"})
+                return
+            wins = _windows_read()
+            if not wid:
+                wid = "w" + str(int(time.time() * 1000))
+            found = False
+            for w in wins:
+                if str(w.get("id")) == wid:
+                    w["name"] = name
+                    found = True
+                    break
+            if not found:
+                wins.append({"id": wid, "name": name,
+                             "ts": int(time.time() * 1000)})
+            self._json({"ok": _windows_write(wins), "id": wid, "name": name})
+            return
+        if path == "/api/windows/delete":
+            wid = str(body.get("id") or "").strip()
+            wins = [w for w in _windows_read() if str(w.get("id")) != wid]
+            ok = _windows_write(wins)
+            # keep the chats (user asked they never be deleted): just detach them
+            for c in _chats_index():
+                if str(c.get("windowId")) == wid:
+                    rec = _chat_read(c.get("id"))
+                    if rec:
+                        rec["windowId"] = None
+                        _chat_write(rec)
+            self._json({"ok": ok})
             return
 
         if path == "/api/chat/stream":
