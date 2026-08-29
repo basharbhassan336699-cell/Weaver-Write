@@ -489,6 +489,80 @@ class WeaverOrchestrator:
                 for r in (data.get("results", []) or [])[:limit]]
 
     @staticmethod
+    def _doh_resolve(host: str, timeout: int = 10):
+        """Resolve a hostname to an IPv4 via DNS-over-HTTPS, using resolvers
+        addressed BY IP — so it needs NO working system DNS. This is the fix
+        for Termux/Android where getaddrinfo fails with 'No address associated
+        with hostname' even though HTTPS itself works. Returns an IP or None."""
+        import urllib.parse
+        import urllib.request
+        import json as _json
+        if not host:
+            return None
+        # Cloudflare (1.1.1.1) and Google (8.8.8.8) both present valid certs for
+        # their own IPs, so https-by-IP validates without any name lookup.
+        for base in ("https://1.1.1.1/dns-query",
+                     "https://8.8.8.8/resolve",
+                     "https://1.0.0.1/dns-query"):
+            try:
+                url = base + "?name=" + urllib.parse.quote(host) + "&type=A"
+                req = urllib.request.Request(
+                    url, headers={"accept": "application/dns-json"})
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    data = _json.loads(r.read().decode("utf-8"))
+                for ans in (data.get("Answer") or []):
+                    if ans.get("type") == 1 and ans.get("data"):
+                        return str(ans["data"]).strip()
+            except Exception:
+                continue
+        return None
+
+    @classmethod
+    def _http_get(cls, url: str, headers: dict, timeout: int = 15):
+        """HTTP GET that survives broken system DNS. Tries the normal resolver
+        first; on a name-resolution failure it resolves the host via DoH
+        (_doh_resolve) and retries by pinning getaddrinfo to that IP (TLS SNI /
+        Host stay correct because the hostname is preserved). Returns decoded
+        text, or None on any failure."""
+        import urllib.request
+        import urllib.error
+        import urllib.parse
+        import socket
+        req = urllib.request.Request(url, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception as e:
+            reason = getattr(e, "reason", None)
+            msg = (str(reason) + " " + str(e)).lower()
+            is_dns = isinstance(reason, socket.gaierror) or isinstance(
+                e, socket.gaierror) or ("address associated" in msg) or (
+                "name or service" in msg) or ("name resolution" in msg) or (
+                "getaddrinfo" in msg)
+            if not is_dns:
+                return None
+        # DNS path: resolve via DoH and pin it
+        host = urllib.parse.urlparse(url).hostname
+        ip = cls._doh_resolve(host) if host else None
+        if not ip:
+            return None
+        orig = socket.getaddrinfo
+
+        def _pinned(h, p, *a, **k):
+            if h == host:
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, p))]
+            return orig(h, p, *a, **k)
+
+        socket.getaddrinfo = _pinned
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception:
+            return None
+        finally:
+            socket.getaddrinfo = orig
+
+    @staticmethod
     def _ddg_search(query: str, lang: str, limit: int, timeout: int = 12):
         """Direct DuckDuckGo search — NO server required (works on the phone as
         is). Hits the html.duckduckgo.com endpoint over plain HTTP, decoding
@@ -523,17 +597,14 @@ class WeaverOrchestrator:
                 raw = html
         except Exception:
             raw = None
-        # 2) plain urllib fallback
+        # 2) urllib fallback — DNS-safe (works even when the phone's resolver
+        #    fails: it retries over DNS-over-HTTPS). This is the path that makes
+        #    search work on Termux/Android with broken getaddrinfo.
         if not raw:
-            try:
-                req = urllib.request.Request(endpoint, headers={
-                    "User-Agent": ua, "Accept": "text/html",
-                    "Accept-Language": ("ar,en;q=0.8" if lang == "ar"
-                                        else "en-US,en;q=0.8")})
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    raw = resp.read().decode("utf-8", "replace")
-            except Exception:
-                return None
+            raw = WeaverOrchestrator._http_get(endpoint, {
+                "User-Agent": ua, "Accept": "text/html",
+                "Accept-Language": ("ar,en;q=0.8" if lang == "ar"
+                                    else "en-US,en;q=0.8")}, timeout)
         if not raw:
             return None
 
@@ -638,6 +709,24 @@ class WeaverOrchestrator:
             res = await tool_web_extract.run({"url": url, "format": "markdown"})
             if getattr(res, "ok", False):
                 return (res.data or {}).get("text")
+        except Exception:
+            pass
+        # 3) last resort: DNS-safe raw GET (survives broken phone DNS) then
+        #    clean with trafilatura if available, else return the raw HTML.
+        try:
+            ua = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
+            html = self._http_get(url, {"User-Agent": ua, "Accept": "text/html"})
+            if html and len(html.strip()) > 200:
+                try:
+                    from trafilatura import extract as _tex
+                    txt = _tex(html, output_format="markdown",
+                               include_comments=False, include_tables=True)
+                    if txt and txt.strip():
+                        return txt
+                except Exception:
+                    pass
+                return html
         except Exception:
             pass
         return None
