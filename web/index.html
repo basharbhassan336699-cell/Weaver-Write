@@ -393,8 +393,10 @@
 
   .hero-title {
     display: flex;
-    align-items: center;
-    gap: 12px;
+    flex-direction: column;   /* icon ABOVE the text */
+    align-items: center;      /* centered horizontally */
+    text-align: center;
+    gap: 16px;
     font-size: 32px;
     font-weight: 300;
     color: var(--text);
@@ -408,10 +410,10 @@
     line-height: 1.35;
   }
 
-  /* Asterisk / snowflake logo */
+  /* Asterisk / snowflake logo (centered above the greeting, a bit larger) */
   .logo-mark {
-    width: 36px;
-    height: 36px;
+    width: 56px;
+    height: 56px;
     flex-shrink: 0;
   }
 
@@ -1806,15 +1808,15 @@
 
     .hero { max-width: 100%; padding: 0 16px; }
     .hero-title { font-size: 26px; }
-    .logo-mark { width: 30px; height: 30px; }
+    .logo-mark { width: 48px; height: 48px; }
     .prompt-chips { max-width: 100%; }
     .main.chat-mode .input-card { width: calc(100% - 24px); margin-bottom: 12px; }
     .main.chat-mode .messages { padding: 62px 14px 16px; }
     .msg { max-width: 92%; }
   }
   @media (max-width: 480px) {
-    .hero-title { font-size: 23px; gap: 8px; }
-    .logo-mark { width: 26px; height: 26px; }
+    .hero-title { font-size: 23px; gap: 12px; }
+    .logo-mark { width: 44px; height: 44px; }
     .input-field { font-size: 16px; } /* prevents iOS zoom-on-focus */
     .chip { font-size: 12px; padding: 6px 11px; }
     .name-modal { padding: 26px 20px; }
