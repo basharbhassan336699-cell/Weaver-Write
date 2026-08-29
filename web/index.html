@@ -3112,6 +3112,7 @@
   // ── Chat session tracking (sidebar list + search) ──
   let currentChatId = null;
   let currentProjectId = (function(){ try { return localStorage.getItem('weaver_current_project') || null; } catch(e){ return null; } })();
+  var currentWindowId = null;   // the window a NEWLY created chat belongs to (null = none)
   function wvProjectsRaw(){ try { return JSON.parse(localStorage.getItem('weaver_projects')||'[]'); } catch(e){ return []; } }
   function wvActiveProjectName(){ var p=wvProjectsRaw().find(function(x){return String(x.id)===String(currentProjectId);}); return p?p.name:null; }
 
@@ -3136,7 +3137,7 @@
   function addChatFromMessage(text) {
     currentChatId = newChatId();
     currentMessages = [];
-    chatsCache.unshift({ id: currentChatId, title: makeChatTitle(text), ts: Date.now(), projectId: currentProjectId, count: 0 });
+    chatsCache.unshift({ id: currentChatId, title: makeChatTitle(text), ts: Date.now(), projectId: currentProjectId, windowId: currentWindowId, count: 0 });
     renderChatsList();
   }
   async function saveCurrentChat() {
@@ -3145,7 +3146,7 @@
     const title = (c && c.title) || (currentMessages[0] ? makeChatTitle(currentMessages[0].content) : 'New chat');
     try {
       await fetch('/api/chats/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: currentChatId, title: title, projectId: currentProjectId, messages: currentMessages }) });
+        body: JSON.stringify({ id: currentChatId, title: title, projectId: currentProjectId, windowId: currentWindowId, messages: currentMessages }) });
     } catch (e) {}
   }
   async function selectChat(id) {
@@ -3153,6 +3154,7 @@
     try { d = await (await fetch('/api/chats/one?id=' + encodeURIComponent(id))).json(); } catch (e) { return; }
     if (!d || d.error) return;
     currentChatId = id;
+    currentWindowId = d.windowId || null;   // keep the chat within its window on save
     currentMessages = (d.messages || []).slice();
     const main = document.getElementById('mainContent'); if (main) main.classList.add('chat-mode');
     const box = document.getElementById('messages');
@@ -3551,6 +3553,7 @@
     if (input) { input.value = ''; autoResize(input); input.focus(); }
     currentChatId = null;
     currentMessages = [];
+    currentWindowId = null;   // a chat started from the main view is window-less
     renderChatsList();
     const titleEl = document.getElementById('chatTitleText');
     if (titleEl) titleEl.textContent = 'New chat';
@@ -3930,6 +3933,34 @@
   </div>
 </div>
 
+<div class="wv-overlay" id="windowsOverlay">
+  <div class="wv-modal">
+    <div class="wv-head">
+      <h3>
+        <button class="wv-x" id="wvWinBack" style="display:none" onclick="wvBackToWindows()"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-end:8px"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg>
+        <span id="wvWinTitle">Windows / النوافذ</span>
+      </h3>
+      <button class="wv-x" onclick="wvClose('windowsOverlay')"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+    </div>
+    <div class="wv-body">
+      <!-- list of windows -->
+      <div id="wvWinListView">
+        <div class="wv-row">
+          <input id="wvWinName" style="flex:1;min-width:160px;padding:10px 12px;border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit" placeholder="New window name / اسم النافذة">
+          <button class="wv-btn primary" onclick="wvAddWindow()">Create / إنشاء</button>
+        </div>
+        <div class="wv-list" id="wvWinList"></div>
+      </div>
+      <!-- one window's chats -->
+      <div id="wvWinDetail" style="display:none">
+        <button class="wv-btn primary" style="width:100%;margin-bottom:10px" onclick="wvNewChatInCurrentWindow()">+ New chat in this window / محادثة جديدة</button>
+        <div class="wv-list" id="wvWinChats"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="wv-overlay" id="artifactsOverlay">
   <div class="wv-modal">
     <div class="wv-head"><h3><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-end:8px"><path d="M17 10h-1a4 4 0 1 1 4-4v.534"/><path d="M17 6h1a4 4 0 0 1 1.42 7.74l-2.29.87a6 6 0 0 1-5.339-10.68l2.069-1.31"/><path d="M4.5 17c2.8-.5 4.4 0 5.5.8s1.8 2.2 2.3 3.7c-2 .4-3.5.4-4.8-.3-1.2-.6-2.3-1.9-3-4.2"/><path d="M9.77 12C4 15 2 22 2 22"/><circle cx="17" cy="8" r="2"/></svg>Artifacts</h3><button class="wv-x" onclick="wvClose('artifactsOverlay')"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button></div>
@@ -3956,7 +3987,7 @@
   // ── panel open/close + nav wiring ──
   function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
   function wvCloseAllPanels(){ document.querySelectorAll('.wv-overlay.show').forEach(function(o){ o.classList.remove('show'); }); }
-  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
+  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','windowsOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
   function wvOpen(id){
     // opening a section closes any other open section (smooth switching)
     wvCloseAllPanels();
@@ -3982,6 +4013,7 @@
       var k=span.getAttribute('data-i18n');
       if(k==='keys')      it.addEventListener('click', function(){ wvOpenKeys(); });
       if(k==='projects')  it.addEventListener('click', function(){ wvOpen('projectsOverlay'); wvRenderProjects(); });
+      if(k==='windows')   it.addEventListener('click', function(){ wvOpen('windowsOverlay'); wvBackToWindows(); });
       if(k==='artifacts') it.addEventListener('click', function(){ wvOpen('artifactsOverlay'); wvRenderArtifacts(); });
       if(k==='connects')  it.addEventListener('click', function(){ wvOpenConnects(); });
     });
@@ -4225,6 +4257,75 @@
                     :'<button class="wv-btn" onclick="wvOpenProject('+p.id+')">Open</button>')+
              '<button class="wv-mini" onclick="wvDelProject('+p.id+')">Delete</button></div></div>';
     }).join('');
+  }
+
+  // ── Windows (workspaces on the SERVER: each groups its own chats; the main
+  //    Chats list still shows every chat regardless of window) ──
+  var wvWindowsCache = [];
+  var wvCurrentWinView = null;   // window id whose chats are being shown
+  async function wvFetchWindows(){
+    try{ var d=await (await fetch('/api/windows')).json(); wvWindowsCache=d.windows||[]; }
+    catch(e){ wvWindowsCache=[]; }
+    return wvWindowsCache;
+  }
+  function wvBackToWindows(){
+    wvCurrentWinView=null;
+    var lv=document.getElementById('wvWinListView'), dv=document.getElementById('wvWinDetail');
+    if(lv) lv.style.display=''; if(dv) dv.style.display='none';
+    var back=document.getElementById('wvWinBack'); if(back) back.style.display='none';
+    var t=document.getElementById('wvWinTitle'); if(t) t.textContent='Windows / النوافذ';
+    wvRenderWindows();
+  }
+  async function wvRenderWindows(){
+    var box=document.getElementById('wvWinList'); if(!box) return;
+    await wvFetchWindows();
+    if(!wvWindowsCache.length){ box.innerHTML='<div class="wv-empty">No windows yet. Create one above. / لا نوافذ بعد، أنشئ واحدة بالأعلى.</div>'; return; }
+    box.innerHTML=wvWindowsCache.map(function(w){
+      var count=w.count||0;
+      return '<div class="wv-card"><div style="flex:1;min-width:0;cursor:pointer" onclick="wvOpenWindow(\''+w.id+'\')"><div class="t">'+wvEsc(w.name)+'</div>'+
+             '<div class="s">'+count+' chat'+(count===1?'':'s')+'</div></div>'+
+             '<div style="display:flex;gap:6px">'+
+             '<button class="wv-btn" onclick="wvOpenWindow(\''+w.id+'\')">Open / افتح</button>'+
+             '<button class="wv-mini" onclick="wvDelWindow(\''+w.id+'\')">Delete</button></div></div>';
+    }).join('');
+  }
+  async function wvAddWindow(){
+    var el=document.getElementById('wvWinName'); var name=(el.value||'').trim(); if(!name) return;
+    try{ await fetch('/api/windows/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:name})}); }catch(e){}
+    el.value=''; wvRenderWindows();
+  }
+  async function wvDelWindow(id){
+    if(!confirm('حذف هذه النافذة؟ محادثاتها لن تُحذف، ستبقى في القائمة الرئيسية.')) return;
+    try{ await fetch('/api/windows/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})}); }catch(e){}
+    if(typeof refreshChats==='function') refreshChats();
+    wvRenderWindows();
+  }
+  function wvOpenWindow(id){
+    wvCurrentWinView=String(id);
+    var w=wvWindowsCache.find(function(x){return String(x.id)===String(id);});
+    var lv=document.getElementById('wvWinListView'), dv=document.getElementById('wvWinDetail');
+    if(lv) lv.style.display='none'; if(dv) dv.style.display='';
+    var back=document.getElementById('wvWinBack'); if(back) back.style.display='';
+    var t=document.getElementById('wvWinTitle'); if(t) t.textContent=(w?w.name:'Window');
+    wvRenderWindowChats(id);
+  }
+  function wvRenderWindowChats(id){
+    var box=document.getElementById('wvWinChats'); if(!box) return;
+    var chats=(chatsCache||[]).filter(function(c){return String(c.windowId)===String(id);});
+    if(!chats.length){ box.innerHTML='<div class="wv-empty">No chats in this window yet. / لا محادثات في هذه النافذة بعد.</div>'; return; }
+    box.innerHTML=chats.map(function(c){
+      return '<div class="wv-card"><div style="flex:1;min-width:0;cursor:pointer" onclick="selectChat(\''+c.id+'\');wvClose(\'windowsOverlay\')"><div class="t">'+wvEsc(c.title||'Chat')+'</div>'+
+             '<div class="s">'+(c.count||0)+' message'+((c.count===1)?'':'s')+'</div></div>'+
+             '<div style="display:flex;gap:6px"><button class="wv-mini" onclick="event.stopPropagation();deleteChat(\''+c.id+'\');setTimeout(function(){wvRenderWindowChats(\''+id+'\')},300)">Delete</button></div></div>';
+    }).join('');
+  }
+  function wvNewChatInCurrentWindow(){
+    if(!wvCurrentWinView) return;
+    var wid=wvCurrentWinView;
+    newChat();                 // fresh empty chat (resets currentWindowId to null)
+    currentWindowId=String(wid);  // the next sent message will belong to this window
+    wvClose('windowsOverlay');
+    var input=document.getElementById('mainInput'); if(input) input.focus();
   }
 
   // ── Artifacts (auto-saved from chat replies) ──
