@@ -420,6 +420,139 @@ def _windows_list():
     return wins
 
 
+# ── calendar: task deadlines + reminders ──────────────────────────────────
+_CAL_FILE = os.path.join(_ROOT, "config", "calendar.json")
+
+
+def _cal_read():
+    try:
+        d = json.load(open(_CAL_FILE, encoding="utf-8"))
+        return d if isinstance(d, list) else []
+    except Exception:
+        return []
+
+
+def _cal_write(items):
+    try:
+        os.makedirs(os.path.dirname(_CAL_FILE), exist_ok=True)
+        with open(_CAL_FILE, "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False)
+        return True
+    except Exception:
+        return False
+
+
+def _cal_list():
+    items = _cal_read()
+    items.sort(key=lambda x: (x.get("done", False), x.get("due", "")))
+    return items
+
+
+def _calendar_suggest(text):
+    """Propose up to 4 due-date options inferred from the task text (Arabic +
+    English: explicit dates, غداً/tomorrow, بعد N أيام/in N days, next week,
+    نهاية الأسبوع/end of week, بعد شهر/next month). Always returns concrete
+    dates; the UI adds an open 'custom date' option as the 4th."""
+    import datetime
+    import re
+    t = (text or "").lower()
+    today = datetime.date.today()
+    opts = []
+
+    def add(d, label=None):
+        s = d.isoformat()
+        if d >= today and all(o["date"] != s for o in opts):
+            opts.append({"date": s, "label": label or s})
+
+    m = re.search(r"(\d{4})-(\d{1,2})-(\d{1,2})", t)
+    if m:
+        try:
+            add(datetime.date(int(m.group(1)), int(m.group(2)),
+                              int(m.group(3))), "التاريخ المذكور")
+        except Exception:
+            pass
+    for mm in re.finditer(r"\b(\d{1,2})[/\-](\d{1,2})(?:[/\-](\d{2,4}))?\b", t):
+        try:
+            dd, mo = int(mm.group(1)), int(mm.group(2))
+            yy = mm.group(3)
+            yy = int(yy) if yy else today.year
+            if yy < 100:
+                yy += 2000
+            dt = datetime.date(yy, mo, dd)
+            if dt < today:
+                dt = datetime.date(yy + 1, mo, dd)
+            add(dt, "التاريخ المذكور")
+        except Exception:
+            pass
+
+    def has(*ws):
+        return any(w in t for w in ws)
+    td = datetime.timedelta
+    if has("غدا", "غداً", "بكرة", "tomorrow"):
+        add(today + td(days=1), "غداً")
+    if has("بعد يومين", "بعد غد", "in 2 days", "in two days"):
+        add(today + td(days=2), "بعد يومين")
+    mn = (re.search(r"بعد\s+(\d+)\s+(?:يوم|أيام|ايام)", t)
+          or re.search(r"in\s+(\d+)\s+days?", t))
+    if mn:
+        try:
+            add(today + td(days=int(mn.group(1))))
+        except Exception:
+            pass
+    if has("الأسبوع القادم", "الاسبوع القادم", "الأسبوع المقبل", "next week",
+           "بعد أسبوع", "بعد اسبوع", "in a week", "in one week"):
+        add(today + td(days=7), "بعد أسبوع")
+    if has("أسبوعين", "اسبوعين", "two weeks", "in 2 weeks"):
+        add(today + td(days=14), "بعد أسبوعين")
+    if has("نهاية الأسبوع", "نهاية الاسبوع", "end of week", "this weekend"):
+        days = (4 - today.weekday()) % 7 or 7   # coming Friday
+        add(today + td(days=days), "نهاية الأسبوع")
+    if has("بعد شهر", "الشهر القادم", "الشهر المقبل", "next month", "in a month"):
+        add(today + td(days=30), "بعد شهر")
+    for dd, lab in ((1, "غداً"), (3, "بعد ٣ أيام"), (7, "بعد أسبوع")):
+        if len(opts) >= 3:
+            break
+        add(today + td(days=dd), lab)
+    return opts[:4]
+
+
+def _send_notification(title, body):
+    """Best-effort phone notification via Termux:API. Silent no-op elsewhere."""
+    import subprocess
+    try:
+        subprocess.run(["termux-notification", "--title", str(title),
+                        "--content", str(body)], capture_output=True, timeout=8)
+        return True
+    except Exception:
+        return False
+
+
+def _reminder_loop():
+    """Background: notify (once) for any calendar event whose due date has
+    arrived. Uses a phone notification when Termux:API is present; the in-app
+    Calendar view always shows overdue/upcoming regardless."""
+    import datetime
+    while True:
+        try:
+            items = _cal_read()
+            today = datetime.date.today().isoformat()
+            changed = False
+            for e in items:
+                if e.get("done") or e.get("notified"):
+                    continue
+                due = e.get("due", "")
+                if due and due <= today:
+                    _send_notification("Weaver Write — تذكير بموعد",
+                                       f"{e.get('title','مهمة')} — تاريخ: {due}")
+                    e["notified"] = True
+                    changed = True
+            if changed:
+                _cal_write(items)
+        except Exception:
+            pass
+        time.sleep(300)
+
+
 # ── output files (generated documents) — list / preview / download ──
 def _output_dir():
     """The directory the pipeline writes finished files to — the SAME resolver
@@ -721,6 +854,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/windows":
             self._json({"windows": _windows_list()})
             return
+        if path == "/api/calendar":
+            self._json({"events": _cal_list()})
+            return
         if path == "/api/providers":
             reg = []
             try:
@@ -878,6 +1014,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         rec["windowId"] = None
                         _chat_write(rec)
             self._json({"ok": ok})
+            return
+        if path == "/api/calendar/suggest":
+            self._json({"options": _calendar_suggest(body.get("text", ""))})
+            return
+        if path == "/api/calendar/add":
+            title = (body.get("title") or "").strip()
+            due = (body.get("due") or "").strip()
+            if not title or not due:
+                self._json({"error": "missing_title_or_due"})
+                return
+            items = _cal_read()
+            ev = {"id": "e" + str(int(time.time() * 1000)),
+                  "title": title, "due": due,
+                  "chatId": body.get("chatId"), "note": body.get("note", ""),
+                  "created_ts": int(time.time() * 1000),
+                  "done": False, "notified": False}
+            items.append(ev)
+            self._json({"ok": _cal_write(items), "event": ev})
+            return
+        if path == "/api/calendar/update":
+            eid = str(body.get("id") or "").strip()
+            items = _cal_read()
+            hit = None
+            for e in items:
+                if str(e.get("id")) == eid:
+                    for k in ("title", "due", "note", "done"):
+                        if k in body:
+                            e[k] = body[k]
+                    if "due" in body:
+                        e["notified"] = False   # re-arm reminder on reschedule
+                    hit = e
+                    break
+            self._json({"ok": _cal_write(items) if hit else False, "event": hit})
+            return
+        if path == "/api/calendar/delete":
+            eid = str(body.get("id") or "").strip()
+            items = [e for e in _cal_read() if str(e.get("id")) != eid]
+            self._json({"ok": _cal_write(items)})
             return
 
         if path == "/api/chat/stream":
@@ -1092,6 +1266,12 @@ class _ReuseTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 def serve(port=None):
     port = port or PORT
     keysync.load_env()  # load synced settings first
+    # background reminder checker (phone notification when a due date arrives)
+    try:
+        import threading
+        threading.Thread(target=_reminder_loop, daemon=True).start()
+    except Exception:
+        pass
     with _ReuseTCPServer(("127.0.0.1", port), Handler) as httpd:
         print(f"Weaver Write web UI running at http://127.0.0.1:{port}")
         print("Press Ctrl+C to stop.")

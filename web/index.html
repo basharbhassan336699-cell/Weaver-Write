@@ -3541,6 +3541,7 @@
       el.addEventListener('click', () => selectChat(el.getAttribute('data-id'))));
   }
   refreshChats();
+  if (typeof wvUpdateCalBadge === 'function') wvUpdateCalBadge();
 
   // ── Send message ───────────────────────────────
   // ── Start a new chat ───────────────────────────
@@ -3678,7 +3679,7 @@
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
-        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); } }
+        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, currentChatId, aiMsg); } }
         else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
       }
@@ -3961,6 +3962,23 @@
   </div>
 </div>
 
+<div class="wv-overlay" id="calendarOverlay">
+  <div class="wv-modal">
+    <div class="wv-head">
+      <h3><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-end:8px"><path d="M8 2v3"/><path d="M16 2v3"/><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></svg>Calendar / التقويم</h3>
+      <button class="wv-x" onclick="wvClose('calendarOverlay')"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+    </div>
+    <div class="wv-body">
+      <div class="wv-row">
+        <input id="wvCalTitle" style="flex:1;min-width:120px;padding:10px 12px;border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit" placeholder="Task / عنوان المهمة">
+        <input id="wvCalDate" type="date" style="padding:10px 12px;border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit">
+        <button class="wv-btn primary" onclick="wvCalAddManual()">Add / إضافة</button>
+      </div>
+      <div class="wv-list" id="wvCalList"></div>
+    </div>
+  </div>
+</div>
+
 <div class="wv-overlay" id="artifactsOverlay">
   <div class="wv-modal">
     <div class="wv-head"><h3><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-end:8px"><path d="M17 10h-1a4 4 0 1 1 4-4v.534"/><path d="M17 6h1a4 4 0 0 1 1.42 7.74l-2.29.87a6 6 0 0 1-5.339-10.68l2.069-1.31"/><path d="M4.5 17c2.8-.5 4.4 0 5.5.8s1.8 2.2 2.3 3.7c-2 .4-3.5.4-4.8-.3-1.2-.6-2.3-1.9-3-4.2"/><path d="M9.77 12C4 15 2 22 2 22"/><circle cx="17" cy="8" r="2"/></svg>Artifacts</h3><button class="wv-x" onclick="wvClose('artifactsOverlay')"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button></div>
@@ -3987,7 +4005,7 @@
   // ── panel open/close + nav wiring ──
   function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
   function wvCloseAllPanels(){ document.querySelectorAll('.wv-overlay.show').forEach(function(o){ o.classList.remove('show'); }); }
-  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','windowsOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
+  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','windowsOverlay','calendarOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
   function wvOpen(id){
     // opening a section closes any other open section (smooth switching)
     wvCloseAllPanels();
@@ -4014,6 +4032,7 @@
       if(k==='keys')      it.addEventListener('click', function(){ wvOpenKeys(); });
       if(k==='projects')  it.addEventListener('click', function(){ wvOpen('projectsOverlay'); wvRenderProjects(); });
       if(k==='windows')   it.addEventListener('click', function(){ wvOpen('windowsOverlay'); wvBackToWindows(); });
+      if(k==='calendar')  it.addEventListener('click', function(){ wvOpen('calendarOverlay'); wvRenderCalendar(); });
       if(k==='artifacts') it.addEventListener('click', function(){ wvOpen('artifactsOverlay'); wvRenderArtifacts(); });
       if(k==='connects')  it.addEventListener('click', function(){ wvOpenConnects(); });
     });
@@ -4327,6 +4346,99 @@
     wvClose('windowsOverlay');
     var input=document.getElementById('mainInput'); if(input) input.focus();
   }
+
+  // ── Calendar (task deadlines + reminders; server-backed) ──
+  function wvCalFmt(due){
+    try{ var d=new Date(due+'T00:00:00'); return d.toLocaleDateString(currentLang==='ar'?'ar':'en',{weekday:'short',year:'numeric',month:'short',day:'numeric'}); }
+    catch(e){ return due; }
+  }
+  function wvCalStatus(ev){
+    var today=new Date(); today.setHours(0,0,0,0);
+    var due=new Date((ev.due||'')+'T00:00:00');
+    if(ev.done) return {cls:'done',txt:(currentLang==='ar'?'منجزة':'done'),color:'#6b7280'};
+    var diff=Math.round((due-today)/86400000);
+    if(diff<0)  return {cls:'over',txt:(currentLang==='ar'?'متأخرة':'overdue'),color:'#e5534b'};
+    if(diff===0)return {cls:'today',txt:(currentLang==='ar'?'اليوم':'today'),color:'#e0a53f'};
+    if(diff<=2) return {cls:'soon',txt:(currentLang==='ar'?('خلال '+diff+' يوم'):('in '+diff+'d')),color:'#e0a53f'};
+    return {cls:'future',txt:(currentLang==='ar'?('خلال '+diff+' يوم'):('in '+diff+'d')),color:'#4a9e6f'};
+  }
+  async function wvRenderCalendar(){
+    var box=document.getElementById('wvCalList'); if(!box) return;
+    var events=[];
+    try{ var d=await (await fetch('/api/calendar')).json(); events=d.events||[]; }catch(e){}
+    if(!events.length){ box.innerHTML='<div class="wv-empty">No deadlines yet. / لا مواعيد بعد.<br>تُضاف تلقائياً بعد إنجاز مهمة، أو يدوياً بالأعلى.</div>'; return; }
+    box.innerHTML=events.map(function(ev){
+      var st=wvCalStatus(ev);
+      return '<div class="wv-card"><div style="flex:1;min-width:0">'+
+        '<div class="t" style="'+(ev.done?'text-decoration:line-through;opacity:.6':'')+'">'+wvEsc(ev.title)+'</div>'+
+        '<div class="s"><span style="color:'+st.color+'">●</span> '+wvCalFmt(ev.due)+' · '+st.txt+'</div></div>'+
+        '<div style="display:flex;gap:6px">'+
+        '<button class="wv-btn" onclick="wvCalToggleDone(\''+ev.id+'\','+(ev.done?'false':'true')+')">'+(ev.done?'↺':'✓')+'</button>'+
+        '<button class="wv-mini" onclick="wvCalDelete(\''+ev.id+'\')">Delete</button></div></div>';
+    }).join('');
+  }
+  async function wvCalAddManual(){
+    var t=(document.getElementById('wvCalTitle').value||'').trim();
+    var due=(document.getElementById('wvCalDate').value||'').trim();
+    if(!t||!due){ alert(currentLang==='ar'?'أدخل العنوان والتاريخ.':'Enter a title and a date.'); return; }
+    try{ await fetch('/api/calendar/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t,due:due,chatId:currentChatId})}); }catch(e){}
+    document.getElementById('wvCalTitle').value=''; document.getElementById('wvCalDate').value='';
+    wvRenderCalendar(); wvUpdateCalBadge();
+  }
+  async function wvCalToggleDone(id,done){
+    try{ await fetch('/api/calendar/update',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id,done:done})}); }catch(e){}
+    wvRenderCalendar(); wvUpdateCalBadge();
+  }
+  async function wvCalDelete(id){
+    try{ await fetch('/api/calendar/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})}); }catch(e){}
+    wvRenderCalendar(); wvUpdateCalBadge();
+  }
+  // red badge on the Calendar nav item when something is due/overdue
+  async function wvUpdateCalBadge(){
+    try{
+      var d=await (await fetch('/api/calendar')).json();
+      var today=new Date(); today.setHours(0,0,0,0);
+      var due=(d.events||[]).filter(function(e){ if(e.done) return false; var dd=new Date((e.due||'')+'T00:00:00'); return dd<=today; }).length;
+      document.querySelectorAll('.nav-item').forEach(function(it){
+        var sp=it.querySelector('span[data-i18n="calendar"]'); if(!sp) return;
+        var b=it.querySelector('.wv-cal-badge');
+        if(due>0){ if(!b){ b=document.createElement('span'); b.className='wv-cal-badge'; b.style.cssText='margin-inline-start:6px;background:#e5534b;color:#fff;border-radius:10px;padding:0 6px;font-size:11px'; sp.appendChild(b);} b.textContent=due; }
+        else if(b){ b.remove(); }
+      });
+    }catch(e){}
+  }
+
+  // The in-chat "save to calendar?" card, shown AFTER a task produced a file.
+  async function wvOfferCalendar(taskText, chatId, anchorEl){
+    if(!anchorEl) return;
+    var opts=[];
+    try{ var d=await (await fetch('/api/calendar/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:taskText})})).json(); opts=d.options||[]; }catch(e){}
+    var title=(taskText||'').trim().replace(/\s+/g,' '); if(title.length>60) title=title.slice(0,60)+'…';
+    var card=document.createElement('div');
+    card.className='wv-cal-offer';
+    card.style.cssText='margin:8px 0 4px;padding:12px 14px;border:1px solid var(--border,#2c2739);border-radius:12px;background:var(--surface,#1b1a22);max-width:560px';
+    var btns=opts.map(function(o){
+      return '<button class="wv-btn" data-due="'+o.date+'" style="margin:3px">'+wvEsc(o.label)+'<br><span style="opacity:.6;font-size:11px">'+o.date+'</span></button>';
+    }).join('');
+    card.innerHTML='<div style="font-size:13.5px;margin-bottom:8px">📅 '+(currentLang==='ar'?'هل أحفظ موعد تسليم هذه المهمة في التقويم؟':'Save this task\'s deadline to the calendar?')+'</div>'+
+      '<div class="wv-cal-optrow" style="display:flex;flex-wrap:wrap;gap:4px">'+btns+
+      '<button class="wv-btn" data-custom="1" style="margin:3px">'+(currentLang==='ar'?'📆 تاريخ آخر':'📆 Custom')+'</button></div>'+
+      '<div class="wv-cal-custom" style="display:none;margin-top:8px;gap:6px;align-items:center">'+
+        '<input type="date" class="wv-cal-cdate" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5)">'+
+        '<button class="wv-btn primary wv-cal-csave">'+(currentLang==='ar'?'حفظ':'Save')+'</button></div>'+
+      '<div style="margin-top:6px"><button class="wv-mini wv-cal-dismiss">'+(currentLang==='ar'?'لا، شكراً':'No thanks')+'</button></div>';
+    anchorEl.appendChild(card);
+    function save(due){
+      fetch('/api/calendar/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title,due:due,chatId:chatId})})
+        .then(function(){ card.innerHTML='<div style="font-size:13.5px;color:#4a9e6f">✅ '+(currentLang==='ar'?('حُفظت في التقويم بتاريخ '+due):('Saved to calendar for '+due))+'</div>'; wvUpdateCalBadge(); })
+        .catch(function(){ card.innerHTML='<div style="color:#e5534b">تعذّر الحفظ.</div>'; });
+    }
+    card.querySelectorAll('button[data-due]').forEach(function(b){ b.addEventListener('click',function(){ save(b.getAttribute('data-due')); }); });
+    card.querySelector('button[data-custom]').addEventListener('click',function(){ var c=card.querySelector('.wv-cal-custom'); c.style.display=(c.style.display==='none'?'flex':'none'); });
+    card.querySelector('.wv-cal-csave').addEventListener('click',function(){ var v=card.querySelector('.wv-cal-cdate').value; if(v) save(v); });
+    card.querySelector('.wv-cal-dismiss').addEventListener('click',function(){ card.remove(); });
+  }
+  try{ wvUpdateCalBadge(); }catch(e){}
 
   // ── Artifacts (auto-saved from chat replies) ──
   var wvArtOpen=null;
