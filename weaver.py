@@ -545,6 +545,58 @@ def _serve_static(here, port):
         httpd.serve_forever()
 
 
+def _free_port(port):
+    """Stop the OLD Weaver server so a restart loads the newest code. First
+    scans /proc for the previous `weaver serve` / web.server process (no extra
+    packages needed on Termux/Android) and signals it; falls back to fuser.
+    Never targets this process or its parent."""
+    import os
+    import time
+    import glob
+    import signal
+    me, parent = os.getpid(), os.getppid()
+    victims = []
+    for cmdf in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            pid = int(cmdf.split("/")[2])
+        except Exception:
+            continue
+        if pid in (me, parent):
+            continue
+        try:
+            with open(cmdf, "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+        except Exception:
+            continue
+        low = cmd.lower()
+        if (("weaver" in low and "serve" in low)
+                or "web/server.py" in low or "web.server" in low):
+            victims.append(pid)
+    for pid in victims:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except Exception:
+            pass
+    if victims:
+        time.sleep(1.3)
+        for pid in victims:                      # force any survivor
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+        time.sleep(0.4)
+        return True
+    # fallback: fuser (psmisc), if the /proc scan found nothing
+    import subprocess
+    try:
+        subprocess.run(["fuser", "-k", f"{port}/tcp"],
+                       capture_output=True, timeout=8)
+        time.sleep(1.2)
+        return True
+    except Exception:
+        return False
+
+
 def cmd_serve(args):
     """Start the local web UI (serves web/index.html + API, synced with .env)."""
     port = getattr(args, "port", None) or WEB_PORT
@@ -579,17 +631,31 @@ def cmd_serve(args):
         except KeyboardInterrupt:
             print("\nStopped.")
         return
-    try:
-        serve(port)
-    except OSError as e:
-        if e.errno in (errno.EADDRINUSE, 98):
-            print(f"\nWeaver Write is already running at http://127.0.0.1:{port}")
-            print("Open that address in your browser.")
-            print(f"To stop it:  pkill -f weaver.py   (then run: weaver serve)")
-        else:
+    # Start the server. If the port is busy, an OLD instance is running the OLD
+    # code — stop it and start fresh so a `git pull` actually takes effect.
+    tried_restart = False
+    while True:
+        try:
+            serve(port)
+            break
+        except OSError as e:
+            if e.errno in (errno.EADDRINUSE, 98) and not tried_restart:
+                tried_restart = True
+                print(f"\nيوجد خادم قديم على المنفذ {port} — أوقفه وأشغّل الكود الجديد…")
+                if _free_port(port):
+                    continue
+                print(f"تعذّر تحرير المنفذ تلقائياً. أوقفه يدوياً ثم أعد المحاولة:")
+                print(f"  fuser -k {port}/tcp   ;   weaver serve")
+                break
+            if e.errno in (errno.EADDRINUSE, 98):
+                print(f"\nما زال المنفذ {port} مشغولاً بعد المحاولة.")
+                print(f"أوقفه يدوياً:  fuser -k {port}/tcp   ثم:  weaver serve")
+                break
             print(f"Could not start the web server: {e}")
-    except KeyboardInterrupt:
-        print("\nStopped.")
+            break
+        except KeyboardInterrupt:
+            print("\nStopped.")
+            break
 
 def cmd_restore(args):
     """Restore running state after a device shutdown."""
