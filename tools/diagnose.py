@@ -116,6 +116,87 @@ def check_internet():
             bad(f"{url} → {type(e).__name__}: {str(e)[:160]}")
 
 
+def check_network_deep():
+    """لماذا يعمل النموذج ولا يعمل البحث؟ نفحص كل مسار خروج ممكن."""
+    head("٣.٥) تشخيص عميق للشبكة — أين المنفذ المفتوح؟")
+
+    # أ) عنوان النموذج + أي بروكسي مضبوط
+    try:
+        from core.llm import keysync  # type: ignore
+        keysync.load_env()
+    except Exception:
+        pass
+    base = os.environ.get("WEAVER_BASE_URL", "").strip()
+    if base:
+        try:
+            import urllib.parse as up
+            info(f"عنوان النموذج (host): {up.urlparse(base).hostname}  ← يعمل")
+        except Exception:
+            info(f"WEAVER_BASE_URL: {base[:40]}")
+    for pv in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy",
+               "ALL_PROXY", "all_proxy"):
+        v = os.environ.get(pv)
+        if v:
+            info(f"بروكسي مضبوط: {pv}={v[:50]}")
+
+    # ب) هل خروج TCP الخام يعمل أصلاً؟ (اتصال مباشر بـ IP بلا DNS)
+    import socket
+    for host, port, label in (("1.1.1.1", 443, "Cloudflare DNS"),
+                              ("8.8.8.8", 443, "Google DNS"),
+                              ("1.1.1.1", 53, "DNS/TCP")):
+        try:
+            s = socket.create_connection((host, port), timeout=8)
+            s.close()
+            ok(f"TCP {host}:{port} ({label}) → متصل ✓ (الخروج المباشر يعمل)")
+        except Exception as e:
+            bad(f"TCP {host}:{port} ({label}) → {type(e).__name__}: {str(e)[:80]}")
+
+    # ج) هل getaddrinfo يترجم عنوان النموذج مقابل duckduckgo؟
+    hosts = ["duckduckgo.com"]
+    if base:
+        import urllib.parse as up
+        h = up.urlparse(base).hostname
+        if h:
+            hosts.insert(0, h)
+    for h in hosts:
+        try:
+            ai = socket.getaddrinfo(h, 443)
+            ip = ai[0][4][0] if ai else "?"
+            ok(f"getaddrinfo({h}) → {ip}")
+        except Exception as e:
+            bad(f"getaddrinfo({h}) → {type(e).__name__}: {str(e)[:80]}")
+
+    # د) الاختبار الحاسم: هل libcurl (curl_cffi) يصل حيث يفشل بايثون؟
+    info("الاختبار الحاسم: curl_cffi مقابل duckduckgo…")
+    try:
+        from curl_cffi import requests as _cr
+        r = _cr.get("https://html.duckduckgo.com/html/?q=test",
+                    impersonate="chrome116", timeout=20)
+        if r.status_code == 200 and "result" in r.text:
+            ok(f"curl_cffi نجح! HTTP {r.status_code} — البحث يمكن أن يعمل عبره ✓✓")
+        else:
+            info(f"curl_cffi رجع HTTP {r.status_code}، فيه نتائج: "
+                 f"{'نعم' if 'result' in r.text else 'لا'}")
+    except Exception as e:
+        bad(f"curl_cffi فشل أيضاً: {type(e).__name__}: {str(e)[:120]}")
+
+    # هـ) أمر curl النظامي (إن وُجد)
+    import subprocess
+    try:
+        p = subprocess.run(["curl", "-sS", "-m", "20", "-o", "/dev/null",
+                            "-w", "%{http_code}", "https://duckduckgo.com"],
+                           capture_output=True, text=True, timeout=25)
+        code = (p.stdout or "").strip()
+        if code.startswith("2") or code.startswith("3"):
+            ok(f"أمر curl النظامي نجح → HTTP {code} ✓")
+        else:
+            bad(f"أمر curl النظامي → HTTP {code or '؟'} | {(p.stderr or '')[:100]}")
+    except FileNotFoundError:
+        info("أمر curl غير مثبّت (pkg install curl).")
+    except Exception as e:
+        bad(f"أمر curl: {type(e).__name__}: {str(e)[:100]}")
+
+
 # ─────────────────────────────────────────────────────────
 # ٤. المكتبات الاختيارية
 # ─────────────────────────────────────────────────────────
@@ -232,6 +313,7 @@ def main():
     check_env()
     check_llm()
     check_internet()
+    check_network_deep()
     check_libs()
     check_search(query)
     check_pipeline(query)
