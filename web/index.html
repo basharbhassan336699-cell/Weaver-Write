@@ -3962,6 +3962,22 @@
   </div>
 </div>
 
+<div class="wv-overlay" id="chatsOverlay">
+  <div class="wv-modal">
+    <div class="wv-head">
+      <h3><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-inline-end:8px"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"/></svg>Chats / المحادثات</h3>
+      <button class="wv-x" onclick="wvClose('chatsOverlay')"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></button>
+    </div>
+    <div class="wv-body">
+      <div class="wv-row">
+        <input id="wvChatsSearch" style="flex:1;min-width:160px;padding:10px 12px;border-radius:10px;border:1px solid var(--border,#3a3350);background:var(--bg,#14131a);color:var(--text,#ece9f5);font:inherit" placeholder="Search chats & content / ابحث في المحادثات ومحتواها" oninput="wvChatsPageSearch(this.value)" autocomplete="off">
+      </div>
+      <button class="wv-btn primary" style="width:100%;margin-bottom:10px" onclick="wvChatsPageNew()">+ New chat / محادثة جديدة</button>
+      <div class="wv-list" id="wvChatsList"></div>
+    </div>
+  </div>
+</div>
+
 <div class="wv-overlay" id="calendarOverlay">
   <div class="wv-modal">
     <div class="wv-head">
@@ -4005,7 +4021,7 @@
   // ── panel open/close + nav wiring ──
   function wvClose(id){ var o=document.getElementById(id); if(o) o.classList.remove('show'); }
   function wvCloseAllPanels(){ document.querySelectorAll('.wv-overlay.show').forEach(function(o){ o.classList.remove('show'); }); }
-  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','windowsOverlay','calendarOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
+  (function(){ var m=document.getElementById('mainContent'); if(m){ ['keysOverlay','projectsOverlay','windowsOverlay','calendarOverlay','chatsOverlay','artifactsOverlay','connectsOverlay'].forEach(function(id){ var el=document.getElementById(id); if(el) m.appendChild(el); }); } })();
   function wvOpen(id){
     // opening a section closes any other open section (smooth switching)
     wvCloseAllPanels();
@@ -4044,7 +4060,7 @@
       if(!span) return;
       var k=span.getAttribute('data-i18n');
       if(k==='new')       it.addEventListener('click', function(){ wvCloseAllPanels(); if(typeof newChat==='function') newChat(); wvSetNavActive(it); wvCloseDrawer(); });
-      if(k==='chats')     it.addEventListener('click', function(){ wvCloseAllPanels(); if(typeof refreshChats==='function') refreshChats(); wvSetNavActive(it); wvCloseDrawer(); });
+      if(k==='chats')     it.addEventListener('click', function(){ wvSetNavActive(it); wvOpen('chatsOverlay'); wvOpenChatsPage(); wvCloseDrawer(); });
       if(k==='keys')      it.addEventListener('click', function(){ wvOpenKeys(); });
       if(k==='projects')  it.addEventListener('click', function(){ wvOpen('projectsOverlay'); wvRenderProjects(); });
       if(k==='windows')   it.addEventListener('click', function(){ wvOpen('windowsOverlay'); wvBackToWindows(); });
@@ -4361,6 +4377,55 @@
     currentWindowId=String(wid);  // the next sent message will belong to this window
     wvClose('windowsOverlay');
     var input=document.getElementById('mainInput'); if(input) input.focus();
+  }
+
+  // ── Chats page (a full inner page like the other sections: search + all
+  //    chats with relative time + New chat) ──
+  function wvRelTime(ts){
+    var ar=currentLang==='ar', s=(Date.now()-(ts||0))/1000;
+    if(s<60) return ar?'الآن':'now';
+    var m=Math.floor(s/60); if(m<60) return ar?('قبل '+m+' دقيقة'):(m+'m');
+    var h=Math.floor(m/60); if(h<24) return ar?('قبل '+h+' ساعة'):(h+'h');
+    var d=Math.floor(h/24); if(d===1) return ar?'أمس':'yesterday';
+    if(d<30) return ar?('قبل '+d+' أيام'):(d+'d');
+    var mo=Math.floor(d/30); if(mo<12) return ar?('قبل '+mo+' شهر'):(mo+'mo');
+    var y=Math.floor(mo/12); return ar?('قبل '+y+' سنة'):(y+'y');
+  }
+  var _wvChatsPageTimer=null, _wvChatsPageSeq=0;
+  async function wvOpenChatsPage(){
+    var s=document.getElementById('wvChatsSearch'); if(s) s.value='';
+    if(typeof refreshChats==='function') await refreshChats();
+    wvRenderChatsPage('');
+  }
+  function wvChatsPageNew(){ wvClose('chatsOverlay'); if(typeof newChat==='function') newChat(); }
+  function wvChatsPageSearch(q){
+    q=(q||'').trim();
+    clearTimeout(_wvChatsPageTimer);
+    if(!q){ wvRenderChatsPage(''); return; }
+    var seq=++_wvChatsPageSeq;
+    _wvChatsPageTimer=setTimeout(async function(){
+      var results=[], ok=false;
+      try{ var r=await fetch('/api/chats/search?q='+encodeURIComponent(q)); if(r.ok){ var d=await r.json(); if(d&&Array.isArray(d.results)){ results=d.results; ok=true; } } }catch(e){}
+      if(seq!==_wvChatsPageSeq) return;
+      if(ok) wvRenderChatsPage(q, results);
+      else wvRenderChatsPage('');   // fallback: full list if endpoint missing
+    },180);
+  }
+  function wvRenderChatsPage(q, results){
+    var box=document.getElementById('wvChatsList'); if(!box) return;
+    var searching=!!(q&&results);
+    var list=searching?results:(chatsCache||[]);
+    if(!list.length){
+      box.innerHTML='<div class="wv-empty">'+(q?(currentLang==='ar'?'لا نتائج':'No results'):(currentLang==='ar'?'لا محادثات بعد. اضغط «محادثة جديدة».':'No chats yet.'))+'</div>';
+      return;
+    }
+    box.innerHTML=list.map(function(c){
+      var t=q?_hl(c.title||'Chat',q):wvEsc(c.title||'Chat');
+      var snip=(searching&&c.snippet)?('<div class="s" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_hl(c.snippet,q)+'</div>'):'';
+      return '<div class="wv-card" style="cursor:pointer" onclick="selectChat(\''+c.id+'\');wvClose(\'chatsOverlay\')">'+
+        '<div style="flex:1;min-width:0"><div class="t" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+t+'</div>'+snip+'</div>'+
+        '<span class="s" style="white-space:nowrap;align-self:flex-start">'+wvRelTime(c.ts)+'</span></div>';
+    }).join('');
   }
 
   // ── Calendar (task deadlines + reminders; server-backed) ──
