@@ -334,6 +334,38 @@ class WeaverOrchestrator:
         return re.sub(r"[ \t]{2,}", " ", text)
 
     @staticmethod
+    def _looks_conversational(text: str) -> bool:
+        """True when a section body is a chat turn (greeting / clarifying
+        question / options menu) instead of document content — so it can be
+        retried or dropped. Conservative: needs a real chat marker, not just a
+        question mark inside otherwise substantial prose."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        head = t[:400]
+        markers = (
+            "أهلاً", "أهلًا", "اهلا", "مرحبا", "مرحباً", "عزيزي",
+            "ما الذي تريد", "ماذا تريد", "يرجى التوضيح", "الرجاء التوضيح",
+            "أحتاج أن أحدد", "أحتاج إلى تحديد", "هل تريد", "هل تفضل",
+            "بحاجة إلى مزيد", "أخبرني", "قبل أن أبدأ", "قبل أن أكتب",
+            "hello", "hi there", "could you clarify", "what would you like",
+            "which of the following", "please specify", "let me know",
+            "before i begin", "i need to know", "would you like",
+        )
+        low = head.lower()
+        if any(m in head or m in low for m in markers):
+            return True
+        # an options menu near the top: "أ." / "ب." / "ج." or "a)" "b)" list
+        import re
+        if re.search(r"(^|\n)\s*[أ-د]\s*[\.\)\-]", head) and (
+                "؟" in head or "?" in head):
+            return True
+        # very short and ends in a question → almost certainly a clarifying Q
+        if len(t) < 200 and t.rstrip().endswith(("؟", "?")):
+            return True
+        return False
+
+    @staticmethod
     def _skill_call(skill: str, module: str, func: str, *args, **kwargs):
         """Dynamically import capabilities/skills/<skill>/scripts/<module>.py
         and call <func>(*args, **kwargs). Raises on failure — callers guard it
@@ -901,11 +933,35 @@ class WeaverOrchestrator:
                         citation_style=card.get("citation_style", ""),
                         length=card.get("page_count", ""),
                         rag_contexts=rag_ctx or "(none)", prior_content="")
-                    system = self.system_main
+                    # dedicated WRITING system prompt: forbids clarifying
+                    # questions/greetings that a chatty model would emit
+                    system = _p.SYSTEM_PROMPT_WRITE
                 try:
                     body = self.llm_fn(prompt, system=system, temperature=0.5)
                 except Exception as e:
                     mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
+                # guard: a conversational model may answer with a greeting /
+                # clarifying question / options menu instead of content. Detect
+                # it and retry ONCE with a blunt content-only instruction.
+                if self._looks_conversational(body):
+                    firm = (prompt + "\n\n"
+                            + ("اكتب نص هذا القسم كاملاً ومباشرةً الآن. ممنوع منعاً "
+                               "باتاً: التحية، طرح أي سؤال، طلب توضيح، أو عرض "
+                               "خيارات. ابدأ بالمحتوى فوراً."
+                               if lang == "ar" else
+                               "Write the full text of this section directly "
+                               "now. Absolutely no greeting, no question, no "
+                               "request for clarification, no options. Begin "
+                               "with the content immediately."))
+                    try:
+                        retry = self.llm_fn(firm, system=_p.SYSTEM_PROMPT_WRITE,
+                                            temperature=0.4)
+                        if retry and not self._looks_conversational(retry):
+                            body = retry
+                        elif self._looks_conversational(body):
+                            body = ""   # drop the chat turn rather than ship it
+                    except Exception:
+                        pass
             parts.append((f"{title}\n{body}").strip())
             out_sections.append({"heading": title, "body": body})
         task.draft = "\n\n".join(p for p in parts if p)
