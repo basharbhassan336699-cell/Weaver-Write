@@ -4024,11 +4024,27 @@
   document.querySelectorAll('.wv-overlay').forEach(function(o){
     o.addEventListener('click', function(e){ if(e.target===o) o.classList.remove('show'); });
   });
+  // close the mobile drawer only when it is actually open (reads the DOM, not
+  // a script-scoped var), so tapping a nav item reveals the result underneath
+  function wvCloseDrawer(){
+    try{
+      var sb=document.getElementById('sidebar');
+      if(sb && !sb.classList.contains('collapsed')
+         && window.matchMedia('(max-width:768px)').matches
+         && typeof toggleSidebar==='function') toggleSidebar();
+    }catch(e){}
+  }
+  function wvSetNavActive(el){
+    document.querySelectorAll('.nav-item').forEach(function(n){ n.classList.remove('active'); });
+    if(el) el.classList.add('active');
+  }
   (function wireNav(){
     document.querySelectorAll('.nav-item').forEach(function(it){
       var span=it.querySelector('span[data-i18n]');
       if(!span) return;
       var k=span.getAttribute('data-i18n');
+      if(k==='new')       it.addEventListener('click', function(){ wvCloseAllPanels(); if(typeof newChat==='function') newChat(); wvSetNavActive(it); wvCloseDrawer(); });
+      if(k==='chats')     it.addEventListener('click', function(){ wvCloseAllPanels(); if(typeof refreshChats==='function') refreshChats(); wvSetNavActive(it); wvCloseDrawer(); });
       if(k==='keys')      it.addEventListener('click', function(){ wvOpenKeys(); });
       if(k==='projects')  it.addEventListener('click', function(){ wvOpen('projectsOverlay'); wvRenderProjects(); });
       if(k==='windows')   it.addEventListener('click', function(){ wvOpen('windowsOverlay'); wvBackToWindows(); });
