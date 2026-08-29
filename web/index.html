@@ -401,6 +401,12 @@
     letter-spacing: -0.02em;
     user-select: none;
   }
+  /* Personalised opener: bold serif (with the requested serifs) */
+  #greetingText {
+    font-family: Georgia, "Times New Roman", "Amiri", "Scheherazade New", "Noto Naskh Arabic", serif;
+    font-weight: 700;
+    line-height: 1.35;
+  }
 
   /* Asterisk / snowflake logo */
   .logo-mark {
@@ -2587,14 +2593,47 @@
     saveField('weaver_voice_lang', currentLang);
   }
 
-  // ── Greeting based on time of day (language-aware) ─
+  // ── Greeting based on time of day (language-aware, personalised) ─
+  // A rotating, time-of-day set of opener lines. [Name] is replaced with the
+  // user's saved name (call-name first, else username, else a friendly word).
+  var WV_GREETINGS = {
+    morning: [
+      { en: "Good morning, [Name]! Ready to conquer the day?", ar: "صباح الخير يا [Name]! مستعد لإنجاز مهام اليوم؟" },
+      { en: "Hey [Name], what's our main focus for today?", ar: "أهلاً [Name]، ما هو تركيزنا الأساسي لليوم؟" },
+      { en: "Rise and shine, [Name]! How can I help you start your day?", ar: "أشرقت الشمس يا [Name]! كيف يمكنني مساعدتك في بدء يومك؟" }
+    ],
+    productivity: [
+      { en: "Let's get to work, [Name]. What's first on the list?", ar: "دعنا نبدأ العمل يا [Name]. ما هو أول شيء في القائمة؟" },
+      { en: "[Name], need any help structuring your tasks today?", ar: "يا [Name]، هل تحتاج لأي مساعدة في ترتيب مهامك اليوم؟" },
+      { en: "You've got this, [Name]! What are we tackling next?", ar: "أنت قادر على ذلك يا [Name]! ما الذي سنتعامل معه تالياً؟" }
+    ],
+    evening: [
+      { en: "Good evening, [Name]. Time to relax and recharge.", ar: "مساء الخير يا [Name]. حان وقت الاسترخاء وتجديد الطاقة" },
+      { en: "Hey [Name], what was the highlight of your day?", ar: "أهلاً [Name]، ما كان أفضل جزء في يومك؟" },
+      { en: "Let's wrap up the day, [Name]. Any final thoughts?", ar: "دعنا نختتم اليوم يا [Name]. أي أفكار أخيرة؟" }
+    ],
+    wellbeing: [
+      { en: "How are you really feeling today, [Name]?", ar: "كيف تشعر حقاً اليوم يا [Name]؟" },
+      { en: "Take a deep breath, [Name]. I'm here to listen.", ar: "خذ نفساً عميقاً يا [Name]. أنا هنا للاستماع" },
+      { en: "Just checking in on you, [Name]. Everything okay?", ar: "أطمئن عليك فقط يا [Name]. كل شيء بخير؟" }
+    ]
+  };
+  function wvUserName() {
+    try { return (localStorage.getItem('weaver_callname') || localStorage.getItem('weaver_username') || '').trim(); }
+    catch (e) { return ''; }
+  }
   function updateGreeting() {
-    const h = new Date().getHours();
     const el = document.getElementById('greetingText');
-    const dict = I18N[currentLang];
-    if (h >= 5 && h < 12)  el.textContent = dict.greet_morning;
-    else if (h >= 12 && h < 17) el.textContent = dict.greet_afternoon;
-    else el.textContent = dict.greet_evening;
+    if (!el) return;
+    const h = new Date().getHours();
+    const group = (h >= 5 && h < 12) ? 'morning'
+                : (h >= 12 && h < 17) ? 'productivity'
+                : (h >= 17 && h < 22) ? 'evening' : 'wellbeing';
+    const arr = WV_GREETINGS[group];
+    const pick = arr[Math.floor(Math.random() * arr.length)];
+    const ar = currentLang === 'ar';
+    const name = wvUserName() || (ar ? 'صديقي' : 'friend');
+    el.textContent = (ar ? pick.ar : pick.en).replace(/\[Name\]/g, name);
   }
   updateGreeting();
 
@@ -2609,6 +2648,7 @@
   function applyUserName(name) {
     document.getElementById('userNameLabel').textContent = name;
     document.getElementById('userAvatar').textContent = getInitials(name);
+    if (typeof updateGreeting === 'function') updateGreeting();  // personalise the opener
   }
 
   function saveUserName() {
