@@ -152,6 +152,17 @@ def check_search(query):
     except Exception as e:
         bad(f"DDG الخام: {type(e).__name__}: {str(e)[:200]}")
 
+    # 5a-2) DNS-over-HTTPS — يتجاوز عطل DNS في الجهاز (يترجم عبر 1.1.1.1 بالـIP)
+    info("أفحص DNS-over-HTTPS (الحل لعطل DNS)…")
+    try:
+        ip = W._doh_resolve("duckduckgo.com")
+        if ip:
+            ok(f"DoH ترجم duckduckgo.com → {ip} (بلا حاجة لـDNS النظام)")
+        else:
+            bad("DoH لم يُرجع عنواناً — الشبكة قد تحجب 1.1.1.1/8.8.8.8 أيضاً.")
+    except Exception as e:
+        bad(f"DoH: {type(e).__name__}: {str(e)[:160]}")
+
     # 5b) الدالة الفعلية _ddg_search
     info("أفحص _ddg_search (نفس ما يستخدمه النظام)…")
     try:
