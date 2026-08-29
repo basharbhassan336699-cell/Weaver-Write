@@ -1396,7 +1396,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .csearch-row-time { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  .csearch-row-time { font-size: 12px; color: var(--text-muted); flex-shrink: 0; align-self: flex-start; margin-top: 2px; }
+  .csearch-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .csearch-row-main .csearch-row-title { flex: none; }
+  .csearch-row-snippet {
+    font-size: 12px; color: var(--text-muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .csearch-hl { background: rgba(255,206,84,0.35); color: inherit; border-radius: 3px; padding: 0 1px; }
   .csearch-empty { padding: 30px 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
   @media (max-width: 768px) {
     .csearch-modal { margin-top: 3vh; max-height: min(88vh, 640px); max-height: min(88dvh, 640px); }
@@ -2657,8 +2664,52 @@
     document.getElementById('csearchOverlay').classList.remove('show');
   }
 
+  let _csearchTimer = null, _csearchSeq = 0;
   function filterChatSearch(query) {
-    renderChatSearchList(query);
+    const q = (query || '').trim();
+    // empty query → instant recent-chats list from cache (title only)
+    if (!q) { renderChatSearchList(''); return; }
+    // non-empty → search TITLE + MESSAGE CONTENT on the server (debounced)
+    clearTimeout(_csearchTimer);
+    const seq = ++_csearchSeq;
+    _csearchTimer = setTimeout(async () => {
+      let results = [];
+      try {
+        const d = await (await fetch('/api/chats/search?q=' + encodeURIComponent(q))).json();
+        results = d.results || [];
+      } catch (e) { results = []; }
+      if (seq === _csearchSeq) renderChatSearchResults(results, q);
+    }, 180);
+  }
+
+  function _esc(s) { return (s || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+  function _hl(text, q) {
+    const t = _esc(text); if (!q) return t;
+    try {
+      const re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'ig');
+      return t.replace(re, '<mark class="csearch-hl">$1</mark>');
+    } catch (e) { return t; }
+  }
+
+  // content-search results (from the server): title + matching snippet + time
+  function renderChatSearchResults(results, q) {
+    const list = document.getElementById('csearchList');
+    if (!list) return;
+    const dict = I18N[currentLang];
+    if (!results.length) {
+      list.innerHTML = `<div class="csearch-empty">${dict.csearch_no_results}</div>`;
+      return;
+    }
+    list.innerHTML = results.map(c =>
+      `<div class="csearch-row${c.id === currentChatId ? ' active' : ''}" onclick="selectChat('${c.id}'); closeChatSearch();">
+        ${chatIconSvg}
+        <div class="csearch-row-main">
+          <span class="csearch-row-title">${_hl(c.title || '(بدون عنوان)', q)}</span>
+          ${c.snippet ? `<span class="csearch-row-snippet">${_hl(c.snippet, q)}</span>` : ''}
+        </div>
+        <span class="csearch-row-time">${chatTimeGroup(c.ts)}</span>
+      </div>`
+    ).join('');
   }
 
   function renderChatSearchList(query) {
@@ -2677,7 +2728,7 @@
     list.innerHTML = filtered.map((c, i) =>
       `<div class="csearch-row${c.id === currentChatId ? ' active' : ''}" onclick="selectChat('${c.id}'); closeChatSearch();">
         ${chatIconSvg}
-        <span class="csearch-row-title">${c.title}</span>
+        <span class="csearch-row-title">${_esc(c.title)}</span>
         <span class="csearch-row-time">${chatTimeGroup(c.ts)}</span>
       </div>`
     ).join('');
