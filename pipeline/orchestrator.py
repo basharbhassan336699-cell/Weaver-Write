@@ -1333,6 +1333,20 @@ class WeaverOrchestrator:
         branch degrades safely when a library/service is missing."""
         if not url:
             return None
+        # 0a) YouTube links → dedicated tool_youtube (transcript/Whisper). Fully
+        #     guarded: any failure just falls through to the normal path below,
+        #     so non-YouTube links are completely unaffected.
+        try:
+            from capabilities.tools import tool_youtube
+            if tool_youtube.is_youtube_url(url):
+                lang = getattr(self, "_yt_lang", None) or "ar"
+                res = await tool_youtube.run({"url": url, "lang": lang})
+                if getattr(res, "ok", False):
+                    txt = (res.data or {}).get("text")
+                    if txt and len(txt.strip()) > 200:
+                        return txt
+        except Exception:
+            pass
         # 0) UniWeb browser (curl_impersonate: real browser fingerprint, beats
         #    bot-blocking). firecrawl is removed; needs curl_cffi on the device.
         try:
