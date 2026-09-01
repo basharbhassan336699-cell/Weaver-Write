@@ -436,6 +436,11 @@ class WeaverOrchestrator:
              "literature review", "analysis", "تحليل", "أطروحة", "thesis"))
         if needs_sources:
             task.tools.append("web_search")
+        # news/recency intent enables web_search even for non-academic tasks
+        # (never academic_search — news isn't academic). Respect "none" mode below.
+        if mode != "none" and self._is_recency_query(
+                f"{card.get('topic','')} {task.description}"):
+            task.tools.append("web_search")
         if mode == "none":
             # explicit no-sources request: strip every source-gathering tool
             task.tools = [t for t in task.tools
@@ -496,12 +501,93 @@ class WeaverOrchestrator:
             await self._web_search(task, mem)
 
     @staticmethod
+    def _is_recency_query(text) -> bool:
+        """True when the request wants fresh/current information (news, latest,
+        today…), in Arabic or English. Used to switch on live web search and
+        the recency-oriented ranking."""
+        t = " " + (text or "").lower() + " "
+        kws = ("أخبار", "آخر", "اليوم", "الآن", "حالياً", "حاليا", "مؤخراً",
+               "مؤخرا", "أحدث", "جديد", "هذا الأسبوع", "هذا الشهر",
+               "news", "latest", "today", "now", "recent", "breaking",
+               "current", "this week", "this month")
+        return any(k in t for k in kws)
+
+    @staticmethod
+    def _augment_query_with_date(query, lang):
+        """Append the current year (and month for daily/'today' intent) to a
+        query so engines favour fresh results. The year/month are computed
+        dynamically from datetime.now() — never hard-coded."""
+        import datetime
+        q = (query or "").strip()
+        if not q:
+            return q
+        now = datetime.datetime.now()
+        year = str(now.year)
+        if year in q:
+            return q                     # already dated — leave it
+        daily = any(w in q.lower() for w in
+                    ("اليوم", "الآن", "today", "now", "breaking", "عاجل"))
+        if daily:
+            if lang == "ar":
+                months_ar = ["يناير", "فبراير", "مارس", "أبريل", "مايو",
+                             "يونيو", "يوليو", "أغسطس", "سبتمبر", "أكتوبر",
+                             "نوفمبر", "ديسمبر"]
+                return q + " " + months_ar[now.month - 1] + " " + year
+            return q + " " + now.strftime("%B") + " " + year
+        return q + " " + year
+
+    @staticmethod
+    def _sort_results_by_recency(results):
+        """Stable-sort results newest-first. Scores each by an explicit year
+        (2020-2030) and relative-time phrases ('قبل ساعة/يوم', 'hours/days ago')
+        in title+content; items with no time signal keep their relative order
+        (stable sort). Never raises."""
+        import re
+        import datetime  # noqa: F401 (kept for clarity/extension)
+        if not results:
+            return results
+
+        def score(r):
+            try:
+                t = (str(r.get("title", "")) + " "
+                     + str(r.get("content", ""))).lower()
+            except Exception:
+                return 0
+            best = 0
+            for m in re.findall(r"\b(20[2-3]\d)\b", t):
+                y = int(m)
+                if 2020 <= y <= 2030:
+                    best = max(best, 1000 + (y - 2000) * 10)
+            rel = (
+                (r"(?:قبل|منذ)\s*(?:دقيقة|دقائق|ساعة|ساعات)", 1400),
+                (r"\b(?:minute|hour)s?\s+ago\b|just now", 1400),
+                (r"(?:قبل|منذ)\s*(?:يوم|يومين|أيام)", 1350),
+                (r"\bday(?:s)?\s+ago\b|yesterday|أمس", 1330),
+                (r"(?:قبل|منذ)\s*(?:أسبوع|أسابيع)", 1300),
+                (r"\bweek(?:s)?\s+ago\b", 1300),
+                (r"(?:قبل|منذ)\s*(?:شهر|أشهر)", 1200),
+                (r"\bmonth(?:s)?\s+ago\b", 1200),
+            )
+            for pat, w in rel:
+                if re.search(pat, t):
+                    best = max(best, w)
+            return best
+        # sorted() is stable, so equal-score items keep their original order
+        return sorted(results, key=lambda r: -score(r))
+
+    @staticmethod
     def _searx_query(instance: str, query: str, lang: str, limit: int,
-                     timeout: int = 8):
+                     timeout: int = 8, time_range=None, sort_by_date=False):
         """Direct SearXNG JSON search. Returns a list of {title,url,content}
-        or None when the instance is unreachable / returns nothing usable."""
+        or None when the instance is unreachable / returns nothing usable.
+
+        Optional (backward compatible — old calls without them still work):
+          * time_range: "day"/"week"/"month"/"year" → SearXNG time filter.
+          * sort_by_date: intent flag kept for callers; SearXNG's JSON API has
+            no direct sort param, so newest-first ordering is applied later by
+            _sort_results_by_recency.
+        Uses _http_get so it survives broken device DNS (DoH retry)."""
         import urllib.parse
-        import urllib.request
         import json as _json
         instance = (instance or "").rstrip("/")
         if not instance:
@@ -509,11 +595,16 @@ class WeaverOrchestrator:
         params = {"q": query, "format": "json", "categories": "general"}
         if lang:
             params["language"] = lang
+        if time_range in ("day", "week", "month", "year"):
+            params["time_range"] = time_range
         url = instance + "/search?" + urllib.parse.urlencode(params)
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": "WeaverWrite/1.0",
+                  "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "WeaverWrite/1.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = _json.loads(resp.read().decode("utf-8"))
+            data = _json.loads(raw)
         except Exception:
             return None
         return [{"title": r.get("title", ""), "url": r.get("url", ""),
@@ -595,12 +686,16 @@ class WeaverOrchestrator:
             socket.getaddrinfo = orig
 
     @staticmethod
-    def _ddg_search(query: str, lang: str, limit: int, timeout: int = 12):
+    def _ddg_search(query: str, lang: str, limit: int, timeout: int = 12,
+                    df=None):
         """Direct DuckDuckGo search — NO server required (works on the phone as
         is). Hits the html.duckduckgo.com endpoint over plain HTTP, decoding
         DDG's redirect links. Prefers UniWeb/curl_impersonate (real browser
         fingerprint, beats bot-blocking) and falls back to urllib. Returns a
-        list of {title,url,content} or None when nothing usable comes back."""
+        list of {title,url,content} or None when nothing usable comes back.
+
+        Optional (backward compatible): df is DuckDuckGo's time filter —
+        'd' (day), 'w' (week), 'm' (month), 'y' (year)."""
         import urllib.parse
         import urllib.request
         import html as _html
@@ -611,6 +706,8 @@ class WeaverOrchestrator:
         params = {"q": q}
         if lang == "ar":
             params["kl"] = "xa-ar"      # region/language hint (best-effort)
+        if df in ("d", "w", "m", "y"):
+            params["df"] = df           # recency filter
         endpoint = ("https://html.duckduckgo.com/html/?"
                     + urllib.parse.urlencode(params))
         ua = ("Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
@@ -764,13 +861,21 @@ class WeaverOrchestrator:
         return None
 
     async def _web_search(self, task: Task, mem: TaskMemory):
-        """Live web research. If a SearXNG instance is reachable (WEAVER_SEARXNG_URL
-        or the default http://127.0.0.1:8080), query it directly, take the top 3
-        links and READ each page in full via tool_web_document (HTML, text/
-        scanned PDFs with OCR, images); the rest are kept as snippets. If
-        SearXNG is unreachable, fall back to the packaged
-        web_search tool. Everything degrades safely — a missing library or a
-        down service just yields fewer/no sources, never an error."""
+        """Live web research — the search backbone of Layer 4.
+
+        Layer wiring (the end-to-end flow, documented here):
+          * Layer 3 (_route): detects a news/recency intent and turns on
+            web_search (even for non-academic tasks; academic_search stays off).
+          * Layer 4 (_layer_4 → _web_search): engine attempt order is
+              SearXNG primary → SearXNG fallbacks → DuckDuckGo → packaged tool.
+            The top 3 links are then read in full (HTML, text/scanned PDFs via
+            OCR, images); the rest are kept as snippets. For recency queries it
+            injects the current date into the query, applies a time filter
+            (SearXNG time_range / DuckDuckGo df), and re-orders results
+            newest-first before reading them.
+          * Every engine degrades safely — a down service or missing library
+            just yields fewer/no sources, never an error.
+        """
         card = task.task_card
         query = (card.get("topic") or task.description or "").strip()
         if not query:
@@ -778,23 +883,48 @@ class WeaverOrchestrator:
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
         limit = int(card.get("reference_count") or 8)
 
-        # 1) SearXNG (env or default 8080), probed by actually querying it
-        instance = os.environ.get("WEAVER_SEARXNG_URL", "").strip() or "http://127.0.0.1:8080"
-        results = self._searx_query(instance, query, lang, limit)
+        # news/recency intent → date-augmented query + time filter + recency sort
+        is_recency = self._is_recency_query(
+            (card.get("topic") or "") + " " + (task.description or ""))
+        sx_time = ddg_df = None
+        if is_recency:
+            query = self._augment_query_with_date(query, lang)
+            sx_time = "week"          # SearXNG time_range
+            ddg_df = "w"              # DuckDuckGo df = past week
+
+        # 1) SearXNG primary (env override, else the packaged default port 8888)
+        instance = os.environ.get("WEAVER_SEARXNG_URL", "").strip() or "http://127.0.0.1:8888"
+        results = self._searx_query(instance, query, lang, limit,
+                                    time_range=sx_time, sort_by_date=is_recency)
         used = "searxng:" + instance
-        # 2) DuckDuckGo direct — NO server needed (works on the phone as is)
+        # 2) SearXNG fallbacks (comma-separated list, tried in order)
         if not results:
-            ddg = self._ddg_search(query, lang, limit)
+            for fb in [u.strip() for u in
+                       os.environ.get("WEAVER_SEARXNG_FALLBACKS", "").split(",")
+                       if u.strip()]:
+                r = self._searx_query(fb, query, lang, limit,
+                                      time_range=sx_time, sort_by_date=is_recency)
+                if r:
+                    results = r
+                    used = "searxng:" + fb
+                    break
+        # 3) DuckDuckGo direct — NO server needed (works on the phone as is)
+        if not results:
+            ddg = self._ddg_search(query, lang, limit, df=ddg_df)
             if ddg:
                 results = ddg
                 used = "duckduckgo"
-        # 3) fall back to the packaged tool as a last resort
+        # 4) fall back to the packaged tool as a last resort
         if not results:
             results = await self._tool_web_search(query, lang, limit)
             used = "web_search"
         if not results:
             mem.set_status(4, "بحث ويب: لا نتائج (تدهور آمن)")
             return
+
+        # recency queries: put the newest results first before reading top 3
+        if is_recency:
+            results = self._sort_results_by_recency(results)
 
         srcs = card.setdefault("sources", [])
         full_reads = 0
