@@ -450,6 +450,15 @@ class WeaverOrchestrator:
              "literature review", "analysis", "تحليل", "أطروحة", "thesis"))
         if needs_sources:
             task.tools.append("web_search")
+        # genuinely academic tasks also gather peer-reviewed sources (free
+        # scholarly APIs). Not for "none" mode, and not for news/recency.
+        acad_types = ("بحث", "research", "دراسة", "أطروحة", "thesis",
+                      "مراجعة أدبيات", "literature review", "رسالة علمية",
+                      "dissertation")
+        if mode != "none" and (
+                card.get("needs_academic_search")
+                or str(card.get("task_type", "")).lower() in acad_types):
+            task.tools.append("academic_search")
         # news/recency intent enables web_search even for non-academic tasks
         # (never academic_search — news isn't academic). Respect "none" mode below.
         if mode != "none" and self._is_recency_query(
@@ -510,7 +519,8 @@ class WeaverOrchestrator:
             return
         if want_academic:
             from pipeline.layers.layer_4_research import run as _layer4_run
-            await _layer4_run(task, mem)
+            await _layer4_run(task, mem)          # PaperQA (if installed)
+            await self._academic_search(task, mem)  # free scholarly APIs
         if want_web:
             await self._web_search(task, mem)
 
@@ -975,6 +985,325 @@ class WeaverOrchestrator:
             if len(merged) >= max(limit, 8):
                 break
         return merged or None
+
+    # ── free academic sources (no API key) ────────────────────────────────
+    # Each returns a list of {title,url,content,authors,year,doi,source} or
+    # None; all go through _http_get (DoH-safe) and degrade safely. They index
+    # Arabic works too, so Arabic queries return Arabic papers.
+    _ACAD_UA = "WeaverWrite/1.0 (mailto:research@weaver.local)"
+
+    @staticmethod
+    def _openalex_search(query, lang, limit=6, timeout=12):
+        import urllib.parse
+        import json as _json
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = "https://api.openalex.org/works?" + urllib.parse.urlencode(
+            {"search": q, "per_page": min(int(limit) or 6, 10)})
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
+                  "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            data = _json.loads(raw)
+        except Exception:
+            return None
+        out = []
+        for w in (data.get("results") or [])[:limit]:
+            title = w.get("title") or w.get("display_name") or ""
+            if not title:
+                continue
+            doi = (w.get("doi") or "").replace("https://doi.org/", "")
+            oa = (w.get("open_access") or {}).get("oa_url")
+            url_ = oa or w.get("doi") or w.get("id") or ""
+            auths = [(a.get("author") or {}).get("display_name", "")
+                     for a in (w.get("authorships") or [])[:4]]
+            abx = ""
+            inv = w.get("abstract_inverted_index")
+            if isinstance(inv, dict):
+                pos = {}
+                for word, ps in inv.items():
+                    for p in ps:
+                        pos[p] = word
+                abx = " ".join(pos[k] for k in sorted(pos))[:400]
+            out.append({"title": title, "url": url_, "content": abx,
+                        "authors": [a for a in auths if a],
+                        "year": str(w.get("publication_year") or ""),
+                        "doi": doi, "source": "openalex"})
+        return out or None
+
+    @staticmethod
+    def _crossref_search(query, lang, limit=6, timeout=12):
+        import urllib.parse
+        import json as _json
+        import re
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = "https://api.crossref.org/works?" + urllib.parse.urlencode(
+            {"query": q, "rows": min(int(limit) or 6, 10)})
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
+                  "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            items = ((_json.loads(raw).get("message") or {}).get("items")) or []
+        except Exception:
+            return None
+        out = []
+        for it in items[:limit]:
+            title = (it.get("title") or [""])[0]
+            if not title:
+                continue
+            doi = it.get("DOI", "")
+            url_ = it.get("URL") or (("https://doi.org/" + doi) if doi else "")
+            year = ""
+            dp = ((it.get("issued") or {}).get("date-parts")
+                  or (it.get("published") or {}).get("date-parts"))
+            if dp and dp[0]:
+                year = str(dp[0][0])
+            auths = [(a.get("given", "") + " " + a.get("family", "")).strip()
+                     for a in (it.get("author") or [])[:4]]
+            abx = re.sub(r"<[^>]+>", "", it.get("abstract", "") or "")[:400]
+            out.append({"title": title, "url": url_, "content": abx,
+                        "authors": [a for a in auths if a], "year": year,
+                        "doi": doi, "source": "crossref"})
+        return out or None
+
+    @staticmethod
+    def _arxiv_search(query, lang, limit=6, timeout=12):
+        import urllib.parse
+        import html as _html
+        import re
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = "http://export.arxiv.org/api/query?" + urllib.parse.urlencode(
+            {"search_query": "all:" + q, "max_results": min(int(limit) or 6, 10)})
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
+                  "Accept": "application/atom+xml"}, timeout)
+        if not raw:
+            return None
+
+        def _c(s):
+            return _html.unescape(re.sub(r"\s+", " ", s or "")).strip()
+        out = []
+        for m in re.finditer(r"<entry>(.*?)</entry>", raw, re.S):
+            e = m.group(1)
+            t = re.search(r"<title>(.*?)</title>", e, re.S)
+            if not t:
+                continue
+            idm = re.search(r"<id>(.*?)</id>", e, re.S)
+            summ = re.search(r"<summary>(.*?)</summary>", e, re.S)
+            pub = re.search(r"<published>(\d{4})", e)
+            auths = re.findall(r"<name>(.*?)</name>", e, re.S)
+            out.append({"title": _c(t.group(1)),
+                        "url": (idm.group(1).strip() if idm else ""),
+                        "content": (_c(summ.group(1))[:400] if summ else ""),
+                        "authors": [_c(a) for a in auths[:4]],
+                        "year": (pub.group(1) if pub else ""),
+                        "doi": "", "source": "arxiv"})
+            if len(out) >= limit:
+                break
+        return out or None
+
+    @staticmethod
+    def _semanticscholar_search(query, lang, limit=6, timeout=12):
+        import urllib.parse
+        import json as _json
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = ("https://api.semanticscholar.org/graph/v1/paper/search?"
+               + urllib.parse.urlencode(
+                   {"query": q, "limit": min(int(limit) or 6, 10),
+                    "fields": "title,abstract,year,authors,url,openAccessPdf"}))
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
+                  "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            data = _json.loads(raw).get("data") or []
+        except Exception:
+            return None
+        out = []
+        for p in data[:limit]:
+            title = p.get("title") or ""
+            if not title:
+                continue
+            pdf = (p.get("openAccessPdf") or {}).get("url")
+            out.append({"title": title, "url": pdf or p.get("url") or "",
+                        "content": (p.get("abstract") or "")[:400],
+                        "authors": [a.get("name", "")
+                                    for a in (p.get("authors") or [])[:4]],
+                        "year": str(p.get("year") or ""), "doi": "",
+                        "source": "semanticscholar"})
+        return out or None
+
+    @staticmethod
+    def _doaj_search(query, lang, limit=6, timeout=12):
+        import urllib.parse
+        import json as _json
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = ("https://doaj.org/api/search/articles/" + urllib.parse.quote(q)
+               + "?" + urllib.parse.urlencode({"pageSize": min(int(limit) or 6, 10)}))
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
+                  "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            results = _json.loads(raw).get("results") or []
+        except Exception:
+            return None
+        out = []
+        for r in results[:limit]:
+            b = r.get("bibjson") or {}
+            title = b.get("title") or ""
+            if not title:
+                continue
+            url_ = ""
+            for L in (b.get("link") or []):
+                if L.get("url"):
+                    url_ = L["url"]
+                    break
+            auths = [a.get("name", "") for a in (b.get("author") or [])[:4]]
+            out.append({"title": title, "url": url_,
+                        "content": (b.get("abstract") or "")[:400],
+                        "authors": [a for a in auths if a],
+                        "year": str(b.get("year") or ""), "doi": "",
+                        "source": "doaj"})
+        return out or None
+
+    @staticmethod
+    def _europepmc_search(query, lang, limit=6, timeout=12):
+        import urllib.parse
+        import json as _json
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = ("https://www.ebi.ac.uk/europepmc/webservices/rest/search?"
+               + urllib.parse.urlencode(
+                   {"query": q, "format": "json",
+                    "pageSize": min(int(limit) or 6, 10)}))
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
+                  "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            results = ((_json.loads(raw).get("resultList") or {})
+                       .get("result")) or []
+        except Exception:
+            return None
+        out = []
+        for r in results[:limit]:
+            title = r.get("title") or ""
+            if not title:
+                continue
+            doi = r.get("doi", "")
+            url_ = (("https://doi.org/" + doi) if doi
+                    else (("https://europepmc.org/abstract/"
+                           + str(r.get("source", "")) + "/" + str(r.get("id", "")))
+                          if r.get("id") else ""))
+            out.append({"title": title, "url": url_, "content": "",
+                        "authors": [r.get("authorString", "")],
+                        "year": str(r.get("pubYear") or ""), "doi": doi,
+                        "source": "europepmc"})
+        return out or None
+
+    @classmethod
+    def _scholarly_search(cls, query, lang, limit, timeout=14):
+        """Query all free scholarly sources IN PARALLEL (OpenAlex, Crossref,
+        arXiv, Semantic Scholar, DOAJ, Europe PMC) and merge/dedupe by DOI/URL/
+        title. Total time ≈ the slowest source. Each degrades safely. Returns a
+        merged list or None."""
+        import concurrent.futures as _cf
+        import itertools
+        engines = [
+            ("openalex", lambda: cls._openalex_search(query, lang, limit)),
+            ("crossref", lambda: cls._crossref_search(query, lang, limit)),
+            ("arxiv", lambda: cls._arxiv_search(query, lang, limit)),
+            ("s2", lambda: cls._semanticscholar_search(query, lang, limit)),
+            ("doaj", lambda: cls._doaj_search(query, lang, limit)),
+            ("europepmc", lambda: cls._europepmc_search(query, lang, limit)),
+        ]
+        res = {}
+        ex = _cf.ThreadPoolExecutor(max_workers=len(engines))
+        try:
+            fm = {ex.submit(fn): n for n, fn in engines}
+            done, _pending = _cf.wait(fm, timeout=timeout)
+            for f, n in fm.items():
+                try:
+                    res[n] = (f.result() or []) if f in done else []
+                except Exception:
+                    res[n] = []
+        except Exception:
+            for n, fn in engines:
+                try:
+                    res[n] = fn() or []
+                except Exception:
+                    res[n] = []
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+        lists = [res.get(n, []) for n, _ in engines]
+        merged, seen = [], set()
+        for r in itertools.chain.from_iterable(itertools.zip_longest(*lists)):
+            if not r:
+                continue
+            key = (r.get("doi") or r.get("url") or r.get("title") or "")
+            key = key.strip().lower().rstrip("/")
+            if not key or key in seen or not (r.get("title") or "").strip():
+                continue
+            seen.add(key)
+            merged.append(r)
+            if len(merged) >= max(int(limit) or 8, 8):
+                break
+        return merged or None
+
+    async def _academic_search(self, task: Task, mem: TaskMemory):
+        """Layer 4 academic path: gather peer-reviewed / open-access sources
+        from the free scholarly APIs and add them to the task's sources + RAG
+        memory. Degrades safely (no network / all down → nothing added)."""
+        card = task.task_card
+        query = (card.get("topic") or task.description or "").strip()
+        if not query:
+            return
+        lang = "ar" if card.get("language", "ar") == "ar" else "en"
+        limit = int(card.get("reference_count") or 8)
+        try:
+            results = self._scholarly_search(query, lang, limit)
+        except Exception:
+            results = None
+        if not results:
+            mem.set_status(4, "بحث أكاديمي: لا نتائج (تدهور آمن)")
+            return
+        srcs = card.setdefault("sources", [])
+        for r in results:
+            title = r.get("title", "")
+            url = r.get("url", "")
+            auth = ", ".join(r.get("authors") or [])
+            year = r.get("year", "")
+            doi = r.get("doi", "")
+            content = r.get("content") or ""
+            srcs.append({"key": (title or url)[:60], "url": url, "title": title,
+                         "content": content, "authors": r.get("authors") or [],
+                         "year": year, "doi": doi,
+                         "source": r.get("source", ""), "academic": True,
+                         "full": False})
+            mem.add_reference(
+                f"[أكاديمي/{r.get('source','')}] {title} — {auth} ({year}) "
+                f"{('doi:'+doi) if doi else ''} {content[:200]} ({url})",
+                source_key=(url or doi or title))
+        card["academic_reads"] = len(results)
+        mem.set_status(4, f"بحث أكاديمي: {len(results)} مصدر محكّم")
 
     async def _tool_web_search(self, query: str, lang: str, limit: int):
         """Fallback: the packaged web_search tool. Returns a results list
