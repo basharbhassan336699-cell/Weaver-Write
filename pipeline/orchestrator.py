@@ -783,6 +783,79 @@ class WeaverOrchestrator:
             results[i]["content"] = _clean(s)
         return results or None
 
+    @staticmethod
+    def _bing_search(query: str, lang: str, limit: int, timeout: int = 12):
+        """Serverless Bing HTML search. Returns {title,url,content} list or None.
+        Bing has a huge, independent index, so it broadens results beyond DDG.
+        Degrades safely (parse/network failure → None). DNS-safe via _http_get."""
+        import urllib.parse
+        import html as _html
+        import re
+        q = (query or "").strip()
+        if not q:
+            return None
+        params = {"q": q}
+        if lang == "ar":
+            params["setlang"] = "ar"
+            params["cc"] = "XA"
+        url = "https://www.bing.com/search?" + urllib.parse.urlencode(params)
+        ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": ua, "Accept": "text/html",
+                  "Accept-Language": ("ar,en;q=0.8" if lang == "ar"
+                                      else "en-US,en;q=0.8")}, timeout)
+        if not raw:
+            return None
+
+        def _clean(s):
+            return _html.unescape(re.sub(r"\s+", " ",
+                                         re.sub(r"<[^>]+>", "", s or ""))).strip()
+        results = []
+        for blk in re.findall(r'<li class="b_algo".*?</li>', raw, re.S):
+            a = re.search(r'<h2>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                          blk, re.S)
+            if not a:
+                continue
+            u = _html.unescape(a.group(1))
+            if not u.startswith("http"):
+                continue
+            cap = (re.search(r'<p class="b_[^"]*"[^>]*>(.*?)</p>', blk, re.S)
+                   or re.search(r'<p[^>]*>(.*?)</p>', blk, re.S))
+            results.append({"title": _clean(a.group(2)), "url": u,
+                            "content": _clean(cap.group(1) if cap else "")})
+            if len(results) >= limit:
+                break
+        return results or None
+
+    @classmethod
+    def _multi_engine_search(cls, query, lang, limit, df=None):
+        """SearXNG-like breadth WITHOUT a server: query several independent
+        engines (DuckDuckGo + Bing) and merge/dedupe by URL, interleaved so the
+        mix stays diverse. Each engine degrades safely — a dead one just
+        contributes nothing. Returns a merged list or None."""
+        import itertools
+        lists = []
+        for eng in (lambda: cls._ddg_search(query, lang, limit, df=df),
+                    lambda: cls._bing_search(query, lang, limit)):
+            try:
+                lists.append(eng() or [])
+            except Exception:
+                lists.append([])
+        merged, seen = [], set()
+        for r in itertools.chain.from_iterable(
+                itertools.zip_longest(*lists)) if lists else []:
+            if not r:
+                continue
+            u = (r.get("url") or "").split("#")[0].rstrip("/")
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            merged.append(r)
+            if len(merged) >= max(limit, 8):
+                break
+        return merged or None
+
     async def _tool_web_search(self, query: str, lang: str, limit: int):
         """Fallback: the packaged web_search tool. Returns a results list
         (possibly empty) and never raises."""
@@ -884,7 +957,8 @@ class WeaverOrchestrator:
           * Layer 3 (_route): detects a news/recency intent and turns on
             web_search (even for non-academic tasks; academic_search stays off).
           * Layer 4 (_layer_4 → _web_search): engine attempt order is
-              SearXNG primary → SearXNG fallbacks → DuckDuckGo → packaged tool.
+              SearXNG primary → SearXNG fallbacks → multi-engine (DuckDuckGo +
+              Bing, merged) → built-in public SearXNG → packaged tool.
             The top 3 links are then read in full (HTML, text/scanned PDFs via
             OCR, images); the rest are kept as snippets. For recency queries it
             injects the current date into the query, applies a time filter
@@ -925,12 +999,13 @@ class WeaverOrchestrator:
                     results = r
                     used = "searxng:" + fb
                     break
-        # 3) DuckDuckGo direct — NO server needed (works on the phone as is)
+        # 3) serverless MULTI-ENGINE (DuckDuckGo + Bing, merged) — SearXNG-like
+        #    breadth with NO server; works on the phone as is.
         if not results:
-            ddg = self._ddg_search(query, lang, limit, df=ddg_df)
-            if ddg:
-                results = ddg
-                used = "duckduckgo"
+            multi = self._multi_engine_search(query, lang, limit, df=ddg_df)
+            if multi:
+                results = multi
+                used = "multi-engine(ddg+bing)"
         # 4) built-in public SearXNG fallbacks — AUTOMATIC, zero setup. Reached
         #    only if everything above failed, so DuckDuckGo's fast path is never
         #    slowed. Each dead instance is memoized (skipped next time); short
