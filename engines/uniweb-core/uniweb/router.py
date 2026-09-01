@@ -58,7 +58,7 @@ class Task(str, Enum):
 KNOWN_PLATFORMS = {
     "twitter.com": "twitter", "x.com": "twitter",
     "linkedin.com": "linkedin",
-    "youtube.com": "youtube", "youtu.be": "youtube",
+    # يوتيوب يُعالَج عبر tool_youtube المخصّص، لا agent_reach (قناته فارغة)
     "reddit.com": "reddit",
     "instagram.com": "instagram",
     "facebook.com": "facebook",

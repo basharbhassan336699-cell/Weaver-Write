@@ -401,6 +401,24 @@
         4
       ],
       "module": "capabilities.tools.tool_web_document"
+    },
+    {
+      "name": "youtube",
+      "description": "Fetch and summarize a YouTube video by pulling its transcript (youtube-transcript-api) or, as a fallback, transcribing its audio via Whisper. Bridges video links to readable text for the pipeline.",
+      "triggers": [
+        "لخّص فيديو",
+        "رابط يوتيوب",
+        "تفريغ فيديو",
+        "فيديو يوتيوب",
+        "youtube",
+        "summarize video",
+        "video transcript",
+        "yt"
+      ],
+      "layers": [
+        4
+      ],
+      "module": "capabilities.tools.tool_youtube"
     }
   ]
 }
