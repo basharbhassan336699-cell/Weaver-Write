@@ -26,6 +26,20 @@ except ImportError:
 
 MAX_TASKS = 5
 
+# Built-in public SearXNG fallbacks, tried AUTOMATICALLY (no manual setup) only
+# after the user's own instance/fallbacks AND DuckDuckGo have failed — so the
+# reliable no-server path (DuckDuckGo) is never slowed by them. Public instances
+# are flaky and many disable format=json, so each is attempted at most once per
+# process (see _SEARX_DEAD) with a short timeout. Override/extend via the
+# WEAVER_SEARXNG_FALLBACKS env var, which is tried earlier (before DuckDuckGo).
+_DEFAULT_SEARXNG_FALLBACKS = [
+    "https://searx.be",
+    "https://search.inetol.net",
+    "https://priv.au",
+    "https://searx.tiekoetter.com",
+]
+_SEARX_DEAD = set()   # instances that failed this process — skipped next time
+
 # Capability registry (Tools/Skills/Libraries) — Claude pattern
 try:
     from capabilities import CapabilityRegistry
@@ -914,7 +928,22 @@ class WeaverOrchestrator:
             if ddg:
                 results = ddg
                 used = "duckduckgo"
-        # 4) fall back to the packaged tool as a last resort
+        # 4) built-in public SearXNG fallbacks — AUTOMATIC, zero setup. Reached
+        #    only if everything above failed, so DuckDuckGo's fast path is never
+        #    slowed. Each dead instance is memoized (skipped next time); short
+        #    timeout so a hanging server can't stall the pipeline.
+        if not results:
+            for fb in _DEFAULT_SEARXNG_FALLBACKS:
+                if fb in _SEARX_DEAD:
+                    continue
+                r = self._searx_query(fb, query, lang, limit, timeout=5,
+                                      time_range=sx_time, sort_by_date=is_recency)
+                if r:
+                    results = r
+                    used = "searxng-default:" + fb
+                    break
+                _SEARX_DEAD.add(fb)
+        # 5) fall back to the packaged tool as a last resort
         if not results:
             results = await self._tool_web_search(query, lang, limit)
             used = "web_search"
