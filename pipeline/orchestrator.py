@@ -812,17 +812,23 @@ class WeaverOrchestrator:
             return _html.unescape(re.sub(r"\s+", " ",
                                          re.sub(r"<[^>]+>", "", s or ""))).strip()
         results = []
+        # tolerate nested tags between <h2> and its <a> (spans, etc.)
         for blk in re.findall(r'<li class="b_algo".*?</li>', raw, re.S):
-            a = re.search(r'<h2>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
-                          blk, re.S)
+            a = (re.search(r'<h2[^>]*>.*?<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>',
+                           blk, re.S)
+                 or re.search(r'<a[^>]+class="[^"]*tilk[^"]*"[^>]+'
+                              r'href="([^"]+)"[^>]*>(.*?)</a>', blk, re.S))
             if not a:
                 continue
             u = _html.unescape(a.group(1))
-            if not u.startswith("http"):
+            title = _clean(a.group(2))
+            if not u.startswith("http") or not title:
+                continue
+            if "bing.com" in u or "microsofttranslator" in u:
                 continue
             cap = (re.search(r'<p class="b_[^"]*"[^>]*>(.*?)</p>', blk, re.S)
                    or re.search(r'<p[^>]*>(.*?)</p>', blk, re.S))
-            results.append({"title": _clean(a.group(2)), "url": u,
+            results.append({"title": title, "url": u,
                             "content": _clean(cap.group(1) if cap else "")})
             if len(results) >= limit:
                 break
@@ -857,12 +863,18 @@ class WeaverOrchestrator:
         body = mc.group(1) if mc else raw
         results = []
         for blk in re.findall(r'<li[^>]*>(.*?)</li>', body, re.S):
-            a = re.search(r'<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>',
-                          blk, re.S)
+            # the real result title is an <a class="title"> (or the <h2> anchor)
+            a = (re.search(r'<a[^>]+class="[^"]*title[^"]*"[^>]+'
+                           r'href="(https?://[^"]+)"[^>]*>(.*?)</a>', blk, re.S)
+                 or re.search(r'<h2[^>]*>\s*<a[^>]+href="(https?://[^"]+)"'
+                              r'[^>]*>(.*?)</a>', blk, re.S))
             if not a:
                 continue
+            u, title = a.group(1), _clean(a.group(2))
+            if not title or "mojeek.com" in u:      # skip logo/nav/empty rows
+                continue
             snip = re.search(r'<p class="s"[^>]*>(.*?)</p>', blk, re.S)
-            results.append({"title": _clean(a.group(2)), "url": a.group(1),
+            results.append({"title": title, "url": u,
                             "content": _clean(snip.group(1) if snip else "")})
             if len(results) >= limit:
                 break
@@ -956,8 +968,8 @@ class WeaverOrchestrator:
             if not r:
                 continue
             u = (r.get("url") or "").split("#")[0].rstrip("/")
-            if not u or u in seen:
-                continue
+            if not u or u in seen or not (r.get("title") or "").strip():
+                continue                              # drop dupes + empty rows
             seen.add(u)
             merged.append(r)
             if len(merged) >= max(limit, 8):
