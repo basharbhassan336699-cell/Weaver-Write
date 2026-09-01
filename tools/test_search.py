@@ -147,16 +147,20 @@ def main():
         else:
             bad(f"{fb} → لا JSON/محجوب ({dt:.1f}ث)")
 
-    # ── المحرّك المتعدّد (بلا خادم): DuckDuckGo + Bing مدموجَين ──
-    head("٤) بحث متعدّد المحرّكات (بلا خادم — DuckDuckGo + Bing)")
-    t = time.time()
-    ddg = W._ddg_search(eff_query, lang, 6, df=ddg_df)
-    dt1 = time.time() - t
-    (ok if ddg else bad)(f"DuckDuckGo: {len(ddg) if ddg else 0} نتيجة ({dt1:.1f}ث)")
-    t = time.time()
-    bing = W._bing_search(eff_query, lang, 6)
-    dt2 = time.time() - t
-    (ok if bing else bad)(f"Bing: {len(bing) if bing else 0} نتيجة ({dt2:.1f}ث)")
+    # ── المحرّك المتعدّد (بلا خادم): DuckDuckGo + Bing + Mojeek + Startpage ──
+    head("٤) بحث متعدّد المحرّكات (بلا خادم، بالتوازي)")
+    for name, fn in (("DuckDuckGo", lambda: W._ddg_search(eff_query, lang, 6, df=ddg_df)),
+                     ("Bing",       lambda: W._bing_search(eff_query, lang, 6)),
+                     ("Mojeek",     lambda: W._mojeek_search(eff_query, lang, 6)),
+                     ("Startpage",  lambda: W._startpage_search(eff_query, lang, 6))):
+        t = time.time()
+        try:
+            rr = fn()
+        except Exception as e:
+            rr = None
+        dt = time.time() - t
+        n = len(rr) if rr else 0
+        (ok if n else bad)(f"{name}: {n} نتيجة ({dt:.1f}ث)")
     t = time.time()
     multi = W._multi_engine_search(eff_query, lang, 8, df=ddg_df)
     dt3 = time.time() - t

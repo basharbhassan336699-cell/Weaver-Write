@@ -828,20 +828,128 @@ class WeaverOrchestrator:
                 break
         return results or None
 
+    @staticmethod
+    def _mojeek_search(query: str, lang: str, limit: int, timeout: int = 10):
+        """Serverless Mojeek HTML search. Mojeek has its OWN independent crawler
+        (not Google/Bing), so it genuinely broadens results. Returns
+        {title,url,content} list or None; degrades safely. DNS-safe via
+        _http_get."""
+        import urllib.parse
+        import html as _html
+        import re
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = "https://www.mojeek.com/search?" + urllib.parse.urlencode({"q": q})
+        ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": ua, "Accept": "text/html",
+                  "Accept-Language": ("ar,en;q=0.8" if lang == "ar"
+                                      else "en-US,en;q=0.8")}, timeout)
+        if not raw:
+            return None
+
+        def _clean(s):
+            return _html.unescape(re.sub(r"\s+", " ",
+                                         re.sub(r"<[^>]+>", "", s or ""))).strip()
+        mc = re.search(r'<ul class="results-standard">(.*?)</ul>', raw, re.S)
+        body = mc.group(1) if mc else raw
+        results = []
+        for blk in re.findall(r'<li[^>]*>(.*?)</li>', body, re.S):
+            a = re.search(r'<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+                          blk, re.S)
+            if not a:
+                continue
+            snip = re.search(r'<p class="s"[^>]*>(.*?)</p>', blk, re.S)
+            results.append({"title": _clean(a.group(2)), "url": a.group(1),
+                            "content": _clean(snip.group(1) if snip else "")})
+            if len(results) >= limit:
+                break
+        return results or None
+
+    @staticmethod
+    def _startpage_search(query: str, lang: str, limit: int, timeout: int = 8):
+        """Serverless Startpage HTML search (Google results, privacy proxy).
+        BEST-EFFORT: Startpage has strong anti-bot protection, so it often
+        returns nothing — that's fine, it simply contributes no results.
+        DNS-safe via _http_get; never raises."""
+        import urllib.parse
+        import html as _html
+        import re
+        q = (query or "").strip()
+        if not q:
+            return None
+        url = ("https://www.startpage.com/sp/search?"
+               + urllib.parse.urlencode({"query": q}))
+        ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
+        raw = WeaverOrchestrator._http_get(
+            url, {"User-Agent": ua, "Accept": "text/html",
+                  "Accept-Language": ("ar,en;q=0.8" if lang == "ar"
+                                      else "en-US,en;q=0.8")}, timeout)
+        if not raw:
+            return None
+
+        def _clean(s):
+            return _html.unescape(re.sub(r"\s+", " ",
+                                         re.sub(r"<[^>]+>", "", s or ""))).strip()
+        results = []
+        for m in re.finditer(
+                r'<a[^>]+class="[^"]*result[-_]?(?:link|title)[^"]*"[^>]+'
+                r'href="(https?://[^"]+)"[^>]*>(.*?)</a>', raw, re.S):
+            u = _html.unescape(m.group(1))
+            if "startpage.com" in u:
+                continue
+            results.append({"title": _clean(m.group(2)), "url": u,
+                            "content": ""})
+            if len(results) >= limit:
+                break
+        snips = re.findall(r'<p[^>]+class="[^"]*description[^"]*"[^>]*>(.*?)</p>',
+                           raw, re.S)
+        for i, s in enumerate(snips[:len(results)]):
+            results[i]["content"] = _clean(s)
+        return results or None
+
     @classmethod
     def _multi_engine_search(cls, query, lang, limit, df=None):
         """SearXNG-like breadth WITHOUT a server: query several independent
-        engines (DuckDuckGo + Bing) and merge/dedupe by URL, interleaved so the
-        mix stays diverse. Each engine degrades safely — a dead one just
-        contributes nothing. Returns a merged list or None."""
+        engines IN PARALLEL (DuckDuckGo + Bing + Mojeek + Startpage) and
+        merge/dedupe by URL, interleaved so the mix stays diverse. Parallel, so
+        total time ≈ the slowest engine, not the sum. Each engine degrades
+        safely — a dead/blocked one just contributes nothing. Returns a merged
+        list or None."""
         import itertools
-        lists = []
-        for eng in (lambda: cls._ddg_search(query, lang, limit, df=df),
-                    lambda: cls._bing_search(query, lang, limit)):
-            try:
-                lists.append(eng() or [])
-            except Exception:
-                lists.append([])
+        import concurrent.futures as _cf
+        engines = [
+            ("ddg", lambda: cls._ddg_search(query, lang, limit, df=df)),
+            ("bing", lambda: cls._bing_search(query, lang, limit)),
+            ("mojeek", lambda: cls._mojeek_search(query, lang, limit)),
+            ("startpage", lambda: cls._startpage_search(query, lang, limit)),
+        ]
+        results_by_name = {}
+        ex = _cf.ThreadPoolExecutor(max_workers=len(engines))
+        try:
+            futmap = {ex.submit(fn): name for name, fn in engines}
+            done, _pending = _cf.wait(futmap, timeout=16)
+            for fut, name in futmap.items():
+                if fut in done:
+                    try:
+                        results_by_name[name] = fut.result() or []
+                    except Exception:
+                        results_by_name[name] = []
+                else:
+                    results_by_name[name] = []       # too slow → skip
+        except Exception:
+            # last-resort sequential fallback
+            for name, fn in engines:
+                try:
+                    results_by_name[name] = fn() or []
+                except Exception:
+                    results_by_name[name] = []
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+        lists = [results_by_name.get(name, []) for name, _ in engines]
         merged, seen = [], set()
         for r in itertools.chain.from_iterable(
                 itertools.zip_longest(*lists)) if lists else []:
@@ -958,7 +1066,8 @@ class WeaverOrchestrator:
             web_search (even for non-academic tasks; academic_search stays off).
           * Layer 4 (_layer_4 → _web_search): engine attempt order is
               SearXNG primary → SearXNG fallbacks → multi-engine (DuckDuckGo +
-              Bing, merged) → built-in public SearXNG → packaged tool.
+              Bing + Mojeek + Startpage, queried in parallel and merged) →
+              built-in public SearXNG → packaged tool.
             The top 3 links are then read in full (HTML, text/scanned PDFs via
             OCR, images); the rest are kept as snippets. For recency queries it
             injects the current date into the query, applies a time filter
@@ -999,13 +1108,13 @@ class WeaverOrchestrator:
                     results = r
                     used = "searxng:" + fb
                     break
-        # 3) serverless MULTI-ENGINE (DuckDuckGo + Bing, merged) — SearXNG-like
-        #    breadth with NO server; works on the phone as is.
+        # 3) serverless MULTI-ENGINE (DuckDuckGo + Bing + Mojeek + Startpage,
+        #    queried in parallel and merged) — SearXNG-like breadth, NO server.
         if not results:
             multi = self._multi_engine_search(query, lang, limit, df=ddg_df)
             if multi:
                 results = multi
-                used = "multi-engine(ddg+bing)"
+                used = "multi-engine"
         # 4) built-in public SearXNG fallbacks — AUTOMATIC, zero setup. Reached
         #    only if everything above failed, so DuckDuckGo's fast path is never
         #    slowed. Each dead instance is memoized (skipped next time); short
