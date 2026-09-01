@@ -147,25 +147,33 @@ def main():
         else:
             bad(f"{fb} → لا JSON/محجوب ({dt:.1f}ث)")
 
-    # ── DuckDuckGo ──
-    head("٤) DuckDuckGo (بلا خادم — المحرّك الموثوق)")
+    # ── المحرّك المتعدّد (بلا خادم): DuckDuckGo + Bing مدموجَين ──
+    head("٤) بحث متعدّد المحرّكات (بلا خادم — DuckDuckGo + Bing)")
     t = time.time()
     ddg = W._ddg_search(eff_query, lang, 6, df=ddg_df)
-    dt = time.time() - t
-    if ddg:
-        ok(f"نجح ({dt:.1f}ث): {len(ddg)} نتيجة")
-        for x in ddg[:3]:
-            info(f"   - {(x.get('title') or '')[:60]}  | {x.get('url','')[:45]}")
+    dt1 = time.time() - t
+    (ok if ddg else bad)(f"DuckDuckGo: {len(ddg) if ddg else 0} نتيجة ({dt1:.1f}ث)")
+    t = time.time()
+    bing = W._bing_search(eff_query, lang, 6)
+    dt2 = time.time() - t
+    (ok if bing else bad)(f"Bing: {len(bing) if bing else 0} نتيجة ({dt2:.1f}ث)")
+    t = time.time()
+    multi = W._multi_engine_search(eff_query, lang, 8, df=ddg_df)
+    dt3 = time.time() - t
+    if multi:
+        ok(f"المدموج (بعد إزالة التكرار): {len(multi)} مصدر ({dt3:.1f}ث)")
+        for x in multi[:3]:
+            info(f"   - {(x.get('title') or '')[:58]}  | {x.get('url','')[:42]}")
     else:
-        bad(f"لا نتائج ({dt:.1f}ث) — تحقّق من الإنترنت/DNS (شغّل tools/diagnose.py)")
+        bad(f"لا نتائج ({dt3:.1f}ث) — تحقّق من الإنترنت/DNS (شغّل tools/diagnose.py)")
 
     # ── محاكاة اختيار المحرّك بترتيب النظام ──
     head("٥) أي محرّك سيخدم هذا الطلب فعلياً؟")
     used, results = None, None
     if winner:                                   # SearXNG (أساسي أو env)
         used, results = winner
-    elif ddg:                                    # ثم DuckDuckGo
-        used, results = "duckduckgo", ddg
+    elif multi:                                  # ثم المحرّك المتعدّد
+        used, results = "multi-engine(ddg+bing)", multi
     else:                                        # ثم المضمّنة (جُرّبت أعلاه)
         for fb in _DEFAULT_SEARXNG_FALLBACKS:
             rr = W._searx_query(fb, eff_query, lang, 6, timeout=6, time_range=sx_time)
