@@ -612,8 +612,11 @@ class WeaverOrchestrator:
         if time_range in ("day", "week", "month", "year"):
             params["time_range"] = time_range
         url = instance + "/search?" + urllib.parse.urlencode(params)
+        # a real browser UA: many public SearXNG instances reject bot-like UAs
         raw = WeaverOrchestrator._http_get(
-            url, {"User-Agent": "WeaverWrite/1.0",
+            url, {"User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                 "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                 "Chrome/122.0.0.0 Safari/537.36"),
                   "Accept": "application/json"}, timeout)
         if not raw:
             return None
