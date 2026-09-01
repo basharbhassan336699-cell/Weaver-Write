@@ -50,6 +50,54 @@ def main():
     head("اختبار البحث — Weaver Write")
     info(f"الطلب: {query}   (لغة: {lang})")
 
+    # ── ٠) هل SearXNG موجود/مثبّت/يعمل على هذا الجهاز؟ ──
+    head("٠) وجود SearXNG على جهازك")
+    import shutil
+    import socket
+    import urllib.parse as _up
+    primary0 = os.environ.get("WEAVER_SEARXNG_URL", "").strip() or "http://127.0.0.1:8888"
+    pu = _up.urlparse(primary0)
+    host, port = pu.hostname or "127.0.0.1", pu.port or (443 if pu.scheme == "https" else 80)
+    info(f"العنوان المضبوط: {primary0}")
+
+    # أ) هل مثبّت كبرنامج؟
+    installed = []
+    for c in ("searxng", "searx", "searxng-run"):
+        w = shutil.which(c)
+        if w:
+            installed.append(w)
+    try:
+        import importlib
+        if importlib.util.find_spec("searx") is not None:
+            installed.append("python module: searx")
+    except Exception:
+        pass
+    if installed:
+        ok("SearXNG مثبّت: " + ", ".join(installed))
+    else:
+        info("SearXNG غير مثبّت كبرنامج على الجهاز (طبيعي — ليس جزءاً من Weaver).")
+
+    # ب) هل هناك خادم يستمع على المنفذ؟
+    listening = False
+    try:
+        s = socket.create_connection((host, port), timeout=4)
+        s.close()
+        listening = True
+        ok(f"منفذ {host}:{port} مفتوح — هناك خادم يستمع.")
+    except Exception as e:
+        bad(f"لا خادم يستمع على {host}:{port} ({type(e).__name__}).")
+
+    # ج) هل يردّ فعلاً بـ JSON صحيح؟
+    if listening:
+        probe = W._searx_query(primary0, "test", "en", 2)
+        if probe is not None:
+            ok(f"يردّ بـ JSON صحيح ({len(probe)} نتيجة تجريبية) — SearXNG جاهز فعلاً.")
+        else:
+            bad("الخادم يستمع لكنه لا يعطي format=json (لن يعمل كمصدر بحث).")
+    else:
+        info("لتشغيل SearXNG محلياً لاحقاً: ثبّته واضبط WEAVER_SEARXNG_URL=http://127.0.0.1:8888")
+    info("ملاحظة: لا يلزم SearXNG إطلاقاً — DuckDuckGo (القسم ٤) يعمل بلا خادم.")
+
     # ── نية الأخبار + حقن التاريخ ──
     head("١) كشف نية الأخبار وحقن التاريخ")
     is_rec = W._is_recency_query(query)
