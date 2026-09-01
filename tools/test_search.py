@@ -194,6 +194,33 @@ def main():
     else:
         bad("لا محرّك أرجع نتائج — سيكتب النظام من المعرفة العامة مع تنويه.")
 
+    # ── المصادر الأكاديمية المجانية ──
+    head("٦) مصادر أكاديمية مجانية (بلا مفاتيح)")
+    for name, fn in (("OpenAlex",        lambda: W._openalex_search(query, lang, 5)),
+                     ("Crossref",        lambda: W._crossref_search(query, lang, 5)),
+                     ("arXiv",           lambda: W._arxiv_search(query, lang, 5)),
+                     ("Semantic Scholar", lambda: W._semanticscholar_search(query, lang, 5)),
+                     ("DOAJ",            lambda: W._doaj_search(query, lang, 5)),
+                     ("Europe PMC",      lambda: W._europepmc_search(query, lang, 5))):
+        t = time.time()
+        try:
+            rr = fn()
+        except Exception:
+            rr = None
+        dt = time.time() - t
+        n = len(rr) if rr else 0
+        (ok if n else bad)(f"{name}: {n} بحث ({dt:.1f}ث)")
+    t = time.time()
+    acad = W._scholarly_search(query, lang, 8)
+    dt = time.time() - t
+    if acad:
+        ok(f"المدموج الأكاديمي: {len(acad)} بحث محكّم/مفتوح ({dt:.1f}ث)")
+        for x in acad[:4]:
+            au = ", ".join((x.get("authors") or [])[:2])
+            info(f"   • {(x.get('title') or '')[:55]} — {au} ({x.get('year','')})")
+    else:
+        bad(f"لا نتائج أكاديمية ({dt:.1f}ث) — تحقّق من الإنترنت/VPN.")
+
     head("انتهى — أرسل لي كل ما فوق")
 
 
