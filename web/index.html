@@ -536,6 +536,16 @@
     border-inline-start: 3px solid var(--accent);
     color: var(--text-muted);
   }
+  /* horizontal rule (---): a thin, faint gray divider to separate sections
+     and ease visual crowding */
+  .msg.ai .bubble hr {
+    border: 0;
+    height: 1px;
+    margin: 18px 0;
+    background: var(--border);
+    opacity: 0.55;
+  }
+  .msg.ai .bubble del { opacity: 0.6; }
   /* scroll-to-bottom floating action button */
   .scroll-bottom-fab {
     position: absolute; left: 50%; transform: translateX(-50%);
@@ -3225,12 +3235,24 @@
   // small, safe subset of Markdown is rendered.
   function mdEscapeHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   function mdInline(s){
-    s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+    // Mask code spans and links FIRST so later text substitutions never touch
+    // their contents — e.g. "npm i --save" inside `code` must not turn into an
+    // em dash, and a URL containing "--" must stay intact.
+    const tok=[];
+    const mask=(html)=>{ tok.push(html); return ' '+(tok.length-1)+' '; };
+    s=s.replace(/`([^`]+)`/g,(m,c)=>mask('<code>'+c+'</code>'));
+    s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        (m,t,u)=>mask('<a href="'+u+'" target="_blank" rel="noopener noreferrer">'+t+'</a>'));
+    // Em dash: EXACTLY two consecutive hyphens (not part of "---" or longer,
+    // which stays a horizontal rule / literal) → —
+    s=s.replace(/(^|[^-])--(?!-)/g,'$1—');
+    // Emphasis + strikethrough
     s=s.replace(/\*\*([^*]+?)\*\*/g,'<strong>$1</strong>');
     s=s.replace(/__([^_]+?)__/g,'<strong>$1</strong>');
+    s=s.replace(/~~([^~]+?)~~/g,'<del>$1</del>');
     s=s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g,'$1<em>$2</em>');
-    s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    // Restore masked code/link tokens
+    s=s.replace(/ (\d+) /g,(m,i)=>tok[+i]);
     return s;
   }
   function mdTableCells(line){
@@ -3246,7 +3268,10 @@
     if(src==null) return '';
     const lines=mdEscapeHtml(String(src)).split('\n');
     const out=[]; let para=[], listTag=null;
-    const flushPara=()=>{ if(para.length){ out.push('<p>'+mdInline(para.join(' '))+'</p>'); para=[]; } };
+    // Join wrapped lines of one paragraph with <br> (GFM breaks:true), so a
+    // single newline is preserved as a visible line break — exactly like the
+    // chat renderers users expect. Blank lines still start a new <p>.
+    const flushPara=()=>{ if(para.length){ out.push('<p>'+para.map(mdInline).join('<br>')+'</p>'); para=[]; } };
     const closeList=()=>{ if(listTag){ out.push('</'+listTag+'>'); listTag=null; } };
     for(let idx=0; idx<lines.length; idx++){
       let line=lines[idx].replace(/\s+$/,'');
