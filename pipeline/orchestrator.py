@@ -1859,6 +1859,13 @@ class WeaverOrchestrator:
         task.status = TaskStatus.LAYER_6_5
         mem.set_status(65, "إعادة الصياغة والتنظيف")
 
+        # verbatim YouTube transcript must stay word-for-word → skip humanizing
+        # (transcript-only, and "both" whose transcript half must not change).
+        yt = task.task_card.get("youtube")
+        if yt and yt.get("mode") in ("transcript", "both"):
+            mem.set_status(65, "تفريغ حرفي — تخطّي الأنسنة")
+            return
+
         lang = task.task_card.get("language", "ar")
         fmt = self._primary_format(task.task_card)
         file_type = {"pptx": "pptx", "xlsx": "xlsx", "pdf": "pdf"}.get(fmt, "docx")
