@@ -114,14 +114,18 @@ class YouTubeTool(BaseTool):
                       "(captions may be disabled)",
             )
 
+        # plain text (no timestamps) — always produced, so a caller can build a
+        # clean summary from it even when the displayed transcript is timestamped.
+        plain = " ".join(s["text"].strip()
+                         for s in snippets if s.get("text")).strip()
+        plain = re.sub(r"\s+", " ", plain)
+
         if with_timing:
             lines = [f"{_fmt_ts(s['start'])} {s['text']}".strip()
                      for s in snippets if s.get("text")]
             text = "\n".join(lines)
         else:
-            text = " ".join(s["text"].strip()
-                            for s in snippets if s.get("text")).strip()
-            text = re.sub(r"\s+", " ", text)
+            text = plain
 
         if not text:
             return ToolResult(ok=False, error="transcript was empty")
@@ -130,6 +134,7 @@ class YouTubeTool(BaseTool):
             "video_id": vid,
             "url": url,
             "text": text,
+            "text_plain": plain,
             "with_timing": with_timing,
             "segments": len(snippets),
             "source": "youtube-transcript",

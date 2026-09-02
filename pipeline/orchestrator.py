@@ -474,18 +474,39 @@ class WeaverOrchestrator:
 
     @staticmethod
     def _detect_youtube_intent(text):
-        """From the request, decide what to do with a YouTube link:
-        {"mode": "summary"|"transcript"|"both", "with_timing": bool}.
-        Default (a link with no clear verb) → summary."""
+        """Keyword heuristic for what to do with a YouTube link. Returns
+        {"mode", "with_timing", "explicit"} where `explicit` is True only when a
+        clear transcript/summary signal was found (so the caller can fall back to
+        the model for genuinely ambiguous phrasings). Broad synonym lists so most
+        natural wordings resolve here without an extra model call."""
         t = " " + (text or "").lower() + " "
-        transcript_kw = ("فرّغ", "فرغ", "تفريغ", "النص الكامل", "نص الفيديو",
-                         "اكتب ما قيل", "اكتب النص", "حرفي", "حرفياً",
-                         "انسخ النص", "transcribe", "transcript", "full text",
-                         "verbatim")
-        summary_kw = ("لخّص", "لخص", "ملخص", "اختصر", "أهم النقاط",
-                      "summary", "summarize", "tl;dr")
-        timing_kw = ("مع التوقيت", "الدقائق", "الثواني", "الطوابع الزمنية",
-                     "timestamps", "with timing", "with time")
+        transcript_kw = (
+            "فرّغ", "فرغ", "فرّغلي", "فرغلي", "تفريغ", "التفريغ", "فرِّغ",
+            "النص الكامل", "النص كامل", "كامل النص", "نص الفيديو", "نصّ الفيديو",
+            "النص الحرفي", "النص حرفي", "حرفي", "حرفياً", "حرفيا",
+            "كلمة بكلمة", "كلمة كلمة", "انسخ النص", "انسخ الكلام", "انسخ لي النص",
+            "اكتب ما قيل", "اكتب ما قِيل", "اكتب النص", "اكتب الكلام", "اكتب كل ما",
+            "المحتوى النصي", "سكربت", "السكربت", "سكريبت", "السكريبت",
+            "transcribe", "transcript", "full text", "verbatim",
+            "word for word", "word-for-word", "captions", "subtitles", "script",
+        )
+        summary_kw = (
+            "لخّص", "لخص", "لخّصلي", "لخصلي", "لخّص لي", "لخص لي", "ملخص", "ملخّص",
+            "الملخص", "الملخّص", "اختصر", "اختصار", "باختصار", "أهم النقاط",
+            "اهم النقاط", "أهم ما", "اهم ما", "النقاط الرئيسية", "النقاط المهمة",
+            "الأفكار الرئيسية", "الافكار الرئيسية", "الخلاصة", "خلاصة", "زبدة",
+            "لبّ الموضوع", "لب الموضوع", "عن ماذا يتحدث", "عن ماذا يتكلم",
+            "ماذا يقول", "وش يقول", "ايش يقول", "شنو يقول", "فكرة الفيديو",
+            "summary", "summarize", "summarise", "tl;dr", "tldr", "key points",
+            "main points", "gist", "overview", "in short",
+        )
+        timing_kw = (
+            "مع التوقيت", "مع التوقيتات", "بالتوقيت", "بالتوقيتات", "التوقيت",
+            "توقيت", "الطوابع الزمنية", "طوابع زمنية", "الطابع الزمني",
+            "الدقائق", "الدقيقة", "الثواني", "بالدقائق", "الوقت لكل",
+            "timestamp", "timestamps", "with timing", "with time", "with times",
+            "time codes", "timecodes", "time-stamps",
+        )
         has_t = any(k in t for k in transcript_kw)
         has_s = any(k in t for k in summary_kw)
         with_timing = any(k in t for k in timing_kw)
@@ -495,7 +516,37 @@ class WeaverOrchestrator:
             mode = "transcript"
         else:
             mode = "summary"          # summary-only OR ambiguous default
-        return {"mode": mode, "with_timing": with_timing}
+        return {"mode": mode, "with_timing": with_timing,
+                "explicit": bool(has_t or has_s)}
+
+    def _classify_youtube_intent_llm(self, text):
+        """Ask the model to classify a YouTube request into
+        summary / transcript / timing — understands ANY phrasing. Returns
+        {"mode", "with_timing"} or None when unavailable or unusable. Used only
+        when the keyword heuristic is not decisive, to keep model calls rare."""
+        if not self.llm_fn:
+            return None
+        try:
+            from core.llm import extract_json
+            prompt = (
+                "صنّف طلب المستخدم المتعلّق بفيديو يوتيوب. قد يريد المستخدم: "
+                "ملخصاً (summary)، أو تفريغاً حرفياً كاملاً للنص (transcript)، أو "
+                "كليهما معاً، وقد يريد طوابع زمنية/توقيتاً (timing). افهم أيّ صياغة "
+                "مهما اختلفت اللهجة أو الأسلوب. أعِد JSON فقط بلا أي نص آخر بالشكل:\n"
+                '{"summary": true|false, "transcript": true|false, '
+                '"timing": true|false}\n\nطلب المستخدم:\n' + (text or "")[:800]
+            )
+            data = extract_json(self.llm_fn(prompt, system=self.system_main,
+                                            temperature=0.0)) or {}
+            s = bool(data.get("summary"))
+            tr = bool(data.get("transcript"))
+            tm = bool(data.get("timing"))
+            if not s and not tr:
+                return None
+            mode = "both" if (s and tr) else ("transcript" if tr else "summary")
+            return {"mode": mode, "with_timing": tm}
+        except Exception:
+            return None
 
     async def _layer_3(self, task: Task, mem: TaskMemory):
         """٣: الفهم — تحليل المهمة وبناء بطاقتها ثم توجيه الأدوات/المهارات."""
@@ -526,7 +577,16 @@ class WeaverOrchestrator:
                 _cur = task.description or ""
                 if "[الطلب الحالي]" in _cur:
                     _cur = _cur.rsplit("[الطلب الحالي]", 1)[-1]
-                intent = self._detect_youtube_intent(_cur)
+                kw = self._detect_youtube_intent(_cur)
+                if kw.get("explicit"):
+                    intent = {"mode": kw["mode"],
+                              "with_timing": kw["with_timing"]}
+                else:
+                    # ambiguous wording → let the model understand ANY phrasing;
+                    # fall back to the heuristic (default summary) if unavailable.
+                    intent = (self._classify_youtube_intent_llm(_cur)
+                              or {"mode": kw["mode"],
+                                  "with_timing": kw["with_timing"]})
                 res = await _yt.run({"url": yurl, "lang": "ar",
                                      "with_timing": intent["with_timing"]})
                 if getattr(res, "ok", False) and (res.data or {}).get("text"):
@@ -540,6 +600,8 @@ class WeaverOrchestrator:
                             "url": yurl, "mode": intent["mode"],
                             "with_timing": intent["with_timing"],
                             "transcript": res.data["text"],
+                            "transcript_plain": (res.data or {}).get(
+                                "text_plain", ""),
                         },
                     }
                     task.skills = []
@@ -1768,40 +1830,60 @@ class WeaverOrchestrator:
                 task.draft = "## تعذّر التفريغ\n\n" + body_txt
                 mem.set_status(6, "يوتيوب: تعذّر جلب النص")
                 return
+            # Clean (no-timestamp) text drives the summary, so the summary is real
+            # prose — never a copy of the timestamped transcript.
+            plain = (yt.get("transcript_plain") or "").strip() or transcript
             sections = []
+            # 1) TRANSCRIPT FIRST (when requested)
+            if mode in ("transcript", "both"):
+                sections.append({"heading": "التفريغ النصي للفيديو",
+                                 "body": transcript, "kind": "transcript"})
+            # 2) SUMMARY AFTER the transcript (only when requested)
             if mode in ("summary", "both"):
                 summ = ""
-                if self.llm_fn and transcript:
+                if self.llm_fn and plain:
                     try:
                         summ = self.llm_fn(
-                            "لخّص النص التالي في نقاط واضحة بالعربية، دون مقدمة "
-                            "بحثية أو مباحث أو مراجع:\n\n" + transcript[:12000],
+                            "لخّص النص التالي في نقاط واضحة ومرتّبة بالعربية، دون "
+                            "مقدمة بحثية أو مباحث أو مراجع. اجعل كل نقطة سطراً "
+                            "يبدأ بـ \"- \":\n\n" + plain[:12000],
                             system=self.system_main, temperature=0.4) or ""
                     except Exception as e:
                         mem.set_status(6, f"يوتيوب (تخطّي التلخيص: {e})")
-                if not summ.strip():
-                    summ = (transcript[:1500]
-                            + ("…" if len(transcript) > 1500 else "")
-                            + "\n\n(ملخّص تلقائي غير متاح — عُرض مقتطف من النص.)")
-                sections.append({"heading": "ملخص الفيديو",
-                                 "body": summ.strip()})
-            if mode in ("transcript", "both"):
-                sections.append({"heading": "التفريغ النصي للفيديو",
-                                 "body": transcript})
-            task.sections = sections
-            # Web/terminal reply (task.draft) must be real Markdown so the chat
-            # UI renders it like the exported file. The chat renderer merges
-            # single-newline lines into ONE paragraph, so headings need "##" and
-            # the verbatim timestamped transcript needs each line on its own line
-            # (blank-line separated). task.sections is left untouched → the
-            # exported file keeps its own (already-correct) formatting.
+                summ = summ.strip()
+                if summ:
+                    sections.append({"heading": "الخلاصة", "body": summ,
+                                     "kind": "summary"})
+                elif mode == "summary":
+                    # summary-only and generation failed → give the clean text
+                    # (not the timestamped dump) with an honest note.
+                    note = (plain[:4000] + ("…" if len(plain) > 4000 else ""))
+                    sections.append({
+                        "heading": "نص الفيديو",
+                        "body": "تعذّر توليد ملخّص تلقائي الآن؛ في ما يلي نصّ "
+                                "الفيديو:\n\n" + note, "kind": "summary"})
+                else:
+                    # "both": transcript is already shown → just note the miss.
+                    sections.append({"heading": "الخلاصة",
+                                     "body": "تعذّر توليد الملخّص تلقائياً الآن.",
+                                     "kind": "summary"})
+            task.sections = [{"heading": s["heading"], "body": s["body"]}
+                             for s in sections]
+            # Web/terminal reply (task.draft) as real Markdown so the chat UI
+            # renders it like the exported file: "##" headings, each verbatim
+            # "[MM:SS]" transcript line on its own line, and a faint "---" divider
+            # before the summary that follows the transcript. task.sections keeps
+            # its own (already-correct) formatting for the exported file.
             parts = []
-            for s in sections:
+            for i, s in enumerate(sections):
                 body = s["body"]
-                if s["heading"] == "التفريغ النصي للفيديو":
+                if s.get("kind") == "transcript":
                     body = "\n\n".join(ln.strip() for ln in body.split("\n")
                                        if ln.strip())
-                parts.append(f"## {s['heading']}\n\n{body}")
+                block = f"## {s['heading']}\n\n{body}"
+                if i > 0 and sections[i - 1].get("kind") == "transcript":
+                    block = "---\n\n" + block
+                parts.append(block)
             task.draft = "\n\n".join(parts).strip()
             mem.set_status(6, f"يوتيوب: أُنتج ({mode}، {len(sections)} قسم)")
             return
