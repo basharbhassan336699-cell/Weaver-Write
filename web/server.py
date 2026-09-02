@@ -691,27 +691,39 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
                "x-api-key": key, "anthropic-version": "2023-06-01"}
     req = urllib.request.Request(base + "/chat/completions", data=payload,
                                  headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        try:
-            detail = e.read().decode("utf-8")[:400]
-        except Exception:
-            detail = str(e)
-        return {"error": "http_error", "message": f"{e.code}: {detail}"}
-    except Exception as e:
-        return {"error": "request_failed", "message": str(e)}
 
+    def _extract_reply(data):
+        try:
+            return data["choices"][0]["message"]["content"] or ""
+        except Exception:
+            c = data.get("content")
+            if isinstance(c, list):  # native Anthropic shape, just in case
+                return "".join(p.get("text", "") for p in c
+                               if isinstance(p, dict))
+            if isinstance(c, str):
+                return c
+        return ""
+
+    # Some flash providers return HTTP 200 with EMPTY content under concurrent
+    # load (a silent throttle) instead of a 429. Retry once on an empty reply.
     reply = ""
-    try:
-        reply = data["choices"][0]["message"]["content"]
-    except Exception:
-        c = data.get("content")
-        if isinstance(c, list):  # native Anthropic shape, just in case
-            reply = "".join(p.get("text", "") for p in c if isinstance(p, dict))
-        elif isinstance(c, str):
-            reply = c
+    for attempt in range(2):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8")[:400]
+            except Exception:
+                detail = str(e)
+            return {"error": "http_error", "message": f"{e.code}: {detail}"}
+        except Exception as e:
+            return {"error": "request_failed", "message": str(e)}
+        reply = _extract_reply(data)
+        if reply.strip() or attempt == 1:
+            break
+        time.sleep(1.2)  # brief backoff, then one more try
+
     return {"reply": reply, "provider": s.get("WEAVER_PROVIDER", ""),
             "model": model, "effort": (effort or "medium").lower(),
             "max_tokens": max_tokens}

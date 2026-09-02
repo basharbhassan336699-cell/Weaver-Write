@@ -538,6 +538,32 @@ class WeaverOrchestrator:
                     mem.set_status(3, f"يوتيوب: {intent['mode']} — نص "
                                       f"{len(res.data['text'])} حرف")
                     return
+                # Fetch failed (no captions / throttled / library missing).
+                # If the request is ALSO a research task (has other triggers),
+                # let the normal path proceed. But for a pure YouTube ask, stay
+                # in the youtube lane with an honest message instead of emitting
+                # a spurious research report (the original complaint).
+                _t = (task.description or "").lower()
+                _also_research = any(k in _t for k in _TASK_TRIGGERS)
+                if not _also_research:
+                    _why = getattr(res, "error", "") or "لا يوجد نص/ترجمة متاح"
+                    task.task_card = {
+                        "task_type": "youtube_" + intent["mode"],
+                        "topic": "تفريغ/تلخيص فيديو يوتيوب",
+                        "language": "ar",
+                        "output_format": ["INLINE"],
+                        "sourcing_mode": "none",
+                        "youtube": {
+                            "url": yurl, "mode": intent["mode"],
+                            "with_timing": intent["with_timing"],
+                            "transcript": "",
+                            "error": str(_why),
+                        },
+                    }
+                    task.skills = []
+                    task.tools = []
+                    mem.set_status(3, f"يوتيوب: تعذّر جلب النص ({_why})")
+                    return
                 mem.set_status(3, "يوتيوب: لا نص متاح — المسار العادي")
         except Exception:
             pass
@@ -1714,6 +1740,24 @@ class WeaverOrchestrator:
         if yt:
             transcript = (yt.get("transcript") or "").strip()
             mode = yt.get("mode", "summary")
+            # Fetch failed upstream (no captions / throttled / lib missing):
+            # emit a clear, honest, actionable message — never an empty reply
+            # and never a fake research report.
+            if not transcript and yt.get("error"):
+                why = yt.get("error")
+                msg_txt = (
+                    f"تعذّر جلب نص هذا الفيديو من يوتيوب ({why}).\n\n"
+                    "الأسباب المحتملة:\n"
+                    "• الفيديو لا يحتوي ترجمة/نصاً تلقائياً (captions مُعطّلة).\n"
+                    "• يوتيوب حجب الطلب مؤقتاً بسبب طلبات متتالية — انتظر قليلاً "
+                    "ثم أعد المحاولة، ويُفضّل عدم فتح عدة محادثات في آنٍ واحد.\n"
+                    "• مكتبة youtube-transcript-api غير مثبّتة على الجهاز "
+                    "(pip install youtube-transcript-api)."
+                )
+                task.sections = [{"heading": "تعذّر التفريغ", "body": msg_txt}]
+                task.draft = msg_txt
+                mem.set_status(6, "يوتيوب: تعذّر جلب النص")
+                return
             sections = []
             if mode in ("summary", "both"):
                 summ = ""
@@ -2444,7 +2488,23 @@ def is_document_task(text: str) -> bool:
     """True when the message asks to produce/analyse a document (→ full
     pipeline); False for a quick conversational question (→ direct answer)."""
     t = (text or "").lower()
-    return any(trig in t for trig in _TASK_TRIGGERS)
+    if any(trig in t for trig in _TASK_TRIGGERS):
+        return True
+    # A pasted YouTube link is ALWAYS a pipeline task: it must reach the
+    # dedicated youtube path in _layer_3 (summary / transcript / timing).
+    # Otherwise a "فرّغ ..." request (whose verbs are not task-triggers) falls
+    # to the quick-chat path — which has no transcript tool — and returns wrong
+    # output or an empty provider reply. Lazy + guarded; non-YouTube text is
+    # completely unaffected.
+    try:
+        import re as _re
+        from capabilities.tools import tool_youtube as _yt
+        for _u in _re.findall(r"https?://\S+", text or ""):
+            if _yt.is_youtube_url(_u.rstrip('.,)"\'،؛')):
+                return True
+    except Exception:
+        pass
+    return False
 
 
 # ── synchronous entry point (used by web/server.py and weaver.py) ──
