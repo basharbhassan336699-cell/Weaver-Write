@@ -1745,17 +1745,18 @@ class WeaverOrchestrator:
             # and never a fake research report.
             if not transcript and yt.get("error"):
                 why = yt.get("error")
-                msg_txt = (
+                body_txt = (
                     f"تعذّر جلب نص هذا الفيديو من يوتيوب ({why}).\n\n"
-                    "الأسباب المحتملة:\n"
-                    "• الفيديو لا يحتوي ترجمة/نصاً تلقائياً (captions مُعطّلة).\n"
-                    "• يوتيوب حجب الطلب مؤقتاً بسبب طلبات متتالية — انتظر قليلاً "
+                    "**الأسباب المحتملة:**\n\n"
+                    "- الفيديو لا يحتوي ترجمة/نصاً تلقائياً (captions مُعطّلة).\n"
+                    "- يوتيوب حجب الطلب مؤقتاً بسبب طلبات متتالية — انتظر قليلاً "
                     "ثم أعد المحاولة، ويُفضّل عدم فتح عدة محادثات في آنٍ واحد.\n"
-                    "• مكتبة youtube-transcript-api غير مثبّتة على الجهاز "
+                    "- مكتبة youtube-transcript-api غير مثبّتة على الجهاز "
                     "(pip install youtube-transcript-api)."
                 )
-                task.sections = [{"heading": "تعذّر التفريغ", "body": msg_txt}]
-                task.draft = msg_txt
+                task.sections = [{"heading": "تعذّر التفريغ", "body": body_txt}]
+                # web/terminal reply as real Markdown (heading + body)
+                task.draft = "## تعذّر التفريغ\n\n" + body_txt
                 mem.set_status(6, "يوتيوب: تعذّر جلب النص")
                 return
             sections = []
@@ -1779,8 +1780,20 @@ class WeaverOrchestrator:
                 sections.append({"heading": "التفريغ النصي للفيديو",
                                  "body": transcript})
             task.sections = sections
-            task.draft = "\n\n".join(f"{s['heading']}\n{s['body']}"
-                                     for s in sections).strip()
+            # Web/terminal reply (task.draft) must be real Markdown so the chat
+            # UI renders it like the exported file. The chat renderer merges
+            # single-newline lines into ONE paragraph, so headings need "##" and
+            # the verbatim timestamped transcript needs each line on its own line
+            # (blank-line separated). task.sections is left untouched → the
+            # exported file keeps its own (already-correct) formatting.
+            parts = []
+            for s in sections:
+                body = s["body"]
+                if s["heading"] == "التفريغ النصي للفيديو":
+                    body = "\n\n".join(ln.strip() for ln in body.split("\n")
+                                       if ln.strip())
+                parts.append(f"## {s['heading']}\n\n{body}")
+            task.draft = "\n\n".join(parts).strip()
             mem.set_status(6, f"يوتيوب: أُنتج ({mode}، {len(sections)} قسم)")
             return
 
