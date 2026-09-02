@@ -511,6 +511,9 @@ class WeaverOrchestrator:
         """٤: البحث — أكاديمي (PaperQA) + بحث ويب حي (SearXNG). يُشغَّل ما وُجّهت
         إليه طبقة الفهم فقط، ونتائج الويب تُخزَّن كمصادر للطبقتين ٥ و٦."""
         task.status = TaskStatus.LAYER_4
+        # read any URL pasted in the request as a PRIMARY source (page/YouTube),
+        # regardless of routing — so "لخّص هذا الفيديو <url>" reads the video.
+        await self._read_pasted_urls(task, mem)
         want_academic = ("academic_search" in task.tools
                          or task.task_card.get("needs_academic_search"))
         want_web = "web_search" in task.tools
@@ -1254,7 +1257,12 @@ class WeaverOrchestrator:
         finally:
             ex.shutdown(wait=False, cancel_futures=True)
         lists = [res.get(n, []) for n, _ in engines]
-        merged, seen = [], set()
+        # relevance terms from the query (drop off-topic noise like random
+        # physics papers arXiv returns for common words). Arabic tokens ≥3,
+        # Latin tokens ≥4; ignore a short stop-list.
+        terms = cls._query_terms(query)
+        cap = max(int(limit) or 8, 8)
+        merged, backup, seen = [], [], set()
         for r in itertools.chain.from_iterable(itertools.zip_longest(*lists)):
             if not r:
                 continue
@@ -1263,10 +1271,33 @@ class WeaverOrchestrator:
             if not key or key in seen or not (r.get("title") or "").strip():
                 continue
             seen.add(key)
-            merged.append(r)
-            if len(merged) >= max(int(limit) or 8, 8):
+            blob = (str(r.get("title", "")) + " "
+                    + str(r.get("content", ""))).lower()
+            if not terms or any(t in blob for t in terms):
+                merged.append(r)
+            else:
+                backup.append(r)          # off-topic → only if nothing relevant
+            if len(merged) >= cap:
                 break
-        return merged or None
+        final = merged if merged else backup
+        return final[:cap] or None
+
+    @staticmethod
+    def _query_terms(query):
+        """Meaningful lowercased query terms for relevance filtering: Arabic
+        tokens ≥3 chars, Latin tokens ≥4, minus a tiny stop-list."""
+        import re
+        stop = {"عن", "في", "من", "على", "the", "and", "for", "with", "about",
+                "أثر", "تأثير", "دراسة", "بحث", "تقرير", "اكتب", "حول"}
+        out = set()
+        for tok in re.split(r"[\s,،.:؛()\[\]\"']+", (query or "").lower()):
+            tok = tok.strip()
+            if not tok or tok in stop:
+                continue
+            is_ar = any("؀" <= c <= "ۿ" for c in tok)
+            if (is_ar and len(tok) >= 3) or (not is_ar and len(tok) >= 4):
+                out.add(tok)
+        return out
 
     async def _academic_search(self, task: Task, mem: TaskMemory):
         """Layer 4 academic path: gather peer-reviewed / open-access sources
@@ -1304,6 +1335,39 @@ class WeaverOrchestrator:
                 source_key=(url or doi or title))
         card["academic_reads"] = len(results)
         mem.set_status(4, f"بحث أكاديمي: {len(results)} مصدر محكّم")
+
+    _URL_RE = None
+
+    async def _read_pasted_urls(self, task: Task, mem: TaskMemory):
+        """Read any URL the user pasted in the request (a web page or a YouTube
+        video) as a PRIMARY source, via _extract_full (which routes YouTube to
+        tool_youtube). Adds them to the task's sources + RAG memory. Safe: no
+        URLs, or a failed read, just adds nothing."""
+        import re
+        if self._URL_RE is None:
+            type(self)._URL_RE = re.compile(r'https?://[^\s)>\]\"\'،]+')
+        urls = self._URL_RE.findall(task.description or "")
+        if not urls:
+            return
+        card = task.task_card
+        self._yt_lang = "ar" if card.get("language", "ar") == "ar" else "en"
+        srcs = card.setdefault("sources", [])
+        read = 0
+        for u in urls[:3]:
+            u = u.rstrip('.,)"،')
+            try:
+                txt = await self._extract_full(u)
+            except Exception:
+                txt = None
+            if txt and txt.strip():
+                srcs.append({"key": u[:60], "url": u, "title": u,
+                             "content": txt, "full": True, "pasted": True})
+                mem.add_reference(f"[رابط مُدرَج] {u} — {txt[:300]}",
+                                  source_key=u)
+                read += 1
+        if read:
+            card["pasted_reads"] = read
+            mem.set_status(4, f"قراءة {read} رابط مُدرَج في الطلب")
 
     async def _tool_web_search(self, query: str, lang: str, limit: int):
         """Fallback: the packaged web_search tool. Returns a results list
@@ -2315,6 +2379,55 @@ def task_priority(text: str) -> int:
 def pipeline_slots():
     """Free parallel slots right now (for diagnostics)."""
     return _PIPELINE_GATE.free_slots()
+
+
+def quick_live_context(msg, lang="ar", max_chars=6000):
+    """Live context for the QUICK/chat path (used by web + terminal): read any
+    URL pasted in the message (a page or a YouTube video) and — for news/recency
+    questions — run a quick multi-engine web search. Returns a context string to
+    feed the model so it answers from current info instead of refusing, or "".
+    Fully synchronous and degrading (returns "" on any failure)."""
+    import asyncio
+    import re
+    parts = []
+    try:
+        urls = re.findall(r'https?://[^\s)>\]\"\'،]+', msg or "")
+    except Exception:
+        urls = []
+    orch = object.__new__(WeaverOrchestrator)   # bare: only _extract_full used
+    try:
+        orch._yt_lang = lang
+    except Exception:
+        pass
+    # 1) pasted URLs → read them (page / YouTube transcript)
+    for u in (urls or [])[:2]:
+        u = u.rstrip('.,)"،')
+        try:
+            txt = asyncio.run(orch._extract_full(u))
+        except Exception:
+            txt = None
+        if txt and txt.strip():
+            parts.append(f"[محتوى الرابط: {u}]\n{txt.strip()[:4000]}")
+    # 2) news/recency (only when no URL was pasted) → quick multi-engine search
+    if not urls and WeaverOrchestrator._is_recency_query(msg):
+        try:
+            q = WeaverOrchestrator._augment_query_with_date(msg, lang)
+            results = WeaverOrchestrator._multi_engine_search(
+                q, lang, 6, df="w") or []
+            results = WeaverOrchestrator._sort_results_by_recency(results)
+            lines = []
+            for r in results[:6]:
+                title = (r.get("title") or "").strip()
+                if not title:
+                    continue
+                snip = (r.get("content") or "").strip()[:180]
+                lines.append(f"- {title} — {snip} ({r.get('url','')})")
+            if lines:
+                parts.append("[نتائج بحث حيّة، الأحدث أولاً]\n" + "\n".join(lines))
+        except Exception:
+            pass
+    ctx = "\n\n".join(parts).strip()
+    return ctx[:max_chars]
 
 
 def run_pipeline_sync(description: str, input_files: list = None,

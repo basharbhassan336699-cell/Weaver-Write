@@ -790,7 +790,14 @@ def cmd_ask(args):
     if not _is_task:
         try:
             chat = _load_chat()
-            r = chat(q, timeout=120)
+            # news/recency question or a pasted link → gather live context first
+            try:
+                from pipeline.orchestrator import quick_live_context
+                _isar = any("؀" <= c <= "ۿ" for c in q)
+                _ctx = quick_live_context(q, "ar" if _isar else "en")
+            except Exception:
+                _ctx = ""
+            r = chat(q, timeout=120, context=_ctx)
         except Exception as e:
             print(f"Could not load chat: {e}")
             return

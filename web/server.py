@@ -640,7 +640,8 @@ EFFORT = {
 }
 
 
-def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium") -> dict:
+def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
+          context: str = None) -> dict:
     """Send a message to the configured provider using the saved key and return
     the assistant reply. OpenAI-compatible /chat/completions (works for the
     registry providers, incl. Anthropic's and Google's compatible endpoints).
@@ -672,6 +673,15 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     if not (history and history and history[0].get("role") == "system"):
         msgs.append({"role": "system", "content": lvl["system"]})
     msgs.extend(list(history or []))
+    # live context (news search results / pasted-URL content) → answer from it
+    if context:
+        msgs.append({"role": "system", "content": (
+            "لديك أدناه مصادر حيّة حديثة من الإنترنت. اعتمد عليها للإجابة عن سؤال "
+            "المستخدم بمعلومات محدّثة، ولا تقل إنك لا تملك وصولاً للإنترنت أو أنّ "
+            "معرفتك قديمة؛ واذكر باختصار أنّ المعلومات من بحث حيّ.\n"
+            "You have live, up-to-date sources below. Use them to answer with "
+            "current information; do NOT claim you lack internet access or that "
+            "your knowledge is outdated.\n\n" + context)})
     msgs.append({"role": "user", "content": message})
     payload = json.dumps({"model": model, "messages": msgs,
                           "max_tokens": max_tokens,
@@ -1082,11 +1092,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _is_task = True
 
             isar = any("؀" <= c <= "ۿ" for c in msg)
-            # quick question → answer directly (one step)
+            # quick question → answer directly (one step). For news/recency
+            # questions or a pasted link, gather live context first so the model
+            # answers from current sources instead of refusing.
             if not _is_task:
-                sse({"t": "step", "label": "التفكير" if isar else "Thinking"})
+                ctx = ""
+                try:
+                    from pipeline.orchestrator import quick_live_context
+                    ctx = quick_live_context(msg, "ar" if isar else "en")
+                except Exception:
+                    ctx = ""
+                sse({"t": "step", "label": (
+                    ("بحث حيّ" if isar else "Live search") if ctx
+                    else ("التفكير" if isar else "Thinking"))})
                 r = _chat(msg, body.get("history"),
-                          effort=body.get("effort", "medium"))
+                          effort=body.get("effort", "medium"), context=ctx)
                 if r.get("error"):
                     if r.get("error") == "no_key":
                         sse({"t": "reply", "reply": (
@@ -1154,8 +1174,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 _is_task = True
             if not _is_task:
+                isar = any("؀" <= c <= "ۿ" for c in msg)
+                try:
+                    from pipeline.orchestrator import quick_live_context
+                    ctx = quick_live_context(msg, "ar" if isar else "en")
+                except Exception:
+                    ctx = ""
                 self._json(_chat(msg, body.get("history"),
-                                 effort=body.get("effort", "medium")))
+                                 effort=body.get("effort", "medium"),
+                                 context=ctx))
                 return
             # FULL pipeline (WeaverOrchestrator): understand → route → research
             # → credibility → write → clean → verify → export (writes outputs/).
