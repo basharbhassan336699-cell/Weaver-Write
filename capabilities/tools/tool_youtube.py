@@ -146,16 +146,38 @@ class YouTubeTool(BaseTool):
         except Exception:
             return []
 
+        import time as _time
+
+        def _transient(exc) -> bool:
+            """True only for a temporary throttle/network error worth a retry —
+            NOT for a video that simply has no captions (permanent)."""
+            name = type(exc).__name__.lower()
+            return ("toomanyrequests" in name or "ratelimit" in name
+                    or "timeout" in name or "connection" in name
+                    or "temporarily" in name)
+
         # modern API: YouTubeTranscriptApi().fetch(id, languages=[...])
         try:
             api = YouTubeTranscriptApi()
             if hasattr(api, "fetch"):
-                try:
-                    fetched = api.fetch(vid, languages=prefs)
-                except Exception:
-                    fetched = api.fetch(vid)  # any available language
+                fetched = None
+                for attempt in range(3):
+                    try:
+                        fetched = api.fetch(vid, languages=prefs)
+                        break
+                    except Exception as e1:
+                        try:
+                            fetched = api.fetch(vid)  # any available language
+                            break
+                        except Exception as e2:
+                            # retry ONLY a transient throttle (concurrent chats
+                            # hitting YouTube); a no-captions error breaks now.
+                            if _transient(e2) and attempt < 2:
+                                _time.sleep(1.5 * (attempt + 1))
+                                continue
+                            raise
                 out = []
-                for sn in fetched:
+                for sn in (fetched or []):
                     # FetchedTranscriptSnippet has .text/.start/.duration
                     out.append({
                         "text": getattr(sn, "text", "") or "",
