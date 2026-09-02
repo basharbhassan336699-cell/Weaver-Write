@@ -640,6 +640,29 @@ EFFORT = {
 }
 
 
+def _sources_md(sources, isar: bool) -> str:
+    """Build a numbered Markdown 'Sources' block from an ordered list of
+    {title,url}. Titles link to the article (clickable in the UI); order matches
+    the live-search order. Deduplicated; returns "" when there is nothing."""
+    if not sources:
+        return ""
+    head = "المصادر" if isar else "Sources"
+    lines, seen, n = [], set(), 1
+    for s in sources:
+        u = (s.get("url") or "").strip()
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        t = (s.get("title") or u).strip().replace("]", "〕").replace("[", "〔")
+        lines.append(f"{n}. [{t}]({u})")
+        n += 1
+        if n > 8:
+            break
+    if not lines:
+        return ""
+    return "\n\n---\n\n**" + head + ":**\n\n" + "\n".join(lines)
+
+
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
           context: str = None) -> dict:
     """Send a message to the configured provider using the saved key and return
@@ -1109,11 +1132,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # answers from current sources instead of refusing.
             if not _is_task:
                 ctx = ""
+                srcs = []
                 try:
-                    from pipeline.orchestrator import quick_live_context
-                    ctx = quick_live_context(msg, "ar" if isar else "en")
+                    from pipeline.orchestrator import quick_live_context_ex
+                    ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
                 except Exception:
-                    ctx = ""
+                    ctx, srcs = "", []
                 sse({"t": "step", "label": (
                     ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
@@ -1129,7 +1153,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         sse({"t": "reply", "reply": ("خطأ: " if isar else "Error: ")
                              + (r.get("message") or r.get("error"))})
                 else:
-                    sse({"t": "reply", "reply": r.get("reply") or ""})
+                    reply = r.get("reply") or ""
+                    if reply.strip():
+                        reply += _sources_md(srcs, isar)
+                    sse({"t": "reply", "reply": reply})
                 sse({"t": "done"})
                 return
 
@@ -1187,14 +1214,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _is_task = True
             if not _is_task:
                 isar = any("؀" <= c <= "ۿ" for c in msg)
+                ctx, srcs = "", []
                 try:
-                    from pipeline.orchestrator import quick_live_context
-                    ctx = quick_live_context(msg, "ar" if isar else "en")
+                    from pipeline.orchestrator import quick_live_context_ex
+                    ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
                 except Exception:
-                    ctx = ""
-                self._json(_chat(msg, body.get("history"),
-                                 effort=body.get("effort", "medium"),
-                                 context=ctx))
+                    ctx, srcs = "", []
+                r = _chat(msg, body.get("history"),
+                          effort=body.get("effort", "medium"), context=ctx)
+                if not r.get("error") and (r.get("reply") or "").strip():
+                    r["reply"] = r["reply"] + _sources_md(srcs, isar)
+                self._json(r)
                 return
             # FULL pipeline (WeaverOrchestrator): understand → route → research
             # → credibility → write → clean → verify → export (writes outputs/).

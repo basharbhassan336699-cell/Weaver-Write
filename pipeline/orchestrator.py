@@ -2679,15 +2679,18 @@ def pipeline_slots():
     return _PIPELINE_GATE.free_slots()
 
 
-def quick_live_context(msg, lang="ar", max_chars=6000):
+def quick_live_context_ex(msg, lang="ar", max_chars=6000):
     """Live context for the QUICK/chat path (used by web + terminal): read any
     URL pasted in the message (a page or a YouTube video) and — for news/recency
-    questions — run a quick multi-engine web search. Returns a context string to
-    feed the model so it answers from current info instead of refusing, or "".
-    Fully synchronous and degrading (returns "" on any failure)."""
+    questions — run a quick multi-engine web search. Returns a tuple
+    (context_str, sources) where `sources` is an ORDERED list of {"title","url"}
+    (newest first) gathered from the SAME search, so the caller can list clickable
+    source links under a news answer without searching again. Fully synchronous
+    and degrading (returns ("", []) on any failure)."""
     import asyncio
     import re
     parts = []
+    sources = []
     try:
         urls = re.findall(r'https?://[^\s)>\]\"\'،]+', msg or "")
     except Exception:
@@ -2718,14 +2721,25 @@ def quick_live_context(msg, lang="ar", max_chars=6000):
                 title = (r.get("title") or "").strip()
                 if not title:
                     continue
+                url = (r.get("url") or "").strip()
                 snip = (r.get("content") or "").strip()[:180]
-                lines.append(f"- {title} — {snip} ({r.get('url','')})")
+                lines.append(f"- {title} — {snip} ({url})")
+                if url:
+                    sources.append({"title": title, "url": url})
             if lines:
                 parts.append("[نتائج بحث حيّة، الأحدث أولاً]\n" + "\n".join(lines))
         except Exception:
             pass
     ctx = "\n\n".join(parts).strip()
-    return ctx[:max_chars]
+    return ctx[:max_chars], sources
+
+
+def quick_live_context(msg, lang="ar", max_chars=6000):
+    """Backward-compatible wrapper: returns only the context string."""
+    try:
+        return quick_live_context_ex(msg, lang, max_chars)[0]
+    except Exception:
+        return ""
 
 
 def run_pipeline_sync(description: str, input_files: list = None,
