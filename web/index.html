@@ -491,6 +491,11 @@
   .msg.ai .bubble strong { font-weight: 700; }
   .msg.ai .bubble em { font-style: italic; }
   .msg.ai .bubble a { color: var(--accent-blue); text-decoration: underline; }
+  /* clickable links everywhere (AI replies + user messages); long URLs wrap
+     instead of overflowing, and each link opens its site on tap / copies on
+     long-press natively */
+  .msg .bubble a { overflow-wrap: anywhere; word-break: break-word; }
+  .msg.user .bubble a { color: var(--accent-blue); text-decoration: underline; }
   .msg.ai .bubble code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 0.9em; background: var(--surface-hover);
@@ -3239,10 +3244,19 @@
     // their contents — e.g. "npm i --save" inside `code` must not turn into an
     // em dash, and a URL containing "--" must stay intact.
     const tok=[];
-    const mask=(html)=>{ tok.push(html); return ' '+(tok.length-1)+' '; };
+    const mask=(html)=>{ tok.push(html); return '\uE000'+(tok.length-1)+'\uE000'; };
     s=s.replace(/`([^`]+)`/g,(m,c)=>mask('<code>'+c+'</code>'));
     s=s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
         (m,t,u)=>mask('<a href="'+u+'" target="_blank" rel="noopener noreferrer">'+t+'</a>'));
+    // Autolink BARE urls so every link on the UI is clickable (news sources and
+    // anywhere else), then mask them too so later substitutions can't corrupt
+    // the href. Runs after markdown-link + code masking, so those are untouched.
+    s=s.replace(/https?:\/\/[^\s<>"'`\uE000]+/g,function(m){
+      var url=m, tail='', mt=url.match(/[).,،؛!?»”\]]+$/);
+      if(mt){ tail=mt[0]; url=url.slice(0,-tail.length); }
+      if(!url) return m;
+      return mask('<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+url+'</a>')+tail;
+    });
     // Em dash: EXACTLY two consecutive hyphens (not part of "---" or longer,
     // which stays a horizontal rule / literal) → —
     s=s.replace(/(^|[^-])--(?!-)/g,'$1—');
@@ -3252,7 +3266,7 @@
     s=s.replace(/~~([^~]+?)~~/g,'<del>$1</del>');
     s=s.replace(/(^|[^*])\*([^*\n]+?)\*(?!\*)/g,'$1<em>$2</em>');
     // Restore masked code/link tokens
-    s=s.replace(/ (\d+) /g,(m,i)=>tok[+i]);
+    s=s.replace(/\uE000(\d+)\uE000/g,(m,i)=>tok[+i]);
     return s;
   }
   function mdTableCells(line){
@@ -3355,7 +3369,16 @@
 
   function makeUserMsg(text) {
     const d = document.createElement('div'); d.className = 'msg user';
-    d.innerHTML = '<div class="bubble"></div>'; d.querySelector('.bubble').textContent = text; return d;
+    d.innerHTML = '<div class="bubble"></div>';
+    // escape first (XSS-safe), then make any URL the user typed clickable too
+    const esc = mdEscapeHtml(text==null?'':String(text));
+    d.querySelector('.bubble').innerHTML = esc.replace(/https?:\/\/[^\s<>"'`]+/g,function(m){
+      var url=m, tail='', mt=url.match(/[).,\u060c\u061b!?\u00bb\u201d\]]+$/);
+      if(mt){ tail=mt[0]; url=url.slice(0,-tail.length); }
+      if(!url) return m;
+      return '<a href="'+url+'" target="_blank" rel="noopener noreferrer">'+url+'</a>'+tail;
+    });
+    return d;
   }
   function makeAiMsg(text) {
     const d = document.createElement('div'); d.className = 'msg ai';
