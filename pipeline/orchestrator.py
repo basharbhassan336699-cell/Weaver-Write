@@ -472,10 +472,75 @@ class WeaverOrchestrator:
         task.tools = list(dict.fromkeys(task.tools))   # dedupe, keep order
         task.skills = list(dict.fromkeys(task.skills))
 
+    @staticmethod
+    def _detect_youtube_intent(text):
+        """From the request, decide what to do with a YouTube link:
+        {"mode": "summary"|"transcript"|"both", "with_timing": bool}.
+        Default (a link with no clear verb) → summary."""
+        t = " " + (text or "").lower() + " "
+        transcript_kw = ("فرّغ", "فرغ", "تفريغ", "النص الكامل", "نص الفيديو",
+                         "اكتب ما قيل", "اكتب النص", "حرفي", "حرفياً",
+                         "انسخ النص", "transcribe", "transcript", "full text",
+                         "verbatim")
+        summary_kw = ("لخّص", "لخص", "ملخص", "اختصر", "أهم النقاط",
+                      "summary", "summarize", "tl;dr")
+        timing_kw = ("مع التوقيت", "الدقائق", "الثواني", "الطوابع الزمنية",
+                     "timestamps", "with timing", "with time")
+        has_t = any(k in t for k in transcript_kw)
+        has_s = any(k in t for k in summary_kw)
+        with_timing = any(k in t for k in timing_kw)
+        if has_t and has_s:
+            mode = "both"
+        elif has_t:
+            mode = "transcript"
+        else:
+            mode = "summary"          # summary-only OR ambiguous default
+        return {"mode": mode, "with_timing": with_timing}
+
     async def _layer_3(self, task: Task, mem: TaskMemory):
         """٣: الفهم — تحليل المهمة وبناء بطاقتها ثم توجيه الأدوات/المهارات."""
         task.status = TaskStatus.LAYER_3
         mem.set_status(3, "تحليل المهمة")
+
+        # ── YouTube link → dedicated transcript path, BEFORE the model. Builds a
+        #    minimal card and returns early, so the video is summarized/
+        #    transcribed instead of being treated as a research task (which
+        #    produced empty مباحث/مطالب). Fully guarded: any failure, or a link
+        #    with no captions, continues the normal path unchanged.
+        try:
+            import re as _re
+            from capabilities.tools import tool_youtube as _yt
+            yurl = None
+            for _u in _re.findall(r"https?://\S+", task.description or ""):
+                _u = _u.rstrip('.,)"\'،؛')
+                if _yt.is_youtube_url(_u):
+                    yurl = _u
+                    break
+            if yurl:
+                intent = self._detect_youtube_intent(task.description)
+                res = await _yt.run({"url": yurl, "lang": "ar",
+                                     "with_timing": intent["with_timing"]})
+                if getattr(res, "ok", False) and (res.data or {}).get("text"):
+                    task.task_card = {
+                        "task_type": "youtube_" + intent["mode"],
+                        "topic": "تلخيص/تفريغ فيديو يوتيوب",
+                        "language": "ar",
+                        "output_format": ["INLINE"],
+                        "sourcing_mode": "none",
+                        "youtube": {
+                            "url": yurl, "mode": intent["mode"],
+                            "with_timing": intent["with_timing"],
+                            "transcript": res.data["text"],
+                        },
+                    }
+                    task.skills = []
+                    task.tools = []
+                    mem.set_status(3, f"يوتيوب: {intent['mode']} — نص "
+                                      f"{len(res.data['text'])} حرف")
+                    return
+                mem.set_status(3, "يوتيوب: لا نص متاح — المسار العادي")
+        except Exception:
+            pass
 
         if self.llm_fn:
             from pipeline.prompts import PROMPT_LAYER_3_UNDERSTAND
@@ -1355,6 +1420,9 @@ class WeaverOrchestrator:
         tool_youtube). Adds them to the task's sources + RAG memory. Safe: no
         URLs, or a failed read, just adds nothing."""
         import re
+        # the dedicated YouTube path (Layer 3) already handled it — don't re-read
+        if task.task_card.get("youtube"):
+            return
         if self._URL_RE is None:
             type(self)._URL_RE = re.compile(r'https?://[^\s)>\]\"\'،]+')
         urls = self._URL_RE.findall(task.description or "")
@@ -1639,6 +1707,38 @@ class WeaverOrchestrator:
         mem.set_status(6, "صياغة البحث")
         card = task.task_card
         lang = card.get("language", "ar")
+
+        # ── YouTube path: produce the summary / transcript directly, with NO
+        #    research structure or methodology, then return early.
+        yt = card.get("youtube")
+        if yt:
+            transcript = (yt.get("transcript") or "").strip()
+            mode = yt.get("mode", "summary")
+            sections = []
+            if mode in ("summary", "both"):
+                summ = ""
+                if self.llm_fn and transcript:
+                    try:
+                        summ = self.llm_fn(
+                            "لخّص النص التالي في نقاط واضحة بالعربية، دون مقدمة "
+                            "بحثية أو مباحث أو مراجع:\n\n" + transcript[:12000],
+                            system=self.system_main, temperature=0.4) or ""
+                    except Exception as e:
+                        mem.set_status(6, f"يوتيوب (تخطّي التلخيص: {e})")
+                if not summ.strip():
+                    summ = (transcript[:1500]
+                            + ("…" if len(transcript) > 1500 else "")
+                            + "\n\n(ملخّص تلقائي غير متاح — عُرض مقتطف من النص.)")
+                sections.append({"heading": "ملخص الفيديو",
+                                 "body": summ.strip()})
+            if mode in ("transcript", "both"):
+                sections.append({"heading": "التفريغ النصي للفيديو",
+                                 "body": transcript})
+            task.sections = sections
+            task.draft = "\n\n".join(f"{s['heading']}\n{s['body']}"
+                                     for s in sections).strip()
+            mem.set_status(6, f"يوتيوب: أُنتج ({mode}، {len(sections)} قسم)")
+            return
 
         # techniques for the model strength — shown in the tool-call/thinking UI,
         # never written into the output document. We already write per-section.
