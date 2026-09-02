@@ -514,11 +514,22 @@ class WeaverOrchestrator:
         # read any URL pasted in the request as a PRIMARY source (page/YouTube),
         # regardless of routing — so "لخّص هذا الفيديو <url>" reads the video.
         await self._read_pasted_urls(task, mem)
-        want_academic = ("academic_search" in task.tools
-                         or task.task_card.get("needs_academic_search"))
-        want_web = "web_search" in task.tools
+        # when the user pasted a link, FOCUS on it: a link summary is never an
+        # academic-paper task (skip academic), and if we actually read the link
+        # we skip the generic topic web search too (it only adds off-topic
+        # "how to summarize videos" noise). If the link couldn't be read, the
+        # web search stays as a fallback.
+        pasted_present = bool(task.task_card.get("pasted_present"))
+        pasted_ok = bool(task.task_card.get("pasted_reads"))
+        want_academic = (("academic_search" in task.tools
+                          or task.task_card.get("needs_academic_search"))
+                         and not pasted_present)
+        want_web = ("web_search" in task.tools) and not pasted_ok
         if not want_academic and not want_web:
-            mem.set_status(4, "لا يلزم بحث — تخطّي")
+            if pasted_ok:
+                mem.set_status(4, "الاعتماد على الرابط المُدرَج — تخطّي البحث العام")
+            else:
+                mem.set_status(4, "لا يلزم بحث — تخطّي")
             return
         if want_academic:
             from pipeline.layers.layer_4_research import run as _layer4_run
@@ -1347,9 +1358,10 @@ class WeaverOrchestrator:
         if self._URL_RE is None:
             type(self)._URL_RE = re.compile(r'https?://[^\s)>\]\"\'،]+')
         urls = self._URL_RE.findall(task.description or "")
+        card = task.task_card
+        card["pasted_present"] = bool(urls)
         if not urls:
             return
-        card = task.task_card
         self._yt_lang = "ar" if card.get("language", "ar") == "ar" else "en"
         srcs = card.setdefault("sources", [])
         read = 0
@@ -1360,10 +1372,14 @@ class WeaverOrchestrator:
             except Exception:
                 txt = None
             if txt and txt.strip():
+                full = txt.strip()
                 srcs.append({"key": u[:60], "url": u, "title": u,
-                             "content": txt, "full": True, "pasted": True})
-                mem.add_reference(f"[رابط مُدرَج] {u} — {txt[:300]}",
-                                  source_key=u)
+                             "content": full, "full": True, "pasted": True})
+                # feed the FULL content into RAG in chunks (not a 300-char
+                # snippet) so the writer can actually summarize the page/video.
+                for i in range(0, min(len(full), 9000), 1500):
+                    mem.add_reference(f"[رابط مُدرَج {u}] {full[i:i+1500]}",
+                                      source_key=u)
                 read += 1
         if read:
             card["pasted_reads"] = read
@@ -2040,6 +2056,17 @@ class WeaverOrchestrator:
                     if lang == "ar" else
                     "External sources could not be retrieved, so the content was "
                     "written from general knowledge.")
+        # a link was pasted but couldn't be read (e.g. missing library / no
+        # captions) — say so honestly instead of silently topic-searching.
+        if card.get("pasted_present") and not card.get("pasted_reads"):
+            extra = ("تعذّرت قراءة الرابط المُدرَج (قد يلزم تثبيت "
+                     "youtube-transcript-api أو أنّ المحتوى غير متاح)، فاعتمد "
+                     "المحتوى على بحث عام حول الموضوع."
+                     if lang == "ar" else
+                     "The pasted link could not be read (a library may be "
+                     "missing or the content is unavailable), so this is based "
+                     "on a general search of the topic.")
+            note = (note + " " + extra) if note else extra
         if not note:
             return
         head = "ملاحظة" if lang == "ar" else "Note"
