@@ -517,7 +517,16 @@ class WeaverOrchestrator:
                     yurl = _u
                     break
             if yurl:
-                intent = self._detect_youtube_intent(task.description)
+                # Detect intent from the CURRENT request only, never the threaded
+                # conversation history. The web/terminal prefixes prior turns as
+                # "[سياق المحادثة السابقة] … [الطلب الحالي] …"; reading the whole
+                # thing let a previous "لخّص" turn turn a plain "فرّغ مع التوقيت"
+                # into summary+transcript ("both"). Split on the current-request
+                # marker and use only what follows it.
+                _cur = task.description or ""
+                if "[الطلب الحالي]" in _cur:
+                    _cur = _cur.rsplit("[الطلب الحالي]", 1)[-1]
+                intent = self._detect_youtube_intent(_cur)
                 res = await _yt.run({"url": yurl, "lang": "ar",
                                      "with_timing": intent["with_timing"]})
                 if getattr(res, "ok", False) and (res.data or {}).get("text"):
@@ -543,7 +552,7 @@ class WeaverOrchestrator:
                 # let the normal path proceed. But for a pure YouTube ask, stay
                 # in the youtube lane with an honest message instead of emitting
                 # a spurious research report (the original complaint).
-                _t = (task.description or "").lower()
+                _t = _cur.lower()
                 _also_research = any(k in _t for k in _TASK_TRIGGERS)
                 if not _also_research:
                     _why = getattr(res, "error", "") or "لا يوجد نص/ترجمة متاح"
