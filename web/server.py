@@ -451,6 +451,40 @@ _ATTACH_TEXT_EXT = {
 _ATTACH_MAX_CHARS = 20000      # per file, fed into the model
 
 
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
+
+
+def _ocr_file_bytes(data: bytes, name: str) -> str:
+    """Extract text from an image (or scanned file) via the system OCR
+    (core/ocr → UniDoc → Tesseract, Arabic+English). Returns '' when OCR isn't
+    available on the device (no tesseract binary), so the caller adds an honest
+    note. Never raises."""
+    import tempfile
+    try:
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for _p in (_root, os.path.join(_root, "core")):
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        from core.ocr import WeaverOCR
+    except Exception:
+        return ""
+    ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ".png"
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
+            tmp.write(data)
+            path = tmp.name
+        return (WeaverOCR().read(path) or "").strip()
+    except Exception:
+        return ""
+    finally:
+        if path:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 def _extract_bytes(data: bytes, name: str) -> str:
     """Best-effort text extraction from raw file bytes. Degrades to '' when a
     format needs a library that isn't installed (honest, never crashes)."""
@@ -462,7 +496,11 @@ def _extract_bytes(data: bytes, name: str) -> str:
             except Exception:
                 continue
         return ""
+    if ext in _IMAGE_EXTS:
+        # image → OCR (reads text inside the image; needs tesseract on device)
+        return _ocr_file_bytes(data, name)
     if ext == ".pdf":
+        text = ""
         try:
             import io
             import pdfplumber
@@ -470,9 +508,12 @@ def _extract_bytes(data: bytes, name: str) -> str:
             with pdfplumber.open(io.BytesIO(data)) as pdf:
                 for pg in pdf.pages[:50]:
                     out.append(pg.extract_text() or "")
-            return "\n".join(out).strip()
+            text = "\n".join(out).strip()
         except Exception:
-            return ""
+            text = ""
+        if not text:                     # scanned PDF → try OCR
+            text = _ocr_file_bytes(data, name)
+        return text
     if ext in (".docx",):
         try:
             import io
@@ -511,8 +552,14 @@ def _attach_extract(files):
                 txt = ""
         txt = (txt or "").strip()
         names.append(name)
+        ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
         if txt:
             parts.append(f"[ملف: {name}]\n{txt[:_ATTACH_MAX_CHARS]}")
+        elif ext in _IMAGE_EXTS:
+            parts.append(f"[صورة: {name}] (تعذّرت قراءة النص من الصورة — فعّل "
+                         f"OCR على الجهاز: pkg install tesseract tesseract-data-ara "
+                         f"ثم pip install pytesseract pillow. الصور التي لا تحوي "
+                         f"نصاً تحتاج نموذج رؤية.)")
         else:
             parts.append(f"[ملف: {name}] (تعذّرت قراءة محتواه — صيغة غير "
                          f"مدعومة أو مكتبة استخراج ناقصة على الجهاز)")
