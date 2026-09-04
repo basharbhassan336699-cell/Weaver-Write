@@ -262,6 +262,11 @@ def _oauth_exchange(pend, code):
 
 # ── persistent chat history (survives browser/terminal/device restarts) ──
 _CHATS_DIR = os.path.join(_ROOT, "config", "chats")
+# Per-chat sidecar holding the FULL text of documents produced in that chat, so
+# memory recall and chat search can see the document body (not just the chat
+# messages) — e.g. searching with a line copied from a produced file finds its
+# conversation, and a repeated document task recalls the earlier one.
+_CHATS_DOCS_DIR = os.path.join(_ROOT, "config", "chats_docs")
 _ID_RE = re.compile(r'^[A-Za-z0-9_.\-]+$')
 
 
@@ -320,6 +325,18 @@ def _chats_search(query, limit=50):
                     end = min(len(body), pos + len(q) + 60)
                     snippet = ("…" if start else "") + body[start:end].strip() \
                               + ("…" if end < len(body) else "")
+        # also search the produced-document body (a line copied from the file
+        # should find its conversation)
+        doc = _read_chat_doc(d.get("id"))
+        if doc:
+            pos = _normalize_ar(doc.lower()).find(q)
+            if pos != -1:
+                hits += 1
+                if not snippet:
+                    start = max(0, pos - 40)
+                    end = min(len(doc), pos + len(q) + 60)
+                    snippet = ("…" if start else "") + doc[start:end].strip() \
+                              + ("…" if end < len(doc) else "")
         if title_hit or hits:
             out.append({"id": d.get("id"), "title": title,
                         "ts": d.get("ts", 0), "windowId": d.get("windowId"),
@@ -382,6 +399,47 @@ def _chat_remove(cid):
         os.remove(os.path.join(_CHATS_DIR, cid + ".json"))
     except OSError:
         pass
+    try:
+        os.remove(os.path.join(_CHATS_DOCS_DIR, cid + ".txt"))
+    except OSError:
+        pass
+
+
+_CHAT_DOC_CAP = 200000   # keep at most ~200k chars of produced docs per chat
+
+
+def _save_chat_doc(cid, text):
+    """Append a produced document's text to the chat's sidecar so it becomes
+    searchable/recallable. Safe + bounded; any failure is ignored."""
+    if not (cid and _ID_RE.match(cid)) or not (text or "").strip():
+        return
+    try:
+        os.makedirs(_CHATS_DOCS_DIR, exist_ok=True)
+        p = os.path.join(_CHATS_DOCS_DIR, cid + ".txt")
+        prev = ""
+        if os.path.exists(p):
+            try:
+                prev = open(p, encoding="utf-8").read()
+            except Exception:
+                prev = ""
+        combined = (prev + "\n\n" + text).strip() if prev else text.strip()
+        if len(combined) > _CHAT_DOC_CAP:      # keep the most recent
+            combined = combined[-_CHAT_DOC_CAP:]
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(combined)
+    except Exception:
+        pass
+
+
+def _read_chat_doc(cid):
+    """Return the sidecar document text for a chat, or ""."""
+    if not (cid and _ID_RE.match(cid)):
+        return ""
+    try:
+        return open(os.path.join(_CHATS_DOCS_DIR, cid + ".txt"),
+                    encoding="utf-8").read()
+    except Exception:
+        return ""
 
 
 # ── cross-conversation memory ────────────────────────────────────────────────
@@ -469,9 +527,10 @@ def _recall_memory(query, exclude_id=None, k=3, budget=2600):
         if not msgs:
             continue
         title = d.get("title", "") or ""
+        doc = _read_chat_doc(d.get("id"))
         blob = title + " " + " ".join(
             (m.get("content", "") if isinstance(m, dict) else str(m))
-            for m in msgs[:40])
+            for m in msgs[:40]) + " " + doc[:8000]
         overlap = terms & _sig_terms(blob)
         if not overlap:
             continue
@@ -492,6 +551,25 @@ def _recall_memory(query, exclude_id=None, k=3, budget=2600):
         if len(parts) >= k:
             break
     return "\n\n".join(parts)
+
+
+def _with_memory_for_task(desc, msg, chat_id):
+    """For a DOCUMENT task: if a similar task was done in an earlier chat, prepend
+    a memory block + an instruction to produce a DIFFERENT version (other
+    references/studies/sources, new angles, different wording). Returns desc
+    unchanged when there is no relevant memory. Safe/degrading."""
+    try:
+        mem = _recall_memory(msg, exclude_id=chat_id)
+    except Exception:
+        mem = ""
+    if not mem:
+        return desc
+    return (
+        "[ذاكرة: مهام سابقة ذات صلة أنجزناها في محادثات أخرى]\n" + mem + "\n\n"
+        "[تعليمات مهمة] لقد أنجزنا مهمة مشابهة سابقاً (انظر أعلاه). أنتِج الآن "
+        "نسخة مختلفة تماماً عنها: استعمل مراجع ودراسات ومصادر أخرى، وتناول "
+        "زوايا وأفكاراً جديدة، وبأسلوب تعبير وصياغة مختلفين، دون تكرار المحتوى "
+        "أو المصادر السابقة.\n\n" + desc)
 
 
 # ── windows (workspaces): each groups its own chats; the main list shows all ──
@@ -1317,6 +1395,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ctx.strip():
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
+            desc = _with_memory_for_task(desc, msg, body.get("chatId"))
             try:
                 from pipeline.orchestrator import task_priority
                 prio = body.get("priority")
@@ -1326,6 +1405,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 sse({"t": "reply", "reply": ("خطأ: " if isar else "Error: ") + str(e)})
                 sse({"t": "done"})
                 return
+            try:
+                _save_chat_doc(body.get("chatId"), res.get("reply") or "")
+            except Exception:
+                pass
             reply = (res.get("reply") or "").strip()
             out = res.get("output_path")
             if out:
@@ -1388,6 +1471,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ctx.strip():
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
+            desc = _with_memory_for_task(desc, msg, body.get("chatId"))
             try:
                 from pipeline.orchestrator import run_pipeline_sync, task_priority
                 prio = body.get("priority")
@@ -1396,6 +1480,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._json({"error": "pipeline_error", "message": str(e)})
                 return
+            try:
+                _save_chat_doc(body.get("chatId"), res.get("reply") or "")
+            except Exception:
+                pass
             reply = (res.get("reply") or "").strip()
             out = res.get("output_path")
             if out:
