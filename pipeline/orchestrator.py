@@ -326,6 +326,66 @@ class WeaverOrchestrator:
         "in its original", "keep the language", "keep it in",
     )
 
+    @staticmethod
+    def _task_scope(text):
+        """Detect a SCOPE that limits a document task: 'references' (only find
+        and list references/studies, no writing), 'outline' (only the structure),
+        'part' (write only a specific part), or None (full document)."""
+        t = " " + (text or "").lower() + " "
+        refs = ("مراجع فقط", "المراجع فقط", "فقط المراجع", "فقط مراجع",
+                "دراسات سابقة فقط", "فقط الدراسات", "الدراسات فقط", "فقط المصادر",
+                "المصادر فقط", "قائمة مراجع", "قائمة المراجع", "قائمة مصادر",
+                "اوجد مراجع", "أوجد مراجع", "ابحث عن مراجع", "ابحث لي عن مراجع",
+                "جد مراجع", "هات مراجع", "اعطني مراجع", "أعطني مراجع",
+                "اعطني مصادر", "اعطني دراسات", "دون كتابة الموضوع",
+                "references only", "just references", "only references",
+                "list of references", "find references", "find sources",
+                "sources only", "only sources", "list sources", "bibliography")
+        outline = ("هيكل فقط", "الهيكل فقط", "فقط الهيكل", "العناصر فقط",
+                   "فقط العناصر", "الخطة فقط", "خطة البحث فقط", "فقط الخطة",
+                   "عناصر البحث فقط", "جدول المحتويات", "الخطوط العريضة",
+                   "outline only", "just an outline", "only an outline",
+                   "structure only", "just the outline", "table of contents",
+                   "only outline")
+        part = ("اكتب فقط", "فقط اكتب", "جزء فقط", "فقط جزء", "المقدمة فقط",
+                "فقط المقدمة", "قسم فقط", "فقط قسم", "فقرة فقط", "فقط الخاتمة",
+                "الخاتمة فقط", "فصل فقط", "فقط هذا الجزء",
+                "only the introduction", "only the conclusion",
+                "just write the", "only write the", "write only the",
+                "just the section", "only this part", "only this section")
+        if any(k in t for k in refs):
+            return "references"
+        if any(k in t for k in outline):
+            return "outline"
+        if any(k in t for k in part):
+            return "part"
+        return None
+
+    def _format_references_only(self, card, lang):
+        """Build a plain numbered references list from the gathered sources."""
+        srcs = card.get("sources") or []
+        if not srcs:
+            return ("لم يُعثر على مراجع/مصادر لهذا الموضوع الآن — جرّب لاحقاً أو "
+                    "وسّع الصياغة." if lang == "ar"
+                    else "No references/sources were found for this topic.")
+        lines, seen, n = [], set(), 1
+        for s in srcs:
+            url = (s.get("url") or "").strip()
+            title = (s.get("title") or url or "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            auth = ", ".join(s.get("authors") or [])
+            year = str(s.get("year") or "").strip()
+            doi = (s.get("doi") or "").strip()
+            meta = " — ".join(x for x in (auth, year) if x)
+            tail = (("doi:" + doi) if doi else url).strip()
+            lines.append(f"{n}. {title}"
+                         + (f" — {meta}" if meta else "")
+                         + (f". {tail}" if tail else "."))
+            n += 1
+        return "\n".join(lines)
+
     @classmethod
     def _requested_output_lang(cls, text):
         """Detect an EXPLICIT output-language directive in the request. Returns
@@ -742,8 +802,19 @@ class WeaverOrchestrator:
         # honoured even if the model didn't surface it in the card.
         task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
 
+        # scope that LIMITS the task: references-only / outline-only / part-only.
+        task.task_card["scope"] = self._task_scope(
+            self._current_request(task.description))
+
         # Phase 3: route tools & skills once
         self._route(task)
+
+        # references-only must actually gather sources → force the search tools.
+        if task.task_card.get("scope") == "references":
+            for _t in ("web_search", "academic_search"):
+                if _t not in task.tools:
+                    task.tools.append(_t)
+            task.task_card["needs_academic_search"] = True
 
     async def _layer_4(self, task: Task, mem: TaskMemory):
         """٤: البحث — أكاديمي (PaperQA) + بحث ويب حي (SearXNG). يُشغَّل ما وُجّهت
@@ -1989,6 +2060,17 @@ class WeaverOrchestrator:
             mem.set_status(6, f"يوتيوب: أُنتج ({mode}، {len(sections)} قسم)")
             return
 
+        # ── scope limits (references-only / part-only handled here; outline-only
+        #    after the structure is built below) ──
+        scope = card.get("scope")
+        if scope == "references":
+            head = "المراجع والدراسات" if lang == "ar" else "References"
+            body = self._format_references_only(card, lang)
+            task.sections = [{"heading": head, "body": body}]
+            task.draft = f"## {head}\n\n{body}"
+            mem.set_status(6, "إخراج: مراجع/دراسات فقط")
+            return
+
         # techniques for the model strength — shown in the tool-call/thinking UI,
         # never written into the output document. We already write per-section.
         try:
@@ -2012,6 +2094,26 @@ class WeaverOrchestrator:
                 mem.set_status(6, f"بنية (تخطّي: {e})")
         if not sections_plan:
             sections_plan = [{"title": card.get("topic", "") or task.description,
+                              "level": 1}]
+
+        # outline-only → output just the structure, don't write any bodies
+        if scope == "outline":
+            head = "هيكل العمل" if lang == "ar" else "Outline"
+            lines = []
+            for sec in sections_plan:
+                lvl = int(sec.get("level", 1) or 1)
+                title = sec.get("title") or sec.get("heading") or ""
+                if title:
+                    lines.append(("  " * max(0, lvl - 1)) + "- " + title)
+            body = "\n".join(lines)
+            task.sections = [{"heading": head, "body": body}]
+            task.draft = f"## {head}\n\n{body}"
+            mem.set_status(6, "إخراج: هيكل فقط")
+            return
+
+        # part-only → write just the one part the user asked for (single section)
+        if scope == "part":
+            sections_plan = [{"title": self._current_request(task.description),
                               "level": 1}]
 
         # 2) المنهجية — إن لزمت وغابت
