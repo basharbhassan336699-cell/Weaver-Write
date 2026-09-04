@@ -505,6 +505,10 @@ class WeaverOrchestrator:
                 " presentation", "deck")):
             return "PPTX"
         if any(k in t for k in (
+                " csv", ".csv", "ملف csv", "سي اس في", "قيم مفصولة بفواصل",
+                "comma separated", "comma-separated")):
+            return "CSV"
+        if any(k in t for k in (
                 "اكسل", "إكسل", "اكسيل", "excel", "xlsx", "xls ", "جدول بيانات",
                 "جدول اكسل", "شيت", "spreadsheet", "sheet")):
             return "XLSX"
@@ -546,6 +550,500 @@ class WeaverOrchestrator:
             "citation_style": "APA",
             "output_format": ["DOCX"],
         }
+
+    @staticmethod
+    def _model_strength() -> str:
+        """Estimate the running model's strength — "small" | "medium" | "large".
+
+        Order: an explicit override (WEAVER_MODEL_STRENGTH) wins; otherwise the
+        model NAME (WEAVER_MODEL) is matched against size hints. Purpose: let
+        every layer adapt depth/temperature/length to the model's ceiling so a
+        small model works reliably at its own peak, and a large one is used to
+        its full depth — without changing any skill. Unknown → "medium"."""
+        import os as _os
+        ov = (_os.environ.get("WEAVER_MODEL_STRENGTH", "") or "").strip().lower()
+        if ov in ("small", "weak", "low", "tiny", "ضعيف", "صغير"):
+            return "small"
+        if ov in ("medium", "mid", "متوسط"):
+            return "medium"
+        if ov in ("large", "strong", "high", "big", "كبير", "قوي"):
+            return "large"
+        name = (_os.environ.get("WEAVER_MODEL", "") or "").lower()
+        large_kw = ("opus", "ultra", "pro", "70b", "72b", "65b", "405b", "110b",
+                    "large", "huge", "32b", "34b", "-max", "gpt-4o", "gpt-4.1",
+                    "o1", "o3", "sonnet-4", "sonnet-5", "opus-5")
+        small_kw = ("flash", "mini", "nano", "lite", "tiny", "small", "0.5b",
+                    "1b", "1.5b", "2b", "3b", "4b", "7b", "8b", "9b", "haiku")
+        # a small/flash/mini variant is small even inside a large family
+        # (e.g. gpt-4o-mini, gemini-flash) → check the small hints first
+        if any(k in name for k in small_kw):
+            return "small"
+        if any(k in name for k in large_kw):
+            return "large"
+        return "medium"
+
+    @staticmethod
+    def _strength_profile(strength: str) -> dict:
+        """Per-strength writing profile: model temperature, target words for a
+        specialized intro, and a depth directive appended to the generic section
+        prompt. Adapts OUTPUT to the model ceiling — never fabricates capability
+        a small model lacks; it raises the reliable floor and unlocks depth on a
+        capable model. Returns a dict always usable (unknown → medium)."""
+        s = (strength or "medium").lower()
+        if s == "small":
+            return {
+                "temp": 0.35,
+                "intro_words": 220,
+                "depth": (
+                    "النموذج محدود الطاقة: اكتب بجُملٍ قصيرة واضحة ومباشرة، وركّز "
+                    "على النقاط الجوهرية دون حشوٍ أو استطراد، ورتّب الأفكار في "
+                    "فقراتٍ قصيرة. الدقّة والوضوح والالتزام بالمصادر أهمّ من الطول "
+                    "(استهدف نحو 180–260 كلمة لهذا القسم)."),
+                "depth_en": (
+                    "The model has limited capacity: write short, clear, direct "
+                    "sentences; focus on the essential points with no padding; "
+                    "keep paragraphs short. Accuracy, clarity and staying on "
+                    "sources matter more than length (aim ~180–260 words)."),
+            }
+        if s == "large":
+            return {
+                "temp": 0.6,
+                "intro_words": 650,
+                "depth": (
+                    "استغلّ طاقة النموذج الكاملة: حلّل بعمق، واعرض وجهات النظر "
+                    "المختلفة، واربط الأفكار ببعضها بنقدٍ علميّ وأمثلةٍ دقيقة، مع "
+                    "التزامٍ صارمٍ بالمصادر (استهدف نحو 500–800 كلمة لهذا القسم)."),
+                "depth_en": (
+                    "Use the model's full capacity: analyze in depth, present "
+                    "differing viewpoints, and connect ideas with scholarly "
+                    "critique and precise examples, strictly grounded in the "
+                    "sources (aim ~500–800 words)."),
+            }
+        return {"temp": 0.5, "intro_words": 400, "depth": "", "depth_en": ""}
+
+    @staticmethod
+    def _section_kind(title: str):
+        """Classify a section title into a purpose-built writer kind:
+        "intro" | "conclusion" | "results" | None (→ generic writer)."""
+        t = (title or "").strip().lower()
+        if not t:
+            return None
+        intro_kw = ("مقدمة", "المقدمة", "تمهيد", "introduction", "intro")
+        concl_kw = ("خاتمة", "الخاتمة", "خلاصة", "الخلاصة", "استنتاج",
+                    "الاستنتاجات", "التوصيات", "توصيات", "conclusion",
+                    "recommendation", "closing")
+        res_kw = ("النتائج", "نتائج", "تحليل النتائج", "عرض النتائج",
+                  "results", "findings")
+        if any(k in t for k in intro_kw):
+            return "intro"
+        if any(k in t for k in concl_kw):
+            return "conclusion"
+        if any(k in t for k in res_kw):
+            return "results"
+        return None
+
+    def _write_section_specialized(self, title, card, lang, mode, no_ctx,
+                                   prior_sections, prof):
+        """Route a section to its purpose-built writer skill when the section
+        type AND sourcing mode fit, returning prose text — or None to let the
+        generic writer handle it. Purely additive: every skill call is guarded
+        by the caller, so any miss falls back to the existing generic path.
+
+        Bindings (skills already present, only wired here):
+          intro       → research_intro.build_intro
+          conclusion  → conclusion_writer.build_conclusion
+          results     → results_formatter.format_results (also uses table_builder)
+        """
+        if not self.llm_fn:
+            return None
+        kind = self._section_kind(title)
+        if not kind:
+            return None
+        topic = card.get("topic", "") or title
+        if kind == "intro" and mode == "cited" and not no_ctx:
+            refs = []
+            for s in (card.get("sources") or [])[:12]:
+                if isinstance(s, dict):
+                    refs.append({
+                        "key": s.get("key") or (s.get("title", "") or "")[:40],
+                        "text": (s.get("content") or s.get("title", "") or "")[:160],
+                        "page": s.get("page", "")})
+            out = self._skill_call(
+                "research_intro", "build_intro", "build_intro",
+                topic, refs, int(prof.get("intro_words", 400)), lang, self.llm_fn)
+            return (out or {}).get("text") or None
+        if kind == "conclusion" and mode != "none":
+            findings = []
+            for sec in (prior_sections or [])[-8:]:
+                b = (sec.get("body") or "").strip()
+                if b:
+                    first = b.split("\n", 1)[0].strip()[:200]
+                    if first:
+                        findings.append(first)
+            out = self._skill_call(
+                "conclusion_writer", "build_conclusion", "build_conclusion",
+                topic, findings, lang, self.llm_fn)
+            return (out or {}).get("text") or None
+        if kind == "results" and mode != "none":
+            out = self._skill_call(
+                "results_formatter", "format_results", "format_results",
+                [{"title": title, "note": ""}], lang, self.llm_fn)
+            return (out or {}).get("text") or None
+        return None
+
+    # ── task.skills dispatch ─────────────────────────────────────────────────
+    # _route() matches skills to the task; this turns that match into real
+    # execution. A skill runs ONLY when the task actually selected it (its name
+    # is in task.skills), keeping behaviour targeted. Skills already invoked at
+    # a fixed point (structure/methodology/rewriters/formatters/builders and the
+    # per-section writers above) are NOT re-run here — this dispatch adds the
+    # remaining enrichment skills that had no wiring. Every handler is guarded,
+    # idempotent, and additive; on any miss the draft is left unchanged.
+    def _skill_handlers(self):
+        """skill name → write-stage handler(self, task, card, lang, mem)->bool.
+        A skill absent here is either wired elsewhere (a fixed layer point) or
+        context-gated for a later increment; its match is simply skipped."""
+        return {
+            "literature_review": self._sk_literature_review,
+        }
+
+    def _dispatch_skills(self, task: Task, card: dict, lang: str, mem):
+        """Run the matched skills (task.skills) that have a write-stage handler.
+        Guarded per skill; a failure never breaks the draft."""
+        handlers = self._skill_handlers()
+        for name in list(task.skills or []):
+            h = handlers.get(name)
+            if not h:
+                continue
+            try:
+                if h(task, card, lang, mem):
+                    mem.set_status(6, f"مهارة موزّعة: {name} ✓")
+            except Exception as e:
+                mem.set_status(6, f"مهارة {name} (تخطّي: {e})")
+
+    @staticmethod
+    def _is_literature_title(title: str) -> bool:
+        t = (title or "").strip().lower()
+        return any(k in t for k in (
+            "الدراسات السابقة", "دراسات سابقة", "أدبيات", "الأدبيات",
+            "الإطار النظري", "مراجعة الأدبيات", "literature", "related work",
+            "prior work", "background"))
+
+    def _sk_literature_review(self, task: Task, card: dict, lang: str,
+                              mem) -> bool:
+        """Enrich an EXISTING literature/theoretical-framework section with a
+        theme-organized view of the gathered sources (organize_by_theme). Never
+        invents a section: if no literature section was written, it does nothing.
+        Additive — appends beneath the section's current body."""
+        sources = [s for s in (card.get("sources") or []) if isinstance(s, dict)]
+        if len(sources) < 2 or not task.sections:
+            return False
+        lit_idx = next((i for i, s in enumerate(task.sections)
+                        if self._is_literature_title(s.get("heading", ""))), None)
+        if lit_idx is None:
+            return False
+        refs = [{"key": s.get("key") or (s.get("title", "") or "")[:40],
+                 "text": (s.get("content") or s.get("title", "") or "")}
+                for s in sources]
+        groups = self._skill_call("literature_review", "organize_by_theme",
+                                  "organize_by_theme", refs, None) or {}
+        lines = []
+        for theme, items in groups.items():
+            if theme == "unclassified" or not items:
+                continue
+            keys = "؛ ".join((it.get("key") or "")[:60] for it in items[:6]) \
+                if lang == "ar" else \
+                "; ".join((it.get("key") or "")[:60] for it in items[:6])
+            lines.append(f"- **{theme}**: {keys}")
+        if not lines:
+            return False
+        header = ("\n\n**تنظيم الدراسات موضوعياً:**\n" if lang == "ar"
+                  else "\n\n**Thematic grouping of studies:**\n")
+        cur = task.sections[lit_idx].get("body", "") or ""
+        task.sections[lit_idx]["body"] = cur + header + "\n".join(lines)
+        # rebuild the chat/preview draft to reflect the enriched section
+        task.draft = "\n\n".join(
+            (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+            for s in task.sections if (s.get("heading") or s.get("body")))
+        return True
+
+    # ── statistical_analysis: real stats when a data file is attached ─────────
+    @staticmethod
+    def _data_files(task: Task):
+        """Attached data files (csv/xlsx/xls) the stats skill can analyze."""
+        exts = (".csv", ".xlsx", ".xls")
+        return [f for f in (task.input_files or [])
+                if isinstance(f, str) and f.lower().endswith(exts)]
+
+    @staticmethod
+    def _format_statistics(res, lang: str):
+        """Render analyze()'s REAL computed numbers as a Markdown block
+        (descriptives table + reliability + an honest 'computed, not estimated'
+        note). Returns None on error/empty so nothing fake is ever injected."""
+        if not isinstance(res, dict) or res.get("error"):
+            return None
+        dd = (res.get("descriptives") or {})
+        desc = dd.get("descriptives") or {}
+        n = dd.get("n") or res.get("n")
+        if not desc:
+            return None
+        cols = list(desc.keys())
+        order = ["count", "mean", "std", "min", "25%", "50%", "75%", "max"]
+        first = desc[cols[0]] if cols else {}
+        stats = [k for k in order if k in first] or list(first.keys())
+        labels_ar = {"count": "العدد", "mean": "المتوسط",
+                     "std": "الانحراف المعياري", "min": "الأدنى",
+                     "25%": "الربيع الأول", "50%": "الوسيط",
+                     "75%": "الربيع الثالث", "max": "الأعلى"}
+
+        def _fmt(v):
+            try:
+                return str(round(float(v), 3))
+            except Exception:
+                return str(v)
+        head_stat = "الإحصاء" if lang == "ar" else "Statistic"
+        rows = ["| " + head_stat + " | " + " | ".join(str(c) for c in cols) + " |",
+                "|" + "---|" * (len(cols) + 1)]
+        for st in stats:
+            label = labels_ar.get(st, st) if lang == "ar" else st
+            rows.append("| " + " | ".join(
+                [label] + [_fmt(desc[c].get(st, "")) for c in cols]) + " |")
+        out = []
+        out.append(("حجم العينة: %s. الإحصاءات الوصفية للمتغيّرات العددية:" % n)
+                   if lang == "ar" else
+                   ("Sample size: %s. Descriptive statistics for numeric "
+                    "variables:" % n))
+        out.append("\n".join(rows))
+        rel = res.get("reliability")
+        if isinstance(rel, dict) and "cronbach_alpha" in rel:
+            out.append(
+                ("**ثبات المقياس (كرونباخ ألفا):** %s (%s عبارة، ن=%s) — %s."
+                 % (rel.get("cronbach_alpha"), rel.get("n_items", ""),
+                    rel.get("n", ""), rel.get("interpretation", "")))
+                if lang == "ar" else
+                ("**Reliability (Cronbach's α):** %s (%s items, n=%s) — %s."
+                 % (rel.get("cronbach_alpha"), rel.get("n_items", ""),
+                    rel.get("n", ""), rel.get("interpretation", ""))))
+        out.append("_" + ("الأرقام أعلاه محسوبة فعلياً من الملف المرفق، لم "
+                          "تُقدَّر أو تُختلق." if lang == "ar" else
+                          "The figures above are computed directly from the "
+                          "attached file, not estimated.") + "_")
+        return "\n\n".join(out)
+
+    def _inject_statistics(self, task: Task, card: dict, lang: str, mem):
+        """When a data file is attached, run statistical_analysis.analyze on it
+        and inject the REAL computed results into the document — into a results
+        section if one exists, else as its own 'التحليل الإحصائي' section. Never
+        fabricates numbers: on a library/read error it adds an honest note only.
+        Additive and fully guarded."""
+        files = self._data_files(task)
+        if not files:
+            return
+        path = files[0]
+        try:
+            res = self._skill_call("statistical_analysis", "survey_analysis",
+                                   "analyze", path)
+            # add scale reliability when Likert-type items are detected
+            vt = (res or {}).get("variable_types") or {}
+            likert = [c for c, t in vt.items()
+                      if "likert" in str(t).lower() or "ليكرت" in str(t)]
+            if isinstance(res, dict) and "error" not in res and len(likert) >= 2:
+                res2 = self._skill_call("statistical_analysis",
+                                        "survey_analysis", "analyze", path,
+                                        likert)
+                if isinstance(res2, dict) and "error" not in res2:
+                    res = res2
+        except Exception as e:
+            mem.set_status(6, f"إحصاء (تخطّي: {e})")
+            return
+        card["statistics"] = res
+        block = self._format_statistics(res, lang)
+        head = "التحليل الإحصائي" if lang == "ar" else "Statistical Analysis"
+        if not block:
+            # honest, actionable note — never fake numbers
+            err = res.get("error") if isinstance(res, dict) else "unknown"
+            block = (("تعذّر تنفيذ التحليل الإحصائي على الملف المرفق: %s. "
+                      "قد تحتاج تثبيت المكتبات: pip install pandas scipy." % err)
+                     if lang == "ar" else
+                     ("Could not run the statistical analysis on the attached "
+                      "file: %s. You may need: pip install pandas scipy." % err))
+        idx = next((i for i, s in enumerate(task.sections or [])
+                    if self._section_kind(s.get("heading", "")) == "results"),
+                   None)
+        if idx is not None:
+            cur = task.sections[idx].get("body", "") or ""
+            sub = ("\n\n**التحليل الإحصائي:**\n\n" if lang == "ar"
+                   else "\n\n**Statistical analysis:**\n\n")
+            task.sections[idx]["body"] = cur + sub + block
+        else:
+            task.sections = (task.sections or []) + [{"heading": head,
+                                                      "body": block}]
+        task.draft = "\n\n".join(
+            (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+            for s in task.sections if (s.get("heading") or s.get("body")))
+        mem.set_status(6, "أُدرج التحليل الإحصائي (أرقام محسوبة فعلياً)")
+
+    # ── quran_hadith_citation: correct marks for Islamic content ─────────────
+    @staticmethod
+    def _is_islamic_content(text: str) -> bool:
+        """True when the text quotes/discusses Quran or Hadith (so the marks
+        skill should enforce ﴿ ﴾ for verses and « » for hadith)."""
+        t = text or ""
+        kw = ("قال الله", "قال تعالى", "يقول الله", "سبحانه وتعالى", "عز وجل",
+              "قال رسول الله", "قال النبي", "عن النبي", "صلى الله عليه وسلم",
+              "ﷺ", "رواه البخاري", "رواه مسلم", "حديث شريف", "الحديث الشريف",
+              "القرآن", "قرآن كريم", "آية كريمة", "الآية الكريمة",
+              "﴾", "«", "السنة النبوية", "السيرة النبوية")
+        return any(k in t for k in kw)
+
+    # the writing directive appended for Islamic content (skill's conventions)
+    _ISLAMIC_DIRECTIVE_AR = (
+        "عند الاستشهاد بآية قرآنية: ضعها بين قوسي الآية ﴿ ﴾ (لا أقواس عادية ولا "
+        "علامات اقتباس) وأتبِعها بالمصدر (السورة: رقم الآية). وعند الاستشهاد بحديث "
+        "نبوي: ضعه بين علامتي « » (لا أقواس الآية) وأتبِعه بالتخريج (رواه فلان، "
+        "الحكم). لا تخلط بين العلامتين إطلاقاً.")
+    _ISLAMIC_DIRECTIVE_EN = (
+        "When quoting a Quranic verse, enclose it in the ornamental brackets "
+        "﴿ ﴾ (never normal quotes/parentheses) and follow it with (Surah: Ayah). "
+        "When quoting a hadith, enclose it in « » (never the Quran brackets) and "
+        "follow it with its takhrij. Never mix the two marks.")
+
+    def _apply_islamic_marks(self, task: Task, card: dict, lang: str, mem):
+        """For Islamic content, enforce the skill's marks at the TEXT level so
+        every export format is correct: a verse introduced by an explicit Quran
+        lead-in gets ﴿ ﴾, a hadith introduced by an explicit lead-in gets « ».
+        ONLY the delimiter marks are changed — the quoted text itself is kept
+        verbatim (never rewritten). Then the skill's validate_marks flags any
+        remaining misuse. Additive, guarded, and a no-op for non-Islamic text.
+
+        Note: this normalizes the MARKS across all formats; the skill's richer
+        Word styling (bold verse, Kufyan font) via add_quran_verse/add_hadith
+        needs a docx object and stays a later, docx-only step."""
+        import re
+        sections = task.sections or []
+        joined = "\n".join((s.get("body", "") or "") for s in sections) \
+            or (task.draft or "")
+        if not self._is_islamic_content(joined + " " + str(card.get("topic", ""))):
+            return
+        # wire to the skill module: real marks + validator (no docx needed here)
+        try:
+            import importlib, sys as _sys, os as _os
+            sp = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "capabilities", "skills",
+                "quran_hadith_citation", "scripts"))
+            if sp not in _sys.path:
+                _sys.path.insert(0, sp)
+            qh = importlib.import_module("quran_hadith")
+        except Exception as e:
+            mem.set_status(6, f"تنسيق إسلامي (تخطّي: {e})")
+            return
+        QO, QC = qh.QURAN_OPEN, qh.QURAN_CLOSE
+        HO, HC = qh.HADITH_OPEN, qh.HADITH_CLOSE
+        q = '["“”]'      # straight or curly double quotes
+        qlead = (r'(?:قال\s+الله\s+تعالى|قال\s+تعالى|قال\s+الله|'
+                 r'يقول\s+الله(?:\s+تعالى)?|قال\s+عز\s+وجل)')
+        hlead = (r'(?:قال\s+رسول\s+الله(?:\s*ﷺ|\s*صلى\s+الله\s+عليه\s+وسلم)?|'
+                 r'قال\s+النبي(?:\s*ﷺ|\s*صلى\s+الله\s+عليه\s+وسلم)?|عن\s+النبي)')
+        q_re = re.compile(r'(' + qlead + r'\s*[:：]?\s*)' + q +
+                          r'([^"“”\n]{3,300})' + q)
+        h_re = re.compile(r'(' + hlead + r'\s*[:：]?\s*)' + q +
+                          r'([^"“”\n]{3,400})' + q)
+
+        def _norm(txt):
+            txt = q_re.sub(
+                lambda m: f'{m.group(1)}{QO} {m.group(2).strip()} {QC}', txt)
+            txt = h_re.sub(
+                lambda m: f'{m.group(1)}{HO} {m.group(2).strip()} {HC}', txt)
+            return txt
+
+        changed = 0
+        for s in sections:
+            b = s.get("body", "") or ""
+            nb = _norm(b)
+            if nb != b:
+                s["body"] = nb
+                changed += 1
+        if changed:
+            task.draft = "\n\n".join(
+                (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+                for s in sections if (s.get("heading") or s.get("body")))
+        elif task.draft:
+            task.draft = _norm(task.draft)
+        # validate remaining marks (skill's own check) and record honestly
+        try:
+            v = qh.validate_marks(task.draft or joined) or {}
+        except Exception:
+            v = {}
+        card["islamic_marks"] = v
+        if v.get("warnings"):
+            mem.set_status(6, "تنسيق إسلامي: " + "؛ ".join(v["warnings"]))
+        else:
+            mem.set_status(6, f"تنسيق إسلامي: علامات مضبوطة ({changed} تصحيح)")
+
+    def _style_islamic_docx(self, path, card):
+        """Post-pass on the built .docx: embolden Quran verses (﴿…﴾) and hadith
+        («…») using the quran_hadith_citation skill's own _set_run, preserving
+        the surrounding paragraph font/size. Touches only paragraphs that carry
+        a complete mark span. Fully guarded — any failure (no python-docx, read
+        error) leaves the file exactly as built. No-op for non-Islamic docs.
+
+        This is the richer Word-only step the text-level _apply_islamic_marks
+        deferred: marks are already correct in every format; here the verse and
+        matn also become bold, per the skill's typographic rule."""
+        if not card.get("islamic"):
+            return
+        try:
+            import importlib, sys as _sys, os as _os, re as _re
+            sp = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "capabilities", "skills",
+                "quran_hadith_citation", "scripts"))
+            if sp not in _sys.path:
+                _sys.path.insert(0, sp)
+            qh = importlib.import_module("quran_hadith")
+            from docx import Document
+        except Exception:
+            return
+        QO, QC = qh.QURAN_OPEN, qh.QURAN_CLOSE
+        HO, HC = qh.HADITH_OPEN, qh.HADITH_CLOSE
+        span_re = _re.compile(
+            "(" + _re.escape(QO) + ".*?" + _re.escape(QC) + "|"
+            + _re.escape(HO) + ".*?" + _re.escape(HC) + ")")
+
+        def _is_span(seg):
+            return ((seg.startswith(QO) and seg.endswith(QC))
+                    or (seg.startswith(HO) and seg.endswith(HC)))
+        try:
+            doc = Document(path)
+        except Exception:
+            return
+        changed = False
+        for p in doc.paragraphs:
+            txt = p.text
+            if not span_re.search(txt):
+                continue
+            base = p.runs[0] if p.runs else None
+            base_font = base.font.name if base else None
+            base_size = base.font.size if base else None
+            for r in list(p.runs):
+                r._element.getparent().remove(r._element)
+            for seg in span_re.split(txt):
+                if not seg:
+                    continue
+                run = p.add_run(seg)
+                if _is_span(seg):
+                    qh._set_run(run, bold=True,
+                                font=(base_font or "Kufyan Arabic"))
+                else:
+                    if base_font:
+                        run.font.name = base_font
+                if base_size:
+                    run.font.size = base_size
+            changed = True
+        if changed:
+            try:
+                doc.save(path)
+            except Exception:
+                pass
 
     def _route(self, task: Task):
         """Phase 3: from the understood task_card, compute ONCE the tools &
@@ -606,6 +1104,61 @@ class WeaverOrchestrator:
             card.pop("needs_academic_search", None)
         task.tools = list(dict.fromkeys(task.tools))   # dedupe, keep order
         task.skills = list(dict.fromkeys(task.skills))
+        self._dedupe_tools(task)                        # collapse redundant tools
+
+    # canonical provider for every registered tool. The pipeline ACTS only on
+    # the layer-4 research tools ("active"); every other capability is already
+    # served by a skill or by inline code ("skill"/"inline"), and a few have no
+    # wired path yet ("inactive"). This map resolves the tool/skill duplication
+    # WITHOUT removing any registry entry or file — it only records where each
+    # capability really runs so a matched tool is never double-counted as a
+    # separate action.
+    _TOOL_DELEGATION = {
+        # active — consulted by layer 4 as real actions
+        "web_search": ("active", None),
+        "academic_search": ("active", "_scholarly_search (inline)"),
+        "web_extract": ("active", None),
+        "web_document": ("active", None),
+        "youtube": ("active", None),
+        # served by a skill (export/format/scoring) — driven by output_format /
+        # the relevant layer, not by task.tools
+        "word": ("skill", "docx_builder"),
+        "powerpoint": ("skill", "pptx_builder"),
+        "excel": ("skill", "xlsx_builder"),
+        "pdf": ("skill", "pdf_builder"),
+        "doc_export": ("skill", "docx/pdf/pptx/xlsx_builder"),
+        "chart": ("skill", "chart_builder"),
+        "credibility_check": ("skill", "credibility_scorer"),
+        # served by inline code elsewhere
+        "doc_read": ("inline", "web.server._extract_bytes + core.ocr"),
+        "memory_store": ("inline", "TaskMemory + config/chats"),
+        # csv is now a real export format served in _export
+        "csv": ("inline", "_export csv branch"),
+        # present in the registry but with no wired path yet
+        "diagram": ("inactive", None),
+        "calendar": ("inactive", None),
+        "scheduler": ("inactive", None),
+        "mcp_connector": ("inactive", None),
+    }
+
+    def _dedupe_tools(self, task: Task):
+        """Keep in task.tools only the tools the pipeline actually acts on
+        ("active"); record every other matched tool under card['tool_delegation']
+        with the skill/inline path that really serves it, then drop it from the
+        action list. Unknown tools are kept untouched. Additive and safe: no
+        registry entry or tool file is removed."""
+        deleg, kept = {}, []
+        for t in (task.tools or []):
+            d = self._TOOL_DELEGATION.get(t)
+            if d is None:
+                kept.append(t)                 # unknown → leave as-is
+            elif d[0] == "active":
+                kept.append(t)
+            else:
+                deleg[t] = {"via": d[0], "by": d[1]}   # served elsewhere
+        task.tools = list(dict.fromkeys(kept))
+        if deleg:
+            task.task_card["tool_delegation"] = deleg
 
     @staticmethod
     def _current_request(text):
@@ -2073,6 +2626,20 @@ class WeaverOrchestrator:
         mem.set_status(6, "صياغة البحث")
         card = task.task_card
         lang = card.get("language", "ar")
+        # adapt every writer to the running model's ceiling (small/medium/large)
+        # so it works reliably at its own peak. Set once; read by this layer and
+        # by weak_model_support below. Additive — default stays "medium".
+        try:
+            card.setdefault("model_strength", self._model_strength())
+        except Exception:
+            pass
+        # detect Islamic content once so the writer is guided to use the correct
+        # Quran/Hadith marks (enforced again after writing by _apply_islamic_marks)
+        try:
+            card.setdefault("islamic", self._is_islamic_content(
+                f"{card.get('topic','')} {task.description}"))
+        except Exception:
+            pass
 
         # ── YouTube path: produce the summary / transcript directly, with NO
         #    research structure or methodology, then return early.
@@ -2253,11 +2820,24 @@ class WeaverOrchestrator:
         # the model's knowledge and flag it so a clear note is added later.
         if mode == "cited" and no_ctx:
             card["sources_unavailable"] = True
+        prof = self._strength_profile(card.get("model_strength", "medium"))
         parts, out_sections = [], []
         for sec in sections_plan:
             title = sec.get("title") or sec.get("heading") or ""
             body = ""
+            # ── bound specialized section writers (skills already present, wired
+            #    here) — additive: on any miss the generic writer below runs
+            #    unchanged, keeping full backward compatibility ──
             if self.llm_fn:
+                try:
+                    _spec = self._write_section_specialized(
+                        title, card, lang, mode, no_ctx, out_sections, prof)
+                except Exception as e:
+                    _spec = None
+                    mem.set_status(6, f"مهارة قسم (تخطّي: {e})")
+                if _spec:
+                    body = _spec
+            if self.llm_fn and not body:
                 from pipeline import prompts as _p
                 if mode == "uncited":
                     prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
@@ -2281,8 +2861,18 @@ class WeaverOrchestrator:
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
                     system = _p.SYSTEM_PROMPT_WRITE
+                # adapt depth/length + temperature to the model's ceiling
+                _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
+                if _depth:
+                    prompt = prompt + "\n\n" + _depth
+                # guide Quran/Hadith marks for Islamic content
+                if card.get("islamic"):
+                    prompt = prompt + "\n\n" + (self._ISLAMIC_DIRECTIVE_AR
+                                               if lang == "ar"
+                                               else self._ISLAMIC_DIRECTIVE_EN)
                 try:
-                    body = self.llm_fn(prompt, system=system, temperature=0.5)
+                    body = self.llm_fn(prompt, system=system,
+                                       temperature=prof.get("temp", 0.5))
                 except Exception as e:
                     mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
                 # guard: a conversational model may answer with a greeting /
@@ -2312,6 +2902,15 @@ class WeaverOrchestrator:
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
         mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
+        # run matched enrichment skills (task.skills) that have a write-stage
+        # handler — turns skill routing into real execution. Additive/guarded.
+        self._dispatch_skills(task, card, lang, mem)
+        # when a data file (csv/xlsx) is attached, run REAL statistics on it and
+        # inject the computed results (never invented). Additive/guarded.
+        self._inject_statistics(task, card, lang, mem)
+        # enforce correct Quran/Hadith marks for Islamic content (text-level,
+        # all formats). Additive/guarded; no-op for non-Islamic text.
+        self._apply_islamic_marks(task, card, lang, mem)
 
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
@@ -2572,6 +3171,9 @@ class WeaverOrchestrator:
                     title=title, sections=sections, output_path=out, lang=lang,
                     font=font, references=references, toc=bool(card.get("toc")),
                     cover=cover, toc_position=toc_pos)
+                # rich Word styling for Quran/Hadith (bold verse/matn via the
+                # quran_hadith_citation skill's own _set_run). Guarded/no-op.
+                self._style_islamic_docx(out, card)
                 return out
             if fmt == "pdf":
                 out = os.path.join(out_dir, safe + ".pdf")
@@ -2581,11 +3183,42 @@ class WeaverOrchestrator:
                 return out
             if fmt == "pptx":
                 out = os.path.join(out_dir, safe + ".pptx")
-                slides = [{"title": s.get("heading", ""),
-                           "bullets": [ln for ln in
-                                       (s.get("body", "") or "").split("\n")
-                                       if ln.strip()]}
-                          for s in sections]
+                # turn each section body into clean slide points (strip markdown
+                # so the deck reads cleanly — build_deck renders text directly)
+                def _slide_points(body):
+                    pts = []
+                    for ln in (body or "").split("\n"):
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        ln = re.sub(r'^[-*•]\s*', '', ln)     # bullet markers
+                        ln = re.sub(r'^#{1,6}\s*', '', ln)    # md headings
+                        ln = re.sub(r'[*_`]+', '', ln).strip()  # inline md
+                        if ln:
+                            pts.append(ln)
+                    return pts
+                plan_sections = [{"title": s.get("heading", ""),
+                                  "points": _slide_points(s.get("body", ""))}
+                                 for s in sections]
+                slides = None
+                # slide_designer: build the slide PLAN (title/points/visual,
+                # ≤5 points per slide, academic skeleton when empty). Its
+                # "points" key is exactly what build_deck consumes. Additive —
+                # on any miss we fall back to a direct mapping below.
+                try:
+                    plan = self._skill_call(
+                        "slide_designer", "design_slides", "design_slides",
+                        title, plan_sections, card.get("slide_count"),
+                        lang, self.llm_fn)
+                    if plan and plan.get("slides"):
+                        slides = plan["slides"]
+                except Exception:
+                    slides = None
+                if not slides:
+                    # fallback with the CORRECT "points" key build_deck reads
+                    # (the previous "bullets" key was silently ignored)
+                    slides = [{"title": s["title"], "points": s["points"]}
+                              for s in plan_sections]
                 self._skill_call("pptx_builder", "build_pptx", "build_pptx",
                                  slides=slides, output_path=out, lang=lang,
                                  title=title)
@@ -2601,6 +3234,25 @@ class WeaverOrchestrator:
                 self._skill_call("xlsx_builder", "build_xlsx", "build_xlsx",
                                  data=data, output_path=out, headers=headers,
                                  lang=lang)
+                return out
+            if fmt in ("csv",):
+                out = os.path.join(out_dir, safe + ".csv")
+                import csv as _csv
+                data = card.get("data") or [[s.get("heading", ""),
+                                             re.sub(r'\s+', ' ',
+                                                    (s.get("body", "") or ""))]
+                                            for s in sections]
+                headers = card.get("headers") or (
+                    ["القسم", "المحتوى"] if lang == "ar"
+                    else ["Section", "Content"])
+                # utf-8-sig so Excel opens Arabic correctly
+                with open(out, "w", encoding="utf-8-sig", newline="") as f:
+                    w = _csv.writer(f)
+                    if headers:
+                        w.writerow(headers)
+                    for row in data:
+                        w.writerow(row if isinstance(row, (list, tuple))
+                                   else [row])
                 return out
             if fmt in ("txt", "text"):
                 out = os.path.join(out_dir, safe + ".txt")
@@ -3193,7 +3845,7 @@ def export_content_to_file(content, fmt="docx", lang="ar", title=None):
             task.sections = (_content_to_slides(getattr(orch, "llm_fn", None),
                                                 content, lang)
                              or _md_to_sections(content))
-        elif fmtU == "XLSX":
+        elif fmtU in ("XLSX", "CSV"):
             tbl = _content_to_table(getattr(orch, "llm_fn", None), content, lang)
             if tbl:
                 task.task_card["headers"] = tbl.get("headers")
