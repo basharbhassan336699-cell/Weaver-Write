@@ -3775,7 +3775,7 @@
       }
       try {
         const effortEl = document.getElementById('effortSelect');
-        const history = currentMessages.slice(0, -1).slice(-30);
+        const history = currentMessages.slice(0, -1).slice(-200);
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
