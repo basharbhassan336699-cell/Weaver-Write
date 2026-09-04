@@ -835,6 +835,92 @@ def _recall_memory(query, exclude_id=None, k=3, budget=2600, semantic=None):
     return "\n\n".join(parts)
 
 
+_CONTINUE_CUES = (
+    "اكمل", "كمل", "تابع", "استكمل", "واصل", "اكمل ما", "كمل ما", "نكمل",
+    "لنكمل", "continue", "resume", "carry on", "pick up where", "keep going",
+    "finish what",
+)
+
+
+def _wants_continue(msg):
+    """True when the user asks to CONTINUE/RESUME earlier work (Arabic-folded)."""
+    t = _normalize_ar((msg or "").lower())
+    return any(c in t for c in _CONTINUE_CUES)
+
+
+def _recall_full_conversation(query, exclude_id=None, budget=8000):
+    """Find the single past conversation most relevant to `query` and return a
+    fuller block (title + recent turns + produced-doc excerpt) so the assistant
+    can CONTINUE it. Lexical first, then one semantic-expansion attempt. '' when
+    nothing clears the bar."""
+    terms = _sig_terms(query)
+    if len(terms) < 2:
+        return ""
+    try:
+        names = os.listdir(_CHATS_DIR)
+    except OSError:
+        return ""
+    files = []
+    for fn in names:
+        if fn.endswith(".json"):
+            p = os.path.join(_CHATS_DIR, fn)
+            try:
+                files.append((os.path.getmtime(p), p))
+            except OSError:
+                pass
+    files.sort(reverse=True)
+    cands = []
+    for _mt, p in files[:200]:
+        try:
+            d = json.load(open(p, encoding="utf-8"))
+        except Exception:
+            continue
+        if exclude_id and d.get("id") == exclude_id:
+            continue
+        msgs = d.get("messages", []) or []
+        if not msgs:
+            continue
+        title = d.get("title", "") or ""
+        doc = _read_chat_doc(d.get("id"))
+        blob = title + " " + " ".join(
+            (m.get("content", "") if isinstance(m, dict) else str(m))
+            for m in msgs[:40]) + " " + doc[:8000]
+        cands.append((d, _sig_terms(blob), _sig_terms(title)))
+
+    def _best(qterms):
+        best, bscore = None, 0
+        for d, bt, tt in cands:
+            ov = qterms & bt
+            if not ov:
+                continue
+            sc = len(ov) + (2 if (tt & qterms) else 0)
+            if sc > bscore:
+                bscore, best = sc, d
+        return best, bscore
+
+    best, score = _best(terms)
+    if not best:
+        extra = _semantic_expand(query)
+        if extra:
+            best, score = _best(terms | extra)
+    if not best or score < 2:
+        return ""
+    title = best.get("title") or "محادثة"
+    lines = []
+    for m in (best.get("messages") or [])[-15:]:
+        if not isinstance(m, dict):
+            continue
+        role = "المستخدم" if m.get("role") == "user" else "المساعد"
+        c = (m.get("content") or "").strip().replace("\n", " ")
+        if c:
+            lines.append(role + ": " + c)
+    block = "[المحادثة السابقة المطلوب إكمالها: " + title + "]\n" + "\n".join(lines)
+    doc = _read_chat_doc(best.get("id"))
+    if doc.strip():
+        block += "\n\n[من الملف المُنتَج في تلك المحادثة]\n" + doc[:3000]
+    return block[:budget]
+
+
 def _with_memory_for_task(desc, msg, chat_id):
     """For a DOCUMENT task: if a similar task was done in an earlier chat, prepend
     a memory block + an instruction to produce a DIFFERENT version (other
@@ -1673,6 +1759,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
                 except Exception:
                     mem_ctx = ""
+                if _wants_continue(msg):
+                    try:
+                        _full = _recall_full_conversation(msg, exclude_id=body.get("chatId"))
+                    except Exception:
+                        _full = ""
+                    if _full:
+                        mem_ctx = _full
                 sse({"t": "step", "label": (
                     ("قراءة الملفات" if isar else "Reading files") if attach_text
                     else ("بحث حيّ" if isar else "Live search") if ctx
@@ -1782,6 +1875,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
                 except Exception:
                     mem_ctx = ""
+                if _wants_continue(msg):
+                    try:
+                        _full = _recall_full_conversation(msg, exclude_id=body.get("chatId"))
+                    except Exception:
+                        _full = ""
+                    if _full:
+                        mem_ctx = _full
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
                           memory=mem_ctx, attachments=attach_text)
