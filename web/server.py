@@ -534,6 +534,88 @@ def _wants_document_output(msg: str) -> bool:
         "convert it to", "export to"))
 
 
+def _is_edit_append(msg):
+    """Detect a request to EDIT or APPEND to an existing file (must name a file,
+    so it never fires on ordinary requests). Returns 'append' | 'edit' | None."""
+    t = (msg or "").lower()
+    append_kw = ("اضف الى الملف", "أضف إلى الملف", "اضف للملف", "أضف للملف",
+                 "الحق", "ألحق", "اكتب في نفس الملف", "في نفس الملف",
+                 "اكمل الملف", "أكمل الملف", "اكمل في الملف", "زد على الملف",
+                 "اضف على الملف", "أضف على الملف", "append", "add to the file",
+                 "continue the file", "in the same file", "same file")
+    edit_kw = ("عدل الملف", "عدّل الملف", "عدل في الملف", "عدّل في الملف",
+               "صحح الملف", "صحّح الملف", "حدث الملف", "حدّث الملف",
+               "غير في الملف", "غيّر في الملف", "اعد كتابة الملف",
+               "أعد كتابة الملف", "edit the file", "modify the file",
+               "update the file", "fix the file", "rewrite the file",
+               "change the file")
+    if any(k in t for k in append_kw):
+        return "append"
+    if any(k in t for k in edit_kw):
+        return "edit"
+    return None
+
+
+def _edit_append_file(msg, active_path, effort="medium"):
+    """Apply an edit/append to an EXISTING produced file, in place. Text/Markdown
+    files are edited (overwrite) or appended directly; binary formats can't be
+    edited in place, so an updated Markdown sibling is written. Returns a reply
+    dict, or None when the target isn't a valid output file (→ normal handling)."""
+    real = _safe_output_file(active_path or "")
+    if not real:
+        return None
+    try:
+        with open(real, "rb") as f:
+            raw = f.read()
+    except Exception:
+        return None
+    name = os.path.basename(real)
+    current = _extract_bytes(raw, name) or ""
+    mode = _is_edit_append(msg) or "edit"
+    isar = any("؀" <= c <= "ۿ" for c in msg)
+    if mode == "append":
+        prompt = ("هذا محتوى ملف موجود. أنشئ فقط الإضافة المطلوبة (دون إعادة "
+                  "كتابة المحتوى القديم) وفق هذا الطلب، والتزم بلغة الملف:\n"
+                  + msg + "\n\n[محتوى الملف الحالي]\n" + current[:12000])
+    else:
+        prompt = ("هذا محتوى ملف موجود. طبّق التعديل المطلوب وأعِد المحتوى الكامل "
+                  "المعدَّل فقط (بلا شرح ولا مقدمات)، والتزم بلغة الملف:\n"
+                  + msg + "\n\n[محتوى الملف الحالي]\n" + current[:14000])
+    r = _chat(prompt, None, effort=effort)
+    if r.get("error"):
+        return r
+    produced = (r.get("reply") or "").strip()
+    if not produced:
+        return {"reply": "(لم يُنتج النظام تعديلاً)"}
+    ext = os.path.splitext(real)[1].lower()
+    try:
+        if ext in _ATTACH_TEXT_EXT:
+            if mode == "append":
+                with open(real, "a", encoding="utf-8") as f:
+                    f.write("\n\n" + produced)
+            else:
+                with open(real, "w", encoding="utf-8") as f:
+                    f.write(produced)
+            out_path = real
+        else:
+            base = os.path.splitext(real)[0]
+            out_path = base + ("_محدث" if isar else "_updated") + ".md"
+            new_full = (current + "\n\n" + produced) if mode == "append" \
+                else produced
+            with open(out_path, "w", encoding="utf-8") as f:
+                f.write(new_full)
+    except Exception as e:
+        return {"reply": (("تعذّرت الكتابة على الملف: " if isar
+                           else "Couldn't write the file: ") + str(e))}
+    note = ("تم تحديث الملف: " if isar else "File updated: ") + out_path
+    if ext not in _ATTACH_TEXT_EXT:
+        note += ("\n(الصيغة الأصلية لا تُعدَّل مباشرةً — حُفظ التحديث في ملف "
+                 "Markdown جديد.)" if isar else
+                 "\n(the original format can't be edited in place — the update "
+                 "was saved to a new Markdown file.)")
+    return {"reply": note, "output_path": out_path}
+
+
 def _with_attachments_for_task(desc, msg, attach_text):
     """Prepend attached-file content to a pipeline task description so the task is
     performed on it, and (unless the user named a language) force the FILE's own
@@ -1542,6 +1624,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not msg:
                 sse({"t": "error", "message": "empty"})
                 return
+            # edit/append an existing produced file → update it in place
+            if _is_edit_append(msg) and body.get("activeFile"):
+                _isar0 = any("؀" <= c <= "ۿ" for c in msg)
+                ea = _edit_append_file(msg, body.get("activeFile"),
+                                       body.get("effort", "medium"))
+                if ea is not None:
+                    if ea.get("error"):
+                        sse({"t": "reply",
+                             "reply": ("خطأ: " if _isar0 else "Error: ")
+                             + (ea.get("message") or ea.get("error"))})
+                    else:
+                        sse({"t": "reply", "reply": ea.get("reply") or "",
+                             "output_path": ea.get("output_path")})
+                    sse({"t": "done"})
+                    return
             try:
                 from pipeline.orchestrator import is_document_task, run_pipeline_sync
                 _is_task = is_document_task(msg)
@@ -1651,6 +1748,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not msg:
                 self._json({"error": "empty"})
                 return
+            # edit/append an existing produced file → update it in place
+            if _is_edit_append(msg) and body.get("activeFile"):
+                ea = _edit_append_file(msg, body.get("activeFile"),
+                                       body.get("effort", "medium"))
+                if ea is not None:
+                    self._json(ea)
+                    return
             # Quick question → fast direct answer (keeps history + effort).
             # Document/generation task → the FULL pipeline below.
             try:
