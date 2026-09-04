@@ -763,6 +763,122 @@ class WeaverOrchestrator:
             for s in task.sections if (s.get("heading") or s.get("body")))
         return True
 
+    # ── statistical_analysis: real stats when a data file is attached ─────────
+    @staticmethod
+    def _data_files(task: Task):
+        """Attached data files (csv/xlsx/xls) the stats skill can analyze."""
+        exts = (".csv", ".xlsx", ".xls")
+        return [f for f in (task.input_files or [])
+                if isinstance(f, str) and f.lower().endswith(exts)]
+
+    @staticmethod
+    def _format_statistics(res, lang: str):
+        """Render analyze()'s REAL computed numbers as a Markdown block
+        (descriptives table + reliability + an honest 'computed, not estimated'
+        note). Returns None on error/empty so nothing fake is ever injected."""
+        if not isinstance(res, dict) or res.get("error"):
+            return None
+        dd = (res.get("descriptives") or {})
+        desc = dd.get("descriptives") or {}
+        n = dd.get("n") or res.get("n")
+        if not desc:
+            return None
+        cols = list(desc.keys())
+        order = ["count", "mean", "std", "min", "25%", "50%", "75%", "max"]
+        first = desc[cols[0]] if cols else {}
+        stats = [k for k in order if k in first] or list(first.keys())
+        labels_ar = {"count": "العدد", "mean": "المتوسط",
+                     "std": "الانحراف المعياري", "min": "الأدنى",
+                     "25%": "الربيع الأول", "50%": "الوسيط",
+                     "75%": "الربيع الثالث", "max": "الأعلى"}
+
+        def _fmt(v):
+            try:
+                return str(round(float(v), 3))
+            except Exception:
+                return str(v)
+        head_stat = "الإحصاء" if lang == "ar" else "Statistic"
+        rows = ["| " + head_stat + " | " + " | ".join(str(c) for c in cols) + " |",
+                "|" + "---|" * (len(cols) + 1)]
+        for st in stats:
+            label = labels_ar.get(st, st) if lang == "ar" else st
+            rows.append("| " + " | ".join(
+                [label] + [_fmt(desc[c].get(st, "")) for c in cols]) + " |")
+        out = []
+        out.append(("حجم العينة: %s. الإحصاءات الوصفية للمتغيّرات العددية:" % n)
+                   if lang == "ar" else
+                   ("Sample size: %s. Descriptive statistics for numeric "
+                    "variables:" % n))
+        out.append("\n".join(rows))
+        rel = res.get("reliability")
+        if isinstance(rel, dict) and "cronbach_alpha" in rel:
+            out.append(
+                ("**ثبات المقياس (كرونباخ ألفا):** %s (%s عبارة، ن=%s) — %s."
+                 % (rel.get("cronbach_alpha"), rel.get("n_items", ""),
+                    rel.get("n", ""), rel.get("interpretation", "")))
+                if lang == "ar" else
+                ("**Reliability (Cronbach's α):** %s (%s items, n=%s) — %s."
+                 % (rel.get("cronbach_alpha"), rel.get("n_items", ""),
+                    rel.get("n", ""), rel.get("interpretation", ""))))
+        out.append("_" + ("الأرقام أعلاه محسوبة فعلياً من الملف المرفق، لم "
+                          "تُقدَّر أو تُختلق." if lang == "ar" else
+                          "The figures above are computed directly from the "
+                          "attached file, not estimated.") + "_")
+        return "\n\n".join(out)
+
+    def _inject_statistics(self, task: Task, card: dict, lang: str, mem):
+        """When a data file is attached, run statistical_analysis.analyze on it
+        and inject the REAL computed results into the document — into a results
+        section if one exists, else as its own 'التحليل الإحصائي' section. Never
+        fabricates numbers: on a library/read error it adds an honest note only.
+        Additive and fully guarded."""
+        files = self._data_files(task)
+        if not files:
+            return
+        path = files[0]
+        try:
+            res = self._skill_call("statistical_analysis", "survey_analysis",
+                                   "analyze", path)
+            # add scale reliability when Likert-type items are detected
+            vt = (res or {}).get("variable_types") or {}
+            likert = [c for c, t in vt.items()
+                      if "likert" in str(t).lower() or "ليكرت" in str(t)]
+            if isinstance(res, dict) and "error" not in res and len(likert) >= 2:
+                res2 = self._skill_call("statistical_analysis",
+                                        "survey_analysis", "analyze", path,
+                                        likert)
+                if isinstance(res2, dict) and "error" not in res2:
+                    res = res2
+        except Exception as e:
+            mem.set_status(6, f"إحصاء (تخطّي: {e})")
+            return
+        card["statistics"] = res
+        block = self._format_statistics(res, lang)
+        head = "التحليل الإحصائي" if lang == "ar" else "Statistical Analysis"
+        if not block:
+            # honest, actionable note — never fake numbers
+            err = res.get("error") if isinstance(res, dict) else "unknown"
+            block = (("تعذّر تنفيذ التحليل الإحصائي على الملف المرفق: %s. "
+                      "قد تحتاج تثبيت المكتبات: pip install pandas scipy." % err)
+                     if lang == "ar" else
+                     ("Could not run the statistical analysis on the attached "
+                      "file: %s. You may need: pip install pandas scipy." % err))
+        idx = next((i for i, s in enumerate(task.sections or [])
+                    if self._section_kind(s.get("heading", "")) == "results"),
+                   None)
+        if idx is not None:
+            cur = task.sections[idx].get("body", "") or ""
+            sub = ("\n\n**التحليل الإحصائي:**\n\n" if lang == "ar"
+                   else "\n\n**Statistical analysis:**\n\n")
+            task.sections[idx]["body"] = cur + sub + block
+        else:
+            task.sections = (task.sections or []) + [{"heading": head,
+                                                      "body": block}]
+        task.draft = "\n\n".join(
+            (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+            for s in task.sections if (s.get("heading") or s.get("body")))
+        mem.set_status(6, "أُدرج التحليل الإحصائي (أرقام محسوبة فعلياً)")
+
     def _route(self, task: Task):
         """Phase 3: from the understood task_card, compute ONCE the tools &
         skills the task needs, so later layers act only on what's required
@@ -2610,6 +2726,9 @@ class WeaverOrchestrator:
         # run matched enrichment skills (task.skills) that have a write-stage
         # handler — turns skill routing into real execution. Additive/guarded.
         self._dispatch_skills(task, card, lang, mem)
+        # when a data file (csv/xlsx) is attached, run REAL statistics on it and
+        # inject the computed results (never invented). Additive/guarded.
+        self._inject_statistics(task, card, lang, mem)
 
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
