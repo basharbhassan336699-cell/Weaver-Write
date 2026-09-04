@@ -3168,6 +3168,7 @@
 
   // ── Chat session tracking (sidebar list + search) ──
   let currentChatId = null;
+  let currentActiveFile = null;   // last produced file path (for edit/append "same file")
   let currentProjectId = (function(){ try { return localStorage.getItem('weaver_current_project') || null; } catch(e){ return null; } })();
   var currentWindowId = null;   // the window a NEWLY created chat belongs to (null = none)
   function wvProjectsRaw(){ try { return JSON.parse(localStorage.getItem('weaver_projects')||'[]'); } catch(e){ return []; } }
@@ -3217,11 +3218,12 @@
     const box = document.getElementById('messages');
     if (box) {
       box.innerHTML = '';
+      currentActiveFile = null;
       currentMessages.forEach(m => {
         if (m.role === 'user') { box.appendChild(makeUserMsg(m.content)); return; }
         const el = makeAiMsg(m.content);
         box.appendChild(el);
-        if (m.file) addFileCard(el, m.file);   // re-create the artifact card
+        if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
       });
       box.scrollTop = box.scrollHeight;
     }
@@ -3643,6 +3645,7 @@
     const input = document.getElementById('mainInput');
     if (input) { input.value = ''; autoResize(input); input.focus(); }
     currentChatId = null;
+    currentActiveFile = null;
     currentMessages = [];
     currentWindowId = null;   // a chat started from the main view is window-less
     renderChatsList();
@@ -3780,7 +3783,7 @@
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
-        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, currentChatId, aiMsg); } }
+        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); currentActiveFile = ev.output_path; if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, currentChatId, aiMsg); } }
         else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
       }
@@ -3791,7 +3794,7 @@
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history, chatId: currentChatId, files: files, effort: effortEl ? effortEl.value : 'medium' })
+          body: JSON.stringify({ message: text, history: history, chatId: currentChatId, files: files, activeFile: currentActiveFile, effort: effortEl ? effortEl.value : 'medium' })
         });
         const reader = res.body.getReader();
         const dec = new TextDecoder();

@@ -494,6 +494,25 @@ class WeaverOrchestrator:
         return getattr(mod, func)(*args, **kwargs)
 
     @staticmethod
+    def _requested_format(text):
+        """Detect an EXPLICIT output format in the request (Word/PDF/PowerPoint/
+        Excel/Markdown) so "احفظه Word/PDF/بوربوينت" is honoured. None otherwise."""
+        t = " " + (text or "").lower() + " "
+        if any(k in t for k in ("بوربوينت", "باوربوينت", "powerpoint", "pptx",
+                                "عرض تقديمي", "شرائح", " slides", " presentation")):
+            return "PPTX"
+        if any(k in t for k in ("اكسل", "إكسل", "excel", "xlsx", "جدول بيانات",
+                                "spreadsheet")):
+            return "XLSX"
+        if any(k in t for k in (" pdf", "pdf ", "بي دي اف", "بيدياف", "بي دي إف")):
+            return "PDF"
+        if any(k in t for k in ("وورد", "word", "docx", "ملف وورد", "مستند وورد")):
+            return "DOCX"
+        if any(k in t for k in ("ماركداون", "markdown", ".md", " md ", "نص فقط")):
+            return "INLINE"
+        return None
+
+    @staticmethod
     def _primary_format(task_card: dict) -> str:
         """The first requested output format as a lowercase string (docx/pptx/
         xlsx/pdf), tolerating either a list or a bare string in the card."""
@@ -779,6 +798,10 @@ class WeaverOrchestrator:
             task.task_card["output_format"] = [of]
         elif not of:
             task.task_card["output_format"] = ["DOCX"]
+        # an explicit format in the request wins (احفظه Word/PDF/بوربوينت/اكسل)
+        _rf = self._requested_format(self._current_request(task.description))
+        if _rf:
+            task.task_card["output_format"] = [_rf]
 
         # Output-language rule: an explicit request wins; otherwise the language
         # of the task INSTRUCTIONS (the current request text), never the chat
