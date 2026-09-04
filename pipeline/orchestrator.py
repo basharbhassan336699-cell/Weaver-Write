@@ -883,6 +883,37 @@ class WeaverOrchestrator:
         return any(k in t for k in kws)
 
     @staticmethod
+    def _search_directives(text):
+        """Explicit search constraints in the request: (site_domain, df).
+        `site_domain` restricts results to one site; `df` is a date range
+        (d/w/m/y). Either may be None."""
+        import re
+        tl = (text or "").lower()
+        site = None
+        m = re.search(r'site:\s*([a-z0-9.\-]+\.[a-z]{2,})', tl)
+        if m:
+            site = m.group(1)
+        else:
+            m = re.search(r'(?:موقع|from|on)\s+'
+                          r'([a-z0-9\-]+\.[a-z]{2,}(?:\.[a-z]{2,})?)', tl)
+            if m:
+                site = m.group(1)
+        df = None
+        if any(k in tl for k in ("اليوم", "today", "آخر يوم", "اخر يوم",
+                                 "past day", "last 24")):
+            df = "d"
+        elif any(k in tl for k in ("هذا الأسبوع", "هذا الاسبوع", "آخر أسبوع",
+                                   "اخر اسبوع", "this week", "past week")):
+            df = "w"
+        elif any(k in tl for k in ("هذا الشهر", "آخر شهر", "اخر شهر",
+                                   "this month", "past month")):
+            df = "m"
+        elif any(k in tl for k in ("هذا العام", "هذه السنة", "آخر سنة",
+                                   "اخر سنة", "this year", "past year")):
+            df = "y"
+        return (site, df)
+
+    @staticmethod
     def _augment_query_with_date(query, lang):
         """Append the current year (and month for daily/'today' intent) to a
         query so engines favour fresh results. The year/month are computed
@@ -2964,13 +2995,20 @@ def quick_live_context_ex(msg, lang="ar", max_chars=6000):
             txt = None
         if txt and txt.strip():
             parts.append(f"[محتوى الرابط: {u}]\n{txt.strip()[:4000]}")
-    # 2) news/recency (only when no URL was pasted) → quick multi-engine search
-    if not urls and WeaverOrchestrator._is_recency_query(msg):
+    # 2) news/recency OR an explicit site/date search (no URL pasted) → search
+    _site, _df_dir = WeaverOrchestrator._search_directives(msg)
+    _recency = WeaverOrchestrator._is_recency_query(msg)
+    if not urls and (_recency or _site or _df_dir):
         try:
-            q = WeaverOrchestrator._augment_query_with_date(msg, lang)
+            q = (WeaverOrchestrator._augment_query_with_date(msg, lang)
+                 if _recency else (msg or "").strip())
+            if _site:
+                q = q + " site:" + _site
+            _df = _df_dir or ("w" if _recency else None)
             results = WeaverOrchestrator._multi_engine_search(
-                q, lang, 6, df="w") or []
-            results = WeaverOrchestrator._sort_results_by_recency(results)
+                q, lang, 6, df=_df) or []
+            if _recency:
+                results = WeaverOrchestrator._sort_results_by_recency(results)
             lines = []
             for r in results[:6]:
                 title = (r.get("title") or "").strip()
@@ -2982,7 +3020,10 @@ def quick_live_context_ex(msg, lang="ar", max_chars=6000):
                 if url:
                     sources.append({"title": title, "url": url})
             if lines:
-                parts.append("[نتائج بحث حيّة، الأحدث أولاً]\n" + "\n".join(lines))
+                _hdr = ("[نتائج بحث حيّة، الأحدث أولاً]" if _recency
+                        else ("[نتائج بحث حيّة من موقع " + _site + "]" if _site
+                              else "[نتائج بحث حيّة]"))
+                parts.append(_hdr + "\n" + "\n".join(lines))
         except Exception:
             pass
     ctx = "\n\n".join(parts).strip()
