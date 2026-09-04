@@ -300,6 +300,46 @@ class WeaverOrchestrator:
                 return "ar"
         return "en"
 
+    # explicit output-language directives (request words → language name the model
+    # will write in). Order matters only for display; matching is substring-based.
+    _LANG_NAMED = (
+        ("العربية", ("بالعربية", "بالعربي", "باللغة العربية", "اكتبها بالعربية",
+                     "اكتبه بالعربية", " عربي ", " عربى ", "in arabic", " arabic")),
+        ("الإنجليزية", ("بالانجليزية", "بالإنجليزية", "بالانكليزية", "بالإنكليزية",
+                        " انجليزي ", " إنجليزي ", "in english", " english")),
+        ("الفرنسية", ("بالفرنسية", "بالفرنسي", "in french", " french")),
+        ("الإسبانية", ("بالاسبانية", "بالإسبانية", "in spanish", " spanish")),
+        ("الألمانية", ("بالالمانية", "بالألمانية", "in german", " german")),
+        ("التركية", ("بالتركية", "in turkish", " turkish")),
+        ("الروسية", ("بالروسية", "in russian", " russian")),
+        ("الصينية", ("بالصينية", "in chinese", " chinese")),
+        ("الأردية", ("بالاردية", "بالأردية", "in urdu", " urdu")),
+        ("الفارسية", ("بالفارسية", "in persian", " persian", " farsi")),
+        ("الهندية", ("بالهندية", "in hindi", " hindi")),
+    )
+    _LANG_SOURCE = (
+        "اللغة الاصلية", "اللغة الأصلية", "بلغتها الاصلية", "بلغتها الأصلية",
+        "بلغته الاصلية", "بلغته الأصلية", "بلغة الاصلية", "بلغة الأصلية",
+        "بلغة الفيديو", "لغة الفيديو", "بلغة المصدر", "بلغة النص الاصلي",
+        "بلغة النص الأصلي", "كما هي بلغتها", "بنفس اللغة", "بنفس لغة",
+        "original language", "source language", "same language",
+        "in its original", "keep the language", "keep it in",
+    )
+
+    @classmethod
+    def _requested_output_lang(cls, text):
+        """Detect an EXPLICIT output-language directive in the request. Returns
+        ("source", None) for the content's own/original language, ("name", <lang>)
+        when a language is named, or (None, None) when unspecified. Substring
+        match on a space-padded, lowercased copy so word forms are tolerant."""
+        t = " " + (text or "").lower() + " "
+        if any(k in t for k in cls._LANG_SOURCE):
+            return ("source", None)
+        for lang, kws in cls._LANG_NAMED:
+            if any(k in t for k in kws):
+                return ("name", lang)
+        return (None, None)
+
     @staticmethod
     def _sourcing_mode(text: str) -> str:
         """How the user wants sourcing handled — conservative: only an EXPLICIT
@@ -599,10 +639,17 @@ class WeaverOrchestrator:
                 res = await _yt.run({"url": yurl, "lang": "ar",
                                      "with_timing": intent["with_timing"]})
                 if getattr(res, "ok", False) and (res.data or {}).get("text"):
+                    # Output language for the SUMMARY: an explicit request wins;
+                    # "source/original" → the video's own language; otherwise the
+                    # language the request itself is written in (never assumed).
+                    _lk, _ln = self._requested_output_lang(_cur)
                     task.task_card = {
                         "task_type": "youtube_" + intent["mode"],
                         "topic": "تلخيص/تفريغ فيديو يوتيوب",
-                        "language": "ar",
+                        "language": ("ar" if (_lk == "name" and _ln == "العربية")
+                                     or (_lk is None
+                                         and self._detect_lang(_cur) == "ar")
+                                     else "en"),
                         "output_format": ["INLINE"],
                         "sourcing_mode": "none",
                         "youtube": {
@@ -611,6 +658,9 @@ class WeaverOrchestrator:
                             "transcript": res.data["text"],
                             "transcript_plain": (res.data or {}).get(
                                 "text_plain", ""),
+                            "out_lang_kind": _lk,      # None | "name" | "source"
+                            "out_lang_name": _ln,      # e.g. "العربية"/"English"
+                            "req_lang": self._detect_lang(_cur),
                         },
                     }
                     task.skills = []
@@ -669,6 +719,23 @@ class WeaverOrchestrator:
             task.task_card["output_format"] = [of]
         elif not of:
             task.task_card["output_format"] = ["DOCX"]
+
+        # Output-language rule: an explicit request wins; otherwise the language
+        # of the task INSTRUCTIONS (the current request text), never the chat
+        # language. The "follow the pasted file/link" case is finalized in
+        # _read_pasted_urls once the file's own language is known.
+        try:
+            _cur3 = self._current_request(task.description)
+            _lk3, _ln3 = self._requested_output_lang(_cur3)
+            if _lk3 == "name":
+                task.task_card["language"] = ("ar" if _ln3 == "العربية" else "en")
+                task.task_card["lang_locked"] = True
+            elif _lk3 == "source":
+                task.task_card["lang_locked"] = "source"   # resolved from content
+            else:
+                task.task_card["language"] = self._detect_lang(_cur3)
+        except Exception:
+            pass
 
         # how the user wants sourcing handled (cited / uncited / none). Detected
         # from the RAW request so an explicit "بدون مصادر" / "دون توثيقها" is
@@ -1541,6 +1608,7 @@ class WeaverOrchestrator:
         self._yt_lang = "ar" if card.get("language", "ar") == "ar" else "en"
         srcs = card.setdefault("sources", [])
         read = 0
+        first_content = ""
         for u in urls[:3]:
             u = u.rstrip('.,)"،')
             try:
@@ -1549,6 +1617,8 @@ class WeaverOrchestrator:
                 txt = None
             if txt and txt.strip():
                 full = txt.strip()
+                if not first_content:
+                    first_content = full
                 srcs.append({"key": u[:60], "url": u, "title": u,
                              "content": full, "full": True, "pasted": True})
                 # feed the FULL content into RAG in chunks (not a 300-char
@@ -1560,6 +1630,10 @@ class WeaverOrchestrator:
         if read:
             card["pasted_reads"] = read
             mem.set_status(4, f"قراءة {read} رابط مُدرَج في الطلب")
+            # "follow the file/link" rule: when the user did NOT lock a language
+            # explicitly, the output follows the SOURCE content's own language.
+            if card.get("lang_locked") is not True and first_content:
+                card["language"] = self._detect_lang(first_content)
 
     async def _tool_web_search(self, query: str, lang: str, limit: int):
         """Fallback: the packaged web_search tool. Returns a results list
@@ -1844,10 +1918,26 @@ class WeaverOrchestrator:
             # Clean (no-timestamp) text drives the summary, so the summary is real
             # prose — never a copy of the timestamped transcript.
             plain = (yt.get("transcript_plain") or "").strip() or transcript
+            # Resolve the SUMMARY output language per the rule: explicit name >
+            # source/original language of the video > the language the request
+            # itself is written in.
+            _lk = yt.get("out_lang_kind")
+            _ln = yt.get("out_lang_name")
+            _en = (yt.get("req_lang") or "ar") == "en"
+            if _lk == "source":
+                _lang_instr = "بنفس لغة النص أدناه (لغته الأصلية)"
+            elif _lk == "name":
+                _lang_instr = "باللغة " + (_ln or "العربية")
+            else:
+                _lang_instr = "بالإنجليزية" if _en else "بالعربية"
+            _h_sum = "Summary" if (_lk == "name" and _ln == "الإنجليزية") \
+                or (_lk is None and _en) else "الخلاصة"
+            _h_tr = "Video transcript" if _h_sum == "Summary" \
+                else "التفريغ النصي للفيديو"
             sections = []
-            # 1) TRANSCRIPT FIRST (when requested)
+            # 1) TRANSCRIPT FIRST (when requested) — always verbatim, its own lang
             if mode in ("transcript", "both"):
-                sections.append({"heading": "التفريغ النصي للفيديو",
+                sections.append({"heading": _h_tr,
                                  "body": transcript, "kind": "transcript"})
             # 2) SUMMARY AFTER the transcript (only when requested)
             if mode in ("summary", "both"):
@@ -1855,27 +1945,27 @@ class WeaverOrchestrator:
                 if self.llm_fn and plain:
                     try:
                         summ = self.llm_fn(
-                            "لخّص النص التالي في نقاط واضحة ومرتّبة بالعربية، دون "
-                            "مقدمة بحثية أو مباحث أو مراجع. اجعل كل نقطة سطراً "
-                            "يبدأ بـ \"- \":\n\n" + plain[:12000],
+                            "لخّص النص التالي " + _lang_instr + " في نقاط واضحة "
+                            "ومرتّبة، دون مقدمة بحثية أو مباحث أو مراجع. اجعل كل "
+                            "نقطة سطراً يبدأ بـ \"- \":\n\n" + plain[:12000],
                             system=self.system_main, temperature=0.4) or ""
                     except Exception as e:
                         mem.set_status(6, f"يوتيوب (تخطّي التلخيص: {e})")
                 summ = summ.strip()
                 if summ:
-                    sections.append({"heading": "الخلاصة", "body": summ,
+                    sections.append({"heading": _h_sum, "body": summ,
                                      "kind": "summary"})
                 elif mode == "summary":
                     # summary-only and generation failed → give the clean text
                     # (not the timestamped dump) with an honest note.
                     note = (plain[:4000] + ("…" if len(plain) > 4000 else ""))
                     sections.append({
-                        "heading": "نص الفيديو",
+                        "heading": _h_tr,
                         "body": "تعذّر توليد ملخّص تلقائي الآن؛ في ما يلي نصّ "
                                 "الفيديو:\n\n" + note, "kind": "summary"})
                 else:
                     # "both": transcript is already shown → just note the miss.
-                    sections.append({"heading": "الخلاصة",
+                    sections.append({"heading": _h_sum,
                                      "body": "تعذّر توليد الملخّص تلقائياً الآن.",
                                      "kind": "summary"})
             task.sections = [{"heading": s["heading"], "body": s["body"]}
