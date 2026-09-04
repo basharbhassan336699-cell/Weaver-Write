@@ -687,6 +687,82 @@ class WeaverOrchestrator:
             return (out or {}).get("text") or None
         return None
 
+    # ── task.skills dispatch ─────────────────────────────────────────────────
+    # _route() matches skills to the task; this turns that match into real
+    # execution. A skill runs ONLY when the task actually selected it (its name
+    # is in task.skills), keeping behaviour targeted. Skills already invoked at
+    # a fixed point (structure/methodology/rewriters/formatters/builders and the
+    # per-section writers above) are NOT re-run here — this dispatch adds the
+    # remaining enrichment skills that had no wiring. Every handler is guarded,
+    # idempotent, and additive; on any miss the draft is left unchanged.
+    def _skill_handlers(self):
+        """skill name → write-stage handler(self, task, card, lang, mem)->bool.
+        A skill absent here is either wired elsewhere (a fixed layer point) or
+        context-gated for a later increment; its match is simply skipped."""
+        return {
+            "literature_review": self._sk_literature_review,
+        }
+
+    def _dispatch_skills(self, task: Task, card: dict, lang: str, mem):
+        """Run the matched skills (task.skills) that have a write-stage handler.
+        Guarded per skill; a failure never breaks the draft."""
+        handlers = self._skill_handlers()
+        for name in list(task.skills or []):
+            h = handlers.get(name)
+            if not h:
+                continue
+            try:
+                if h(task, card, lang, mem):
+                    mem.set_status(6, f"مهارة موزّعة: {name} ✓")
+            except Exception as e:
+                mem.set_status(6, f"مهارة {name} (تخطّي: {e})")
+
+    @staticmethod
+    def _is_literature_title(title: str) -> bool:
+        t = (title or "").strip().lower()
+        return any(k in t for k in (
+            "الدراسات السابقة", "دراسات سابقة", "أدبيات", "الأدبيات",
+            "الإطار النظري", "مراجعة الأدبيات", "literature", "related work",
+            "prior work", "background"))
+
+    def _sk_literature_review(self, task: Task, card: dict, lang: str,
+                              mem) -> bool:
+        """Enrich an EXISTING literature/theoretical-framework section with a
+        theme-organized view of the gathered sources (organize_by_theme). Never
+        invents a section: if no literature section was written, it does nothing.
+        Additive — appends beneath the section's current body."""
+        sources = [s for s in (card.get("sources") or []) if isinstance(s, dict)]
+        if len(sources) < 2 or not task.sections:
+            return False
+        lit_idx = next((i for i, s in enumerate(task.sections)
+                        if self._is_literature_title(s.get("heading", ""))), None)
+        if lit_idx is None:
+            return False
+        refs = [{"key": s.get("key") or (s.get("title", "") or "")[:40],
+                 "text": (s.get("content") or s.get("title", "") or "")}
+                for s in sources]
+        groups = self._skill_call("literature_review", "organize_by_theme",
+                                  "organize_by_theme", refs, None) or {}
+        lines = []
+        for theme, items in groups.items():
+            if theme == "unclassified" or not items:
+                continue
+            keys = "؛ ".join((it.get("key") or "")[:60] for it in items[:6]) \
+                if lang == "ar" else \
+                "; ".join((it.get("key") or "")[:60] for it in items[:6])
+            lines.append(f"- **{theme}**: {keys}")
+        if not lines:
+            return False
+        header = ("\n\n**تنظيم الدراسات موضوعياً:**\n" if lang == "ar"
+                  else "\n\n**Thematic grouping of studies:**\n")
+        cur = task.sections[lit_idx].get("body", "") or ""
+        task.sections[lit_idx]["body"] = cur + header + "\n".join(lines)
+        # rebuild the chat/preview draft to reflect the enriched section
+        task.draft = "\n\n".join(
+            (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+            for s in task.sections if (s.get("heading") or s.get("body")))
+        return True
+
     def _route(self, task: Task):
         """Phase 3: from the understood task_card, compute ONCE the tools &
         skills the task needs, so later layers act only on what's required
@@ -746,6 +822,60 @@ class WeaverOrchestrator:
             card.pop("needs_academic_search", None)
         task.tools = list(dict.fromkeys(task.tools))   # dedupe, keep order
         task.skills = list(dict.fromkeys(task.skills))
+        self._dedupe_tools(task)                        # collapse redundant tools
+
+    # canonical provider for every registered tool. The pipeline ACTS only on
+    # the layer-4 research tools ("active"); every other capability is already
+    # served by a skill or by inline code ("skill"/"inline"), and a few have no
+    # wired path yet ("inactive"). This map resolves the tool/skill duplication
+    # WITHOUT removing any registry entry or file — it only records where each
+    # capability really runs so a matched tool is never double-counted as a
+    # separate action.
+    _TOOL_DELEGATION = {
+        # active — consulted by layer 4 as real actions
+        "web_search": ("active", None),
+        "academic_search": ("active", "_scholarly_search (inline)"),
+        "web_extract": ("active", None),
+        "web_document": ("active", None),
+        "youtube": ("active", None),
+        # served by a skill (export/format/scoring) — driven by output_format /
+        # the relevant layer, not by task.tools
+        "word": ("skill", "docx_builder"),
+        "powerpoint": ("skill", "pptx_builder"),
+        "excel": ("skill", "xlsx_builder"),
+        "pdf": ("skill", "pdf_builder"),
+        "doc_export": ("skill", "docx/pdf/pptx/xlsx_builder"),
+        "chart": ("skill", "chart_builder"),
+        "credibility_check": ("skill", "credibility_scorer"),
+        # served by inline code elsewhere
+        "doc_read": ("inline", "web.server._extract_bytes + core.ocr"),
+        "memory_store": ("inline", "TaskMemory + config/chats"),
+        # present in the registry but with no wired path yet
+        "diagram": ("inactive", None),
+        "csv": ("inactive", None),
+        "calendar": ("inactive", None),
+        "scheduler": ("inactive", None),
+        "mcp_connector": ("inactive", None),
+    }
+
+    def _dedupe_tools(self, task: Task):
+        """Keep in task.tools only the tools the pipeline actually acts on
+        ("active"); record every other matched tool under card['tool_delegation']
+        with the skill/inline path that really serves it, then drop it from the
+        action list. Unknown tools are kept untouched. Additive and safe: no
+        registry entry or tool file is removed."""
+        deleg, kept = {}, []
+        for t in (task.tools or []):
+            d = self._TOOL_DELEGATION.get(t)
+            if d is None:
+                kept.append(t)                 # unknown → leave as-is
+            elif d[0] == "active":
+                kept.append(t)
+            else:
+                deleg[t] = {"via": d[0], "by": d[1]}   # served elsewhere
+        task.tools = list(dict.fromkeys(kept))
+        if deleg:
+            task.task_card["tool_delegation"] = deleg
 
     @staticmethod
     def _current_request(text):
@@ -2477,6 +2607,9 @@ class WeaverOrchestrator:
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
         mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
+        # run matched enrichment skills (task.skills) that have a write-stage
+        # handler — turns skill routing into real execution. Additive/guarded.
+        self._dispatch_skills(task, card, lang, mem)
 
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
