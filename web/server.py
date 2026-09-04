@@ -695,7 +695,22 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     # a system instruction whose depth scales with the chosen effort
     if not (history and history and history[0].get("role") == "system"):
         msgs.append({"role": "system", "content": lvl["system"]})
-    msgs.extend(list(history or []))
+    # Cap history by total characters, keeping the MOST RECENT turns, so a very
+    # long conversation can't overflow the provider's context window (which
+    # would produce a slow or empty reply). Normal-length chats are unaffected —
+    # they fit well under the budget. ~60k chars ≈ a safe input size for the
+    # flash model; the newest messages are always kept.
+    _HIST_CHAR_BUDGET = 60000
+    _hist = list(history or [])
+    _kept, _total = [], 0
+    for _m in reversed(_hist):
+        _c = _m.get("content", "") if isinstance(_m, dict) else str(_m)
+        _total += len(_c or "")
+        if _total > _HIST_CHAR_BUDGET and _kept:
+            break
+        _kept.append(_m)
+    _kept.reverse()
+    msgs.extend(_kept)
     # live context (news search results / pasted-URL content) → answer from it
     if context:
         msgs.append({"role": "system", "content": (
