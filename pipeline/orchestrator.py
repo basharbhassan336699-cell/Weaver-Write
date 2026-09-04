@@ -2599,10 +2599,39 @@ _TASK_TRIGGERS = (
 )
 
 
+def _is_conversation_recap(text: str) -> bool:
+    """True when the user is asking to recap/summarize THIS conversation (not to
+    generate a document). Such a request belongs on the quick path, which sees
+    the full recent history (~30 turns) and answers directly — not the pipeline,
+    which only receives the last few turns and would also save a stray file.
+    Requires BOTH a summary intent AND a reference to the conversation, and no
+    pasted link or explicit file-format request (those mean something else)."""
+    t = (text or "").lower()
+    summary_words = ("لخّص", "لخص", "ملخص", "ملخّص", "لخصلي", "لخّصلي", "اختصر",
+                     "خلاصة", "summar", "recap", "tl;dr", "tldr", "استعرض ما")
+    convo_words = ("المحادثة", "محادثتنا", "محادثه", "الحوار", "النقاش", "الشات",
+                   "الدردشة", "ما قمنا", "ما فعلنا", "ما تحدثنا", "ما دار",
+                   "ما جرى", "كلامنا", "حديثنا", "ما اتفقنا", "conversation",
+                   "this chat", "our chat", "what we did", "this session",
+                   "our discussion", "this thread")
+    doc_words = ("ملف", "وورد", "word", "pdf", "docx", "مستند", "وثيقة",
+                 "بوربوينت", "pptx", "عرض تقديمي", "اكسل", "excel", "تقرير")
+    has_url = ("http://" in t) or ("https://" in t)
+    return (any(w in t for w in summary_words)
+            and any(w in t for w in convo_words)
+            and not any(w in t for w in doc_words)
+            and not has_url)
+
+
 def is_document_task(text: str) -> bool:
     """True when the message asks to produce/analyse a document (→ full
     pipeline); False for a quick conversational question (→ direct answer)."""
     t = (text or "").lower()
+    # A recap of THIS conversation is a quick conversational answer, not a
+    # document to generate → keep it on the fast path (full recent history, no
+    # stray file). This overrides the "summarize" trigger below.
+    if _is_conversation_recap(text):
+        return False
     if any(trig in t for trig in _TASK_TRIGGERS):
         return True
     # A pasted YouTube link is ALWAYS a pipeline task: it must reach the
