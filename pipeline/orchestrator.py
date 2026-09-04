@@ -2879,11 +2879,42 @@ class WeaverOrchestrator:
                 return out
             if fmt == "pptx":
                 out = os.path.join(out_dir, safe + ".pptx")
-                slides = [{"title": s.get("heading", ""),
-                           "bullets": [ln for ln in
-                                       (s.get("body", "") or "").split("\n")
-                                       if ln.strip()]}
-                          for s in sections]
+                # turn each section body into clean slide points (strip markdown
+                # so the deck reads cleanly — build_deck renders text directly)
+                def _slide_points(body):
+                    pts = []
+                    for ln in (body or "").split("\n"):
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        ln = re.sub(r'^[-*•]\s*', '', ln)     # bullet markers
+                        ln = re.sub(r'^#{1,6}\s*', '', ln)    # md headings
+                        ln = re.sub(r'[*_`]+', '', ln).strip()  # inline md
+                        if ln:
+                            pts.append(ln)
+                    return pts
+                plan_sections = [{"title": s.get("heading", ""),
+                                  "points": _slide_points(s.get("body", ""))}
+                                 for s in sections]
+                slides = None
+                # slide_designer: build the slide PLAN (title/points/visual,
+                # ≤5 points per slide, academic skeleton when empty). Its
+                # "points" key is exactly what build_deck consumes. Additive —
+                # on any miss we fall back to a direct mapping below.
+                try:
+                    plan = self._skill_call(
+                        "slide_designer", "design_slides", "design_slides",
+                        title, plan_sections, card.get("slide_count"),
+                        lang, self.llm_fn)
+                    if plan and plan.get("slides"):
+                        slides = plan["slides"]
+                except Exception:
+                    slides = None
+                if not slides:
+                    # fallback with the CORRECT "points" key build_deck reads
+                    # (the previous "bullets" key was silently ignored)
+                    slides = [{"title": s["title"], "points": s["points"]}
+                              for s in plan_sections]
                 self._skill_call("pptx_builder", "build_pptx", "build_pptx",
                                  slides=slides, output_path=out, lang=lang,
                                  title=title)
