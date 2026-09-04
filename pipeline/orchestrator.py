@@ -3008,6 +3008,74 @@ def pipeline_slots():
     return _PIPELINE_GATE.free_slots()
 
 
+def _md_to_sections(md):
+    """Split ready markdown into [{heading, body}] by its '#'/'##' headings."""
+    import re
+    secs, cur_h, cur_b = [], "", []
+    for ln in (md or "").split("\n"):
+        m = re.match(r"^\s{0,3}#{1,6}\s+(.*)$", ln)
+        if m:
+            if cur_h or "".join(cur_b).strip():
+                secs.append({"heading": cur_h,
+                             "body": "\n".join(cur_b).strip()})
+            cur_h, cur_b = m.group(1).strip(), []
+        else:
+            cur_b.append(ln)
+    if cur_h or "".join(cur_b).strip():
+        secs.append({"heading": cur_h, "body": "\n".join(cur_b).strip()})
+    secs = [s for s in secs if s.get("heading") or s.get("body")]
+    return secs or [{"heading": "", "body": (md or "").strip()}]
+
+
+def _derive_title(md, fallback="مستند"):
+    """A document title from the content's first heading, else its first line."""
+    import re
+    for ln in (md or "").split("\n"):
+        m = re.match(r"^\s{0,3}#{1,6}\s+(.*)$", ln)
+        if m and m.group(1).strip():
+            return m.group(1).strip()[:80]
+    for ln in (md or "").split("\n"):
+        s = ln.strip().lstrip("#").strip()
+        if s:
+            return s[:80]
+    return fallback
+
+
+def export_content_to_file(content, fmt="docx", lang="ar", title=None):
+    """Export READY markdown content to a file (docx/pdf/pptx/xlsx) directly, with
+    NO research pipeline — for "أخرج/حوّل الناتج السابق إلى وورد/pdf". The filename
+    comes from the content's own title, never the command. Returns the output path
+    or None. Safe/degrading."""
+    import tempfile
+    content = (content or "").strip()
+    if not content:
+        return None
+    _PIPELINE_GATE.acquire(0)
+    fd, db = tempfile.mkstemp(prefix="weaver_exp_", suffix=".db")
+    os.close(fd)
+    try:
+        orch = WeaverOrchestrator(db_path=db)
+        task = Task(description=(title or _derive_title(content)))
+        task.sections = _md_to_sections(content)
+        task.draft = content
+        task.task_card = {
+            "topic": (title or _derive_title(content)),
+            "language": lang,
+            "output_format": [str(fmt).upper()],
+            "sourcing_mode": "none",
+        }
+        try:
+            return orch._export(task)
+        except Exception:
+            return None
+    finally:
+        try:
+            os.remove(db)
+        except OSError:
+            pass
+        _PIPELINE_GATE.release()
+
+
 def quick_live_context_ex(msg, lang="ar", max_chars=6000):
     """Live context for the QUICK/chat path (used by web + terminal): read any
     URL pasted in the message (a page or a YouTube video) and — for news/recency

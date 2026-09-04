@@ -688,6 +688,50 @@ def _edit_append_file(msg, active_path, effort="medium"):
     return {"reply": note, "output_path": out_path}
 
 
+def _last_assistant_reply(history):
+    """The most recent assistant message content (what "أخرج ذلك" refers to),
+    with our own saved-file note stripped."""
+    for m in reversed(history or []):
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            c = (m.get("content") or "").strip()
+            c = re.sub(r"\n*📄\s*تم حفظ الملف:.*$", "", c).strip()
+            if c:
+                return c
+    return ""
+
+
+def _export_previous_format(msg):
+    """Detect 'export/convert the PREVIOUS reply to a file' and return its format
+    ('DOCX'/'PDF'/'PPTX'/'XLSX'), or None. Must be a PURE export command: an
+    export verb + a format, and NOT a content-creation verb (لخّص/اكتب/…) which
+    would mean a new task. So "أخرج ذلك في ملف وورد" exports the last reply, while
+    "اكتب بحثاً واحفظه وورد" stays a full task."""
+    t = " " + (msg or "").lower() + " "
+    from pipeline.orchestrator import WeaverOrchestrator as _W
+    fmt = _W._requested_format(msg)
+    if not fmt or fmt == "INLINE":
+        return None
+    create = ("لخص", "لخّص", "اكتب", "أكتب", "حلل", "حلّل", "صمم", "صمّم", "انشئ",
+              "أنشئ", "ابحث", "اعمل بحث", "summarize", "write ", "research",
+              "analyze", "analyse", "create a", "make a report")
+    if any(c in t for c in create):
+        return None
+    verbs = ("اخرج", "أخرج", "اخرجه", "أخرجه", "اخرجها", "احفظ", "احفظه",
+             "احفظها", "حول", "حوّل", "حوله", "حوّله", "حولها", "صدر", "صدّر",
+             "صدره", "نزل", "نزّل", "نزله", "خليه", "اجعله", "اجعلها",
+             "export", "save it", "save as", "convert", "turn it into",
+             "turn this into", "make it a", "download it")
+    backref = ("ذلك", "هذا", "هذه", "الملخص", "الملخّص", "الرد", "الرّد", "النص",
+               "النصّ", "ما سبق", "السابق", "الناتج", "الاجابة", "الإجابة",
+               "الكلام", "المحتوى", " it ", " that ", " this ", "the above",
+               "the summary", "the reply", "the result")
+    has_verb = any(v in t for v in verbs)
+    has_ref = any(b in t for b in backref)
+    if has_verb and (has_ref or len((msg or "").split()) <= 7):
+        return fmt
+    return None
+
+
 def _with_attachments_for_task(desc, msg, attach_text):
     """Prepend attached-file content to a pipeline task description so the task is
     performed on it, and (unless the user named a language) force the FILE's own
@@ -1806,6 +1850,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "output_path": ea.get("output_path")})
                     sse({"t": "done"})
                     return
+            # "أخرج/حوّل ذلك إلى وورد/pdf" → export the PREVIOUS reply directly,
+            # in seconds, without re-running the research pipeline.
+            _epf = _export_previous_format(msg)
+            if _epf:
+                _isar0 = any("؀" <= c <= "ۿ" for c in msg)
+                _prev = _last_assistant_reply(body.get("history"))
+                if _prev:
+                    sse({"t": "step", "label": ("إخراج ملف" if _isar0
+                                                else "Exporting file")})
+                    try:
+                        from pipeline.orchestrator import export_content_to_file
+                        _out = export_content_to_file(
+                            _prev, fmt=_epf, lang=("ar" if _isar0 else "en"))
+                    except Exception:
+                        _out = None
+                    if _out:
+                        _note = (("تم إخراج الناتج السابق في ملف: " if _isar0
+                                  else "Exported the previous result to a file: ")
+                                 + _out)
+                        sse({"t": "reply", "reply": _note, "output_path": _out})
+                        sse({"t": "done"})
+                        return
+                    # export failed → fall through to normal handling
             try:
                 from pipeline.orchestrator import is_document_task, run_pipeline_sync
                 _is_task = is_document_task(msg)
@@ -1930,6 +1997,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ea is not None:
                     self._json(ea)
                     return
+            # "أخرج/حوّل ذلك إلى وورد/pdf" → export the previous reply directly
+            _epf = _export_previous_format(msg)
+            if _epf:
+                _isar0 = any("؀" <= c <= "ۿ" for c in msg)
+                _prev = _last_assistant_reply(body.get("history"))
+                if _prev:
+                    try:
+                        from pipeline.orchestrator import export_content_to_file
+                        _out = export_content_to_file(
+                            _prev, fmt=_epf, lang=("ar" if _isar0 else "en"))
+                    except Exception:
+                        _out = None
+                    if _out:
+                        self._json({"reply": (
+                            ("تم إخراج الناتج السابق في ملف: " if _isar0
+                             else "Exported the previous result to a file: ")
+                            + _out), "output_path": _out})
+                        return
             # Quick question → fast direct answer (keeps history + effort).
             # Document/generation task → the FULL pipeline below.
             try:
