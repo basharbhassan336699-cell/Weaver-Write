@@ -496,19 +496,35 @@ class WeaverOrchestrator:
     @staticmethod
     def _requested_format(text):
         """Detect an EXPLICIT output format in the request (Word/PDF/PowerPoint/
-        Excel/Markdown) so "احفظه Word/PDF/بوربوينت" is honoured. None otherwise."""
+        Excel/HTML/Text/Markdown) — broad natural phrasings. None otherwise."""
         t = " " + (text or "").lower() + " "
-        if any(k in t for k in ("بوربوينت", "باوربوينت", "powerpoint", "pptx",
-                                "عرض تقديمي", "شرائح", " slides", " presentation")):
+        if any(k in t for k in (
+                "بوربوينت", "باوربوينت", "بوربوينت", "باور بوينت", "بور بوينت",
+                "powerpoint", "power point", "pptx", "ppt ", "عرض تقديمي",
+                "عرض بوربوينت", "شرائح", "شريحة", "بريزنتيشن", " slides",
+                " presentation", "deck")):
             return "PPTX"
-        if any(k in t for k in ("اكسل", "إكسل", "excel", "xlsx", "جدول بيانات",
-                                "spreadsheet")):
+        if any(k in t for k in (
+                "اكسل", "إكسل", "اكسيل", "excel", "xlsx", "xls ", "جدول بيانات",
+                "جدول اكسل", "شيت", "spreadsheet", "sheet")):
             return "XLSX"
-        if any(k in t for k in (" pdf", "pdf ", "بي دي اف", "بيدياف", "بي دي إف")):
+        if any(k in t for k in (
+                " html", " htm ", "اتش تي ام ال", "صفحة ويب", "صفحة انترنت",
+                "صفحه ويب", "webpage", "web page", "html file")):
+            return "HTML"
+        if any(k in t for k in (
+                " pdf", "pdf ", "بي دي اف", "بيدياف", "بي دي إف", "ملف pdf")):
             return "PDF"
-        if any(k in t for k in ("وورد", "word", "docx", "ملف وورد", "مستند وورد")):
+        if any(k in t for k in (
+                "وورد", "word", "docx", "doc ", "ملف وورد", "مستند وورد",
+                "مايكروسوفت وورد", "ورد ", "word document")):
             return "DOCX"
-        if any(k in t for k in ("ماركداون", "markdown", ".md", " md ", "نص فقط")):
+        if any(k in t for k in (
+                "ملف نصي", "ملف نصّي", "نص عادي", "نصي فقط", "txt", ".txt",
+                "text file", "plain text", "as text")):
+            return "TXT"
+        if any(k in t for k in (
+                "ماركداون", "ماركدوان", "markdown", ".md", " md ", "نص فقط")):
             return "INLINE"
         return None
 
@@ -2586,9 +2602,60 @@ class WeaverOrchestrator:
                                  data=data, output_path=out, headers=headers,
                                  lang=lang)
                 return out
+            if fmt in ("txt", "text"):
+                out = os.path.join(out_dir, safe + ".txt")
+                body = "\n\n".join(
+                    ((s.get("heading", "") + "\n") if s.get("heading") else "")
+                    + (s.get("body", "") or "") for s in sections).strip()
+                body = re.sub(r'^[ \t]*#{1,6}[ \t]*', '', body, flags=re.M)
+                body = re.sub(r'[*_`]+', '', body)
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(body)
+                return out
+            if fmt in ("html", "htm"):
+                out = os.path.join(out_dir, safe + ".html")
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(self._sections_to_html(title, sections, lang))
+                return out
         except Exception:
             return self._export_fallback(out_dir, safe, task)
         return self._export_fallback(out_dir, safe, task)
+
+    @staticmethod
+    def _sections_to_html(title, sections, lang="ar"):
+        """A clean standalone HTML document from [{heading, body}] sections."""
+        import html as _h
+        import re as _r
+        rtl = "rtl" if lang == "ar" else "ltr"
+        parts = ["<!doctype html><html lang=\"" + ("ar" if lang == "ar" else "en")
+                 + "\" dir=\"" + rtl + "\"><head><meta charset=\"utf-8\">"
+                 "<meta name=\"viewport\" content=\"width=device-width,"
+                 "initial-scale=1\"><title>" + _h.escape(title or "") + "</title>"
+                 "<style>body{font-family:system-ui,'Segoe UI',Arial,sans-serif;"
+                 "line-height:1.8;max-width:820px;margin:24px auto;padding:0 16px;"
+                 "color:#1a1a1a}h1,h2,h3{line-height:1.3}a{color:#1a56db}"
+                 "@media(prefers-color-scheme:dark){body{background:#111;color:#eee}"
+                 "a{color:#7aa2ff}}</style></head><body>"]
+        if title:
+            parts.append("<h1>" + _h.escape(title) + "</h1>")
+        for s in sections:
+            hd = (s.get("heading") or "").strip()
+            if hd:
+                parts.append("<h2>" + _h.escape(hd) + "</h2>")
+            for para in _r.split(r"\n\s*\n", (s.get("body") or "").strip()):
+                para = para.strip()
+                if not para:
+                    continue
+                lines = [ln.strip() for ln in para.split("\n") if ln.strip()]
+                if lines and all(_r.match(r'^[-*•]\s+', ln) for ln in lines):
+                    parts.append("<ul>" + "".join(
+                        "<li>" + _h.escape(_r.sub(r'^[-*•]\s+', '', ln)) + "</li>"
+                        for ln in lines) + "</ul>")
+                else:
+                    parts.append("<p>" + "<br>".join(_h.escape(ln)
+                                                     for ln in lines) + "</p>")
+        parts.append("</body></html>")
+        return "".join(parts)
 
     def _source_note(self, task: Task):
         """Prepend a short, honest note when the document was written without
@@ -3041,6 +3108,64 @@ def _derive_title(md, fallback="مستند"):
     return fallback
 
 
+def _content_to_slides(llm_fn, content, lang="ar"):
+    """Ask the model to reshape ready content into presentation slides. Returns
+    [{heading, body}] (one per slide, body = bullet lines) or None."""
+    if not llm_fn:
+        return None
+    try:
+        from core.llm import extract_json
+        prompt = (
+            "حوّل المحتوى التالي إلى شرائح عرض تقديمي واضحة. أعِد JSON فقط: "
+            "{\"slides\":[{\"title\":\"عنوان قصير\",\"bullets\":[\"نقطة\",...]}]}"
+            " — عناوين موجزة و3 إلى 6 نقاط قصيرة لكل شريحة، دون أي شرح خارج JSON:\n\n"
+            if lang == "ar" else
+            "Turn the following into clear presentation slides. Return JSON only: "
+            "{\"slides\":[{\"title\":\"short\",\"bullets\":[\"point\",...]}]} — "
+            "concise titles, 3-6 short bullets each, nothing outside JSON:\n\n"
+        ) + (content or "")[:9000]
+        data = extract_json(llm_fn(prompt, temperature=0.3)) or {}
+        slides = data.get("slides") or []
+        out = []
+        for s in slides:
+            if not isinstance(s, dict):
+                continue
+            bl = [str(b).strip() for b in (s.get("bullets") or []) if str(b).strip()]
+            out.append({"heading": str(s.get("title", "")).strip(),
+                        "body": "\n".join("- " + b for b in bl)})
+        return out or None
+    except Exception:
+        return None
+
+
+def _content_to_table(llm_fn, content, lang="ar"):
+    """Ask the model to extract a table from content. Returns
+    {"headers":[...], "rows":[[...],...]} or None."""
+    if not llm_fn:
+        return None
+    try:
+        from core.llm import extract_json
+        prompt = (
+            "استخرج من المحتوى التالي جدولاً منظّماً. أعِد JSON فقط: "
+            "{\"headers\":[\"عمود1\",\"عمود2\",...],\"rows\":[[\"..\",\"..\"],...]}"
+            " — إن كان المحتوى نقاطاً، اجعل عمودين: \"النقطة\" و\"التفصيل\". دون "
+            "أي نص خارج JSON:\n\n"
+            if lang == "ar" else
+            "Extract a structured table from the content. Return JSON only: "
+            "{\"headers\":[...],\"rows\":[[...],...]} — if it's bullet points use "
+            "two columns \"Point\" and \"Detail\". Nothing outside JSON:\n\n"
+        ) + (content or "")[:9000]
+        data = extract_json(llm_fn(prompt, temperature=0.2)) or {}
+        headers = data.get("headers") or []
+        rows = data.get("rows") or []
+        rows = [[str(c) for c in r] for r in rows if isinstance(r, list) and r]
+        if headers and rows:
+            return {"headers": [str(h) for h in headers], "rows": rows}
+        return None
+    except Exception:
+        return None
+
+
 def export_content_to_file(content, fmt="docx", lang="ar", title=None):
     """Export READY markdown content to a file (docx/pdf/pptx/xlsx) directly, with
     NO research pipeline — for "أخرج/حوّل الناتج السابق إلى وورد/pdf". The filename
@@ -3055,15 +3180,27 @@ def export_content_to_file(content, fmt="docx", lang="ar", title=None):
     os.close(fd)
     try:
         orch = WeaverOrchestrator(db_path=db)
-        task = Task(description=(title or _derive_title(content)))
-        task.sections = _md_to_sections(content)
+        fmtU = str(fmt).upper()
+        ttl = title or _derive_title(content)
+        task = Task(description=ttl)
         task.draft = content
         task.task_card = {
-            "topic": (title or _derive_title(content)),
-            "language": lang,
-            "output_format": [str(fmt).upper()],
-            "sourcing_mode": "none",
+            "topic": ttl, "language": lang,
+            "output_format": [fmtU], "sourcing_mode": "none",
         }
+        # smart restructuring so PowerPoint/Excel aren't just a text dump
+        if fmtU == "PPTX":
+            task.sections = (_content_to_slides(getattr(orch, "llm_fn", None),
+                                                content, lang)
+                             or _md_to_sections(content))
+        elif fmtU == "XLSX":
+            tbl = _content_to_table(getattr(orch, "llm_fn", None), content, lang)
+            if tbl:
+                task.task_card["headers"] = tbl.get("headers")
+                task.task_card["data"] = tbl.get("rows")
+            task.sections = _md_to_sections(content)
+        else:
+            task.sections = _md_to_sections(content)
         try:
             return orch._export(task)
         except Exception:
