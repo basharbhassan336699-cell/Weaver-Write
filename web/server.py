@@ -384,6 +384,116 @@ def _chat_remove(cid):
         pass
 
 
+# ── cross-conversation memory ────────────────────────────────────────────────
+# The persisted chats (config/chats/*.json) ARE the long-term memory. On a new
+# message we retrieve the user's OTHER past chats that are lexically relevant and
+# inject a compact digest, so the assistant has continuity across conversations.
+# Fully offline (no embeddings), additive, and degrading (any failure → nothing
+# injected). Disable with WEAVER_MEMORY=0.
+_AR_STOP = set((
+    "في من الى إلى على عن مع هذا هذه هذان هؤلاء ذلك تلك التي الذي الذين ما ماذا "
+    "كيف هل و او أو ثم قد كل بعض هو هي انا أنا انت أنت نحن لك لي له لها به بها "
+    "عند عندما لكن بل لا نعم يا اي أي كذا كما حتى إذا اذا لان لأن حول نحو دون بين"
+).split())
+_EN_STOP = set((
+    "the a an of to in on for and or is are was were be been being this that "
+    "these those with what how do does did you i we it as at by from your our "
+    "can could would should will just about into over than then them they"
+).split())
+
+
+def _sig_terms(text):
+    """Significant, normalized terms of a text (Arabic-folded, stopword- and
+    short-word-filtered) used for lexical relevance scoring."""
+    norm = _normalize_ar((text or "").lower())
+    out = set()
+    for w in re.findall(r"[a-z0-9؀-ۿ]+", norm):
+        if len(w) < 3 or w in _AR_STOP or w in _EN_STOP:
+            continue
+        out.add(w)
+    return out
+
+
+def _chat_digest(d, maxlen=600):
+    """A compact digest of a stored chat — the user's own questions capture its
+    intent best, with a fallback to the first non-empty message."""
+    ups = []
+    for m in d.get("messages", []) or []:
+        if isinstance(m, dict) and m.get("role") == "user":
+            c = (m.get("content") or "").strip().replace("\n", " ")
+            if c:
+                ups.append(c)
+    text = " | ".join(ups[:6])
+    if not text:
+        for m in d.get("messages", []) or []:
+            c = (m.get("content", "") if isinstance(m, dict) else str(m)).strip()
+            if c:
+                text = c.replace("\n", " ")
+                break
+    return text[:maxlen]
+
+
+def _recall_memory(query, exclude_id=None, k=3, budget=2600):
+    """Return a compact 'memory from past conversations' block relevant to
+    `query`, or "". Scans the most recent stored chats, scores each by shared
+    significant terms (title matches weighted), and includes the top few that
+    clear a minimum relevance. Offline and safe — any failure returns ""."""
+    if os.environ.get("WEAVER_MEMORY", "1").strip().lower() in ("0", "off", "false"):
+        return ""
+    terms = _sig_terms(query)
+    if len(terms) < 2:            # too little signal → don't inject / don't scan
+        return ""
+    try:
+        names = os.listdir(_CHATS_DIR)
+    except OSError:
+        return ""
+    files = []
+    for fn in names:
+        if not fn.endswith(".json"):
+            continue
+        p = os.path.join(_CHATS_DIR, fn)
+        try:
+            files.append((os.path.getmtime(p), p))
+        except OSError:
+            pass
+    files.sort(reverse=True)      # newest first
+    scored = []
+    for _mt, p in files[:200]:    # cap the scan for speed
+        try:
+            d = json.load(open(p, encoding="utf-8"))
+        except Exception:
+            continue
+        if exclude_id and d.get("id") == exclude_id:
+            continue
+        msgs = d.get("messages", []) or []
+        if not msgs:
+            continue
+        title = d.get("title", "") or ""
+        blob = title + " " + " ".join(
+            (m.get("content", "") if isinstance(m, dict) else str(m))
+            for m in msgs[:40])
+        overlap = terms & _sig_terms(blob)
+        if not overlap:
+            continue
+        score = len(overlap) + (2 if (_sig_terms(title) & terms) else 0)
+        scored.append((score, d.get("ts", 0), d))
+    if not scored:
+        return ""
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    parts, total = [], 0
+    for score, _ts, d in scored:
+        if score < 2:             # require ≥2 shared terms (or a title hit)
+            continue
+        block = "• [" + (d.get("title") or "محادثة") + "]\n" + _chat_digest(d)
+        if total + len(block) > budget and parts:
+            break
+        parts.append(block)
+        total += len(block)
+        if len(parts) >= k:
+            break
+    return "\n\n".join(parts)
+
+
 # ── windows (workspaces): each groups its own chats; the main list shows all ──
 _WINDOWS_FILE = os.path.join(_ROOT, "config", "windows.json")
 
@@ -664,7 +774,7 @@ def _sources_md(sources, isar: bool) -> str:
 
 
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
-          context: str = None) -> dict:
+          context: str = None, memory: str = None) -> dict:
     """Send a message to the configured provider using the saved key and return
     the assistant reply. OpenAI-compatible /chat/completions (works for the
     registry providers, incl. Anthropic's and Google's compatible endpoints).
@@ -711,6 +821,15 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
         _kept.append(_m)
     _kept.reverse()
     msgs.extend(_kept)
+    # memory from the user's OTHER past conversations (cross-conversation
+    # continuity) → injected as guidance the model may use or ignore
+    if memory:
+        msgs.append({"role": "system", "content": (
+            "ذاكرة من محادثات المستخدم السابقة، قد تكون ذات صلة بسؤاله الحالي. "
+            "استعن بها للاستمرارية والسياق إن كانت مفيدة، وتجاهلها تماماً إن لم "
+            "تكن ذات صلة، ولا تخترع منها ما ليس فيها:\n"
+            "Memory from the user's earlier conversations — use for continuity "
+            "if relevant, ignore if not:\n\n" + memory)})
     # live context (news search results / pasted-URL content) → answer from it
     if context:
         msgs.append({"role": "system", "content": (
@@ -1153,11 +1272,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
                 except Exception:
                     ctx, srcs = "", []
+                mem_ctx = ""
+                try:
+                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"))
+                except Exception:
+                    mem_ctx = ""
                 sse({"t": "step", "label": (
                     ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
                 r = _chat(msg, body.get("history"),
-                          effort=body.get("effort", "medium"), context=ctx)
+                          effort=body.get("effort", "medium"), context=ctx,
+                          memory=mem_ctx)
                 if r.get("error"):
                     if r.get("error") == "no_key":
                         sse({"t": "reply", "reply": (
@@ -1235,8 +1360,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
                 except Exception:
                     ctx, srcs = "", []
+                mem_ctx = ""
+                try:
+                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"))
+                except Exception:
+                    mem_ctx = ""
                 r = _chat(msg, body.get("history"),
-                          effort=body.get("effort", "medium"), context=ctx)
+                          effort=body.get("effort", "medium"), context=ctx,
+                          memory=mem_ctx)
                 if not r.get("error") and (r.get("reply") or "").strip():
                     r["reply"] = r["reply"] + _sources_md(srcs, isar)
                 self._json(r)
