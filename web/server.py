@@ -491,11 +491,81 @@ def _chat_digest(d, maxlen=600):
     return text[:maxlen]
 
 
-def _recall_memory(query, exclude_id=None, k=3, budget=2600):
+_RECALL_CUES = (
+    "تذكر", "ذكرني", "سبق", "تحدثنا", "تكلمنا", "قلنا", "اتفقنا", "المحادثه",
+    "محادثه", "سابق", "كالسابق", "زي ما", "مثل ما", "الي فات", "نفس الي",
+    "remember", "we discussed", "earlier", "previously", "last time",
+    "we talked", "before we", "recall",
+)
+
+
+def _wants_recall(query):
+    """True when the message references earlier context (so a model-assisted
+    SEMANTIC lookup is worth its one small call). Arabic-folded matching."""
+    t = _normalize_ar((query or "").lower())
+    return any(c in t for c in _RECALL_CUES)
+
+
+def _semantic_expand(query, timeout=20):
+    """Ask the configured model for related keywords / synonyms / concepts in BOTH
+    Arabic and English, so recall can match by MEANING even when the wording is
+    different. Returns a set of normalized terms, or an empty set on any failure
+    (no key, no network, bad reply) → recall silently stays lexical."""
+    try:
+        s = keysync.get_settings()
+        key = (s.get("WEAVER_API_KEY") or "").strip()
+        if not key:
+            return set()
+        base = (s.get("WEAVER_BASE_URL") or "").rstrip("/")
+        model = s.get("WEAVER_MODEL") or ""
+        if not base:
+            det = getattr(keysync, "detect_provider", lambda _k: None)(key)
+            if det:
+                base = (det[0] or "").rstrip("/")
+                model = model or det[1]
+        if not base:
+            return set()
+        import urllib.request
+        prompt = (
+            "استخرج كلمات مفتاحية ومرادفات ومفاهيم قريبة من هذا الطلب لأغراض "
+            "البحث الدلالي، بالعربية والإنجليزية معاً. أعِد كلمات مفصولة بفواصل "
+            "فقط (5 إلى 14 كلمة)، دون أي شرح:\n\n" + (query or "")[:500])
+        payload = json.dumps({"model": model, "messages": [
+            {"role": "user", "content": prompt}], "max_tokens": 120,
+            "temperature": 0.3}).encode("utf-8")
+        req = urllib.request.Request(
+            base + "/chat/completions", data=payload, method="POST",
+            headers={"Content-Type": "application/json",
+                     "Authorization": "Bearer " + key, "x-api-key": key,
+                     "anthropic-version": "2023-06-01"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        txt = ""
+        try:
+            txt = data["choices"][0]["message"]["content"] or ""
+        except Exception:
+            c = data.get("content")
+            if isinstance(c, list):
+                txt = "".join(p.get("text", "") for p in c if isinstance(p, dict))
+            elif isinstance(c, str):
+                txt = c
+        out = set()
+        for part in re.split(r"[,\n،;؛]+", txt):
+            out |= _sig_terms(part)
+        return out
+    except Exception:
+        return set()
+
+
+def _recall_memory(query, exclude_id=None, k=3, budget=2600, semantic=None):
     """Return a compact 'memory from past conversations' block relevant to
-    `query`, or "". Scans the most recent stored chats, scores each by shared
-    significant terms (title matches weighted), and includes the top few that
-    clear a minimum relevance. Offline and safe — any failure returns ""."""
+    `query`, or "". Lexical first (shared significant terms, title weighted,
+    includes produced-document bodies). If lexical finds nothing, a MODEL-based
+    semantic expansion (Arabic+English synonyms/concepts) is tried once to match
+    by meaning — but only when it's worth the call: `semantic=True` always tries,
+    `semantic=False` never, and the default tries only when the message
+    references earlier context. Offline/degrading — any failure returns ""."""
+    import urllib.request  # noqa: F401  (used indirectly via _semantic_expand)
     if os.environ.get("WEAVER_MEMORY", "1").strip().lower() in ("0", "off", "false"):
         return ""
     terms = _sig_terms(query)
@@ -515,8 +585,10 @@ def _recall_memory(query, exclude_id=None, k=3, budget=2600):
         except OSError:
             pass
     files.sort(reverse=True)      # newest first
-    scored = []
-    for _mt, p in files[:200]:    # cap the scan for speed
+    # load candidates ONCE (disk), so an optional semantic re-rank costs no extra
+    # I/O — only term-set math.
+    cands = []
+    for _mt, p in files[:200]:
         try:
             d = json.load(open(p, encoding="utf-8"))
         except Exception:
@@ -531,11 +603,26 @@ def _recall_memory(query, exclude_id=None, k=3, budget=2600):
         blob = title + " " + " ".join(
             (m.get("content", "") if isinstance(m, dict) else str(m))
             for m in msgs[:40]) + " " + doc[:8000]
-        overlap = terms & _sig_terms(blob)
-        if not overlap:
-            continue
-        score = len(overlap) + (2 if (_sig_terms(title) & terms) else 0)
-        scored.append((score, d.get("ts", 0), d))
+        cands.append((d, _sig_terms(blob), _sig_terms(title)))
+
+    def _rank(qterms):
+        out = []
+        for d, bterms, tterms in cands:
+            overlap = qterms & bterms
+            if not overlap:
+                continue
+            out.append((len(overlap) + (2 if (tterms & qterms) else 0),
+                        d.get("ts", 0), d))
+        return out
+
+    scored = _rank(terms)
+    if not scored:
+        # lexical miss → try semantic bridging when worthwhile
+        try_sem = (semantic is True) or (semantic is None and _wants_recall(query))
+        if try_sem:
+            extra = _semantic_expand(query)
+            if extra:
+                scored = _rank(terms | extra)
     if not scored:
         return ""
     scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
@@ -559,7 +646,7 @@ def _with_memory_for_task(desc, msg, chat_id):
     references/studies/sources, new angles, different wording). Returns desc
     unchanged when there is no relevant memory. Safe/degrading."""
     try:
-        mem = _recall_memory(msg, exclude_id=chat_id)
+        mem = _recall_memory(msg, exclude_id=chat_id, semantic=True)
     except Exception:
         mem = ""
     if not mem:
