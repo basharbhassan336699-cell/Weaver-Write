@@ -547,6 +547,146 @@ class WeaverOrchestrator:
             "output_format": ["DOCX"],
         }
 
+    @staticmethod
+    def _model_strength() -> str:
+        """Estimate the running model's strength — "small" | "medium" | "large".
+
+        Order: an explicit override (WEAVER_MODEL_STRENGTH) wins; otherwise the
+        model NAME (WEAVER_MODEL) is matched against size hints. Purpose: let
+        every layer adapt depth/temperature/length to the model's ceiling so a
+        small model works reliably at its own peak, and a large one is used to
+        its full depth — without changing any skill. Unknown → "medium"."""
+        import os as _os
+        ov = (_os.environ.get("WEAVER_MODEL_STRENGTH", "") or "").strip().lower()
+        if ov in ("small", "weak", "low", "tiny", "ضعيف", "صغير"):
+            return "small"
+        if ov in ("medium", "mid", "متوسط"):
+            return "medium"
+        if ov in ("large", "strong", "high", "big", "كبير", "قوي"):
+            return "large"
+        name = (_os.environ.get("WEAVER_MODEL", "") or "").lower()
+        large_kw = ("opus", "ultra", "pro", "70b", "72b", "65b", "405b", "110b",
+                    "large", "huge", "32b", "34b", "-max", "gpt-4o", "gpt-4.1",
+                    "o1", "o3", "sonnet-4", "sonnet-5", "opus-5")
+        small_kw = ("flash", "mini", "nano", "lite", "tiny", "small", "0.5b",
+                    "1b", "1.5b", "2b", "3b", "4b", "7b", "8b", "9b", "haiku")
+        # a small/flash/mini variant is small even inside a large family
+        # (e.g. gpt-4o-mini, gemini-flash) → check the small hints first
+        if any(k in name for k in small_kw):
+            return "small"
+        if any(k in name for k in large_kw):
+            return "large"
+        return "medium"
+
+    @staticmethod
+    def _strength_profile(strength: str) -> dict:
+        """Per-strength writing profile: model temperature, target words for a
+        specialized intro, and a depth directive appended to the generic section
+        prompt. Adapts OUTPUT to the model ceiling — never fabricates capability
+        a small model lacks; it raises the reliable floor and unlocks depth on a
+        capable model. Returns a dict always usable (unknown → medium)."""
+        s = (strength or "medium").lower()
+        if s == "small":
+            return {
+                "temp": 0.35,
+                "intro_words": 220,
+                "depth": (
+                    "النموذج محدود الطاقة: اكتب بجُملٍ قصيرة واضحة ومباشرة، وركّز "
+                    "على النقاط الجوهرية دون حشوٍ أو استطراد، ورتّب الأفكار في "
+                    "فقراتٍ قصيرة. الدقّة والوضوح والالتزام بالمصادر أهمّ من الطول "
+                    "(استهدف نحو 180–260 كلمة لهذا القسم)."),
+                "depth_en": (
+                    "The model has limited capacity: write short, clear, direct "
+                    "sentences; focus on the essential points with no padding; "
+                    "keep paragraphs short. Accuracy, clarity and staying on "
+                    "sources matter more than length (aim ~180–260 words)."),
+            }
+        if s == "large":
+            return {
+                "temp": 0.6,
+                "intro_words": 650,
+                "depth": (
+                    "استغلّ طاقة النموذج الكاملة: حلّل بعمق، واعرض وجهات النظر "
+                    "المختلفة، واربط الأفكار ببعضها بنقدٍ علميّ وأمثلةٍ دقيقة، مع "
+                    "التزامٍ صارمٍ بالمصادر (استهدف نحو 500–800 كلمة لهذا القسم)."),
+                "depth_en": (
+                    "Use the model's full capacity: analyze in depth, present "
+                    "differing viewpoints, and connect ideas with scholarly "
+                    "critique and precise examples, strictly grounded in the "
+                    "sources (aim ~500–800 words)."),
+            }
+        return {"temp": 0.5, "intro_words": 400, "depth": "", "depth_en": ""}
+
+    @staticmethod
+    def _section_kind(title: str):
+        """Classify a section title into a purpose-built writer kind:
+        "intro" | "conclusion" | "results" | None (→ generic writer)."""
+        t = (title or "").strip().lower()
+        if not t:
+            return None
+        intro_kw = ("مقدمة", "المقدمة", "تمهيد", "introduction", "intro")
+        concl_kw = ("خاتمة", "الخاتمة", "خلاصة", "الخلاصة", "استنتاج",
+                    "الاستنتاجات", "التوصيات", "توصيات", "conclusion",
+                    "recommendation", "closing")
+        res_kw = ("النتائج", "نتائج", "تحليل النتائج", "عرض النتائج",
+                  "results", "findings")
+        if any(k in t for k in intro_kw):
+            return "intro"
+        if any(k in t for k in concl_kw):
+            return "conclusion"
+        if any(k in t for k in res_kw):
+            return "results"
+        return None
+
+    def _write_section_specialized(self, title, card, lang, mode, no_ctx,
+                                   prior_sections, prof):
+        """Route a section to its purpose-built writer skill when the section
+        type AND sourcing mode fit, returning prose text — or None to let the
+        generic writer handle it. Purely additive: every skill call is guarded
+        by the caller, so any miss falls back to the existing generic path.
+
+        Bindings (skills already present, only wired here):
+          intro       → research_intro.build_intro
+          conclusion  → conclusion_writer.build_conclusion
+          results     → results_formatter.format_results (also uses table_builder)
+        """
+        if not self.llm_fn:
+            return None
+        kind = self._section_kind(title)
+        if not kind:
+            return None
+        topic = card.get("topic", "") or title
+        if kind == "intro" and mode == "cited" and not no_ctx:
+            refs = []
+            for s in (card.get("sources") or [])[:12]:
+                if isinstance(s, dict):
+                    refs.append({
+                        "key": s.get("key") or (s.get("title", "") or "")[:40],
+                        "text": (s.get("content") or s.get("title", "") or "")[:160],
+                        "page": s.get("page", "")})
+            out = self._skill_call(
+                "research_intro", "build_intro", "build_intro",
+                topic, refs, int(prof.get("intro_words", 400)), lang, self.llm_fn)
+            return (out or {}).get("text") or None
+        if kind == "conclusion" and mode != "none":
+            findings = []
+            for sec in (prior_sections or [])[-8:]:
+                b = (sec.get("body") or "").strip()
+                if b:
+                    first = b.split("\n", 1)[0].strip()[:200]
+                    if first:
+                        findings.append(first)
+            out = self._skill_call(
+                "conclusion_writer", "build_conclusion", "build_conclusion",
+                topic, findings, lang, self.llm_fn)
+            return (out or {}).get("text") or None
+        if kind == "results" and mode != "none":
+            out = self._skill_call(
+                "results_formatter", "format_results", "format_results",
+                [{"title": title, "note": ""}], lang, self.llm_fn)
+            return (out or {}).get("text") or None
+        return None
+
     def _route(self, task: Task):
         """Phase 3: from the understood task_card, compute ONCE the tools &
         skills the task needs, so later layers act only on what's required
@@ -2073,6 +2213,13 @@ class WeaverOrchestrator:
         mem.set_status(6, "صياغة البحث")
         card = task.task_card
         lang = card.get("language", "ar")
+        # adapt every writer to the running model's ceiling (small/medium/large)
+        # so it works reliably at its own peak. Set once; read by this layer and
+        # by weak_model_support below. Additive — default stays "medium".
+        try:
+            card.setdefault("model_strength", self._model_strength())
+        except Exception:
+            pass
 
         # ── YouTube path: produce the summary / transcript directly, with NO
         #    research structure or methodology, then return early.
@@ -2253,11 +2400,24 @@ class WeaverOrchestrator:
         # the model's knowledge and flag it so a clear note is added later.
         if mode == "cited" and no_ctx:
             card["sources_unavailable"] = True
+        prof = self._strength_profile(card.get("model_strength", "medium"))
         parts, out_sections = [], []
         for sec in sections_plan:
             title = sec.get("title") or sec.get("heading") or ""
             body = ""
+            # ── bound specialized section writers (skills already present, wired
+            #    here) — additive: on any miss the generic writer below runs
+            #    unchanged, keeping full backward compatibility ──
             if self.llm_fn:
+                try:
+                    _spec = self._write_section_specialized(
+                        title, card, lang, mode, no_ctx, out_sections, prof)
+                except Exception as e:
+                    _spec = None
+                    mem.set_status(6, f"مهارة قسم (تخطّي: {e})")
+                if _spec:
+                    body = _spec
+            if self.llm_fn and not body:
                 from pipeline import prompts as _p
                 if mode == "uncited":
                     prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
@@ -2281,8 +2441,13 @@ class WeaverOrchestrator:
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
                     system = _p.SYSTEM_PROMPT_WRITE
+                # adapt depth/length + temperature to the model's ceiling
+                _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
+                if _depth:
+                    prompt = prompt + "\n\n" + _depth
                 try:
-                    body = self.llm_fn(prompt, system=system, temperature=0.5)
+                    body = self.llm_fn(prompt, system=system,
+                                       temperature=prof.get("temp", 0.5))
                 except Exception as e:
                     mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
                 # guard: a conversational model may answer with a greeting /
