@@ -3779,7 +3779,7 @@
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history, effort: effortEl ? effortEl.value : 'medium' })
+          body: JSON.stringify({ message: text, history: history, chatId: currentChatId, effort: effortEl ? effortEl.value : 'medium' })
         });
         const reader = res.body.getReader();
         const dec = new TextDecoder();
