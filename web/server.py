@@ -1439,7 +1439,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ctx, srcs = "", []
                 mem_ctx = ""
                 try:
-                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"))
+                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
                 except Exception:
                     mem_ctx = ""
                 sse({"t": "step", "label": (
@@ -1532,7 +1532,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ctx, srcs = "", []
                 mem_ctx = ""
                 try:
-                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"))
+                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
                 except Exception:
                     mem_ctx = ""
                 r = _chat(msg, body.get("history"),
