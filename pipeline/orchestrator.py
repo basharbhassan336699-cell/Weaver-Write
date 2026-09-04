@@ -820,6 +820,27 @@ class WeaverOrchestrator:
         except Exception:
             pass
 
+        # Safety net: never let an INJECTED context header (memory / attachment /
+        # instruction block) become the document topic or filename. If the model
+        # picked one up, fall back to the current request text.
+        try:
+            _tp = str(task.task_card.get("topic") or "").strip()
+            _bad = ("مهام سابقة", "محتوى الملف", "تعليمات مهمة", "ذاكرة:",
+                    "للسياق فقط", "الملفات المرفقة", "reference only",
+                    "for context only")
+            if _tp.startswith("[") or any(k in _tp for k in _bad):
+                _clean = self._current_request(task.description).strip()
+                # keep only the part before any injected marker
+                for _m in ("\n[", "[محتوى الملف", "[للسياق", "[ذاكرة",
+                           "[تعليم", "[سياق المحادثة"):
+                    _i = _clean.find(_m)
+                    if _i > 0:
+                        _clean = _clean[:_i].strip()
+                if _clean:
+                    task.task_card["topic"] = _clean[:150]
+        except Exception:
+            pass
+
         # how the user wants sourcing handled (cited / uncited / none). Detected
         # from the RAW request so an explicit "بدون مصادر" / "دون توثيقها" is
         # honoured even if the model didn't surface it in the card.
