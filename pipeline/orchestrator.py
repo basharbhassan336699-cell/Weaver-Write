@@ -473,6 +473,18 @@ class WeaverOrchestrator:
         task.skills = list(dict.fromkeys(task.skills))
 
     @staticmethod
+    def _current_request(text):
+        """Return only the CURRENT request, dropping any threaded conversation
+        history the web/terminal prefixes as
+        "[سياق المحادثة السابقة] … [الطلب الحالي] …". Used so a link or verb from
+        an EARLIER turn never hijacks the current one — e.g. asking to summarize
+        THIS conversation must not re-summarize a video linked earlier."""
+        t = text or ""
+        if "[الطلب الحالي]" in t:
+            return t.rsplit("[الطلب الحالي]", 1)[-1]
+        return t
+
+    @staticmethod
     def _detect_youtube_intent(text):
         """Keyword heuristic for what to do with a YouTube link. Returns
         {"mode", "with_timing", "explicit"} where `explicit` is True only when a
@@ -561,22 +573,19 @@ class WeaverOrchestrator:
         try:
             import re as _re
             from capabilities.tools import tool_youtube as _yt
+            # Look for a YouTube link (and read its intent) in the CURRENT request
+            # ONLY — never the threaded conversation history. Otherwise a video
+            # linked in an EARLIER turn hijacks an unrelated request now (e.g.
+            # "لخّص ما قمنا بعمله في هذه المحادثة" would re-summarize that video
+            # instead of the conversation).
+            _cur = self._current_request(task.description)
             yurl = None
-            for _u in _re.findall(r"https?://\S+", task.description or ""):
+            for _u in _re.findall(r"https?://\S+", _cur):
                 _u = _u.rstrip('.,)"\'،؛')
                 if _yt.is_youtube_url(_u):
                     yurl = _u
                     break
             if yurl:
-                # Detect intent from the CURRENT request only, never the threaded
-                # conversation history. The web/terminal prefixes prior turns as
-                # "[سياق المحادثة السابقة] … [الطلب الحالي] …"; reading the whole
-                # thing let a previous "لخّص" turn turn a plain "فرّغ مع التوقيت"
-                # into summary+transcript ("both"). Split on the current-request
-                # marker and use only what follows it.
-                _cur = task.description or ""
-                if "[الطلب الحالي]" in _cur:
-                    _cur = _cur.rsplit("[الطلب الحالي]", 1)[-1]
                 kw = self._detect_youtube_intent(_cur)
                 if kw.get("explicit"):
                     intent = {"mode": kw["mode"],
@@ -1522,7 +1531,9 @@ class WeaverOrchestrator:
             return
         if self._URL_RE is None:
             type(self)._URL_RE = re.compile(r'https?://[^\s)>\]\"\'،]+')
-        urls = self._URL_RE.findall(task.description or "")
+        # only URLs in the CURRENT request — not ones pasted in earlier turns —
+        # so an old link doesn't get re-read into an unrelated request now.
+        urls = self._URL_RE.findall(self._current_request(task.description))
         card = task.task_card
         card["pasted_present"] = bool(urls)
         if not urls:
