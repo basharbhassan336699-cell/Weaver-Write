@@ -879,6 +879,103 @@ class WeaverOrchestrator:
             for s in task.sections if (s.get("heading") or s.get("body")))
         mem.set_status(6, "أُدرج التحليل الإحصائي (أرقام محسوبة فعلياً)")
 
+    # ── quran_hadith_citation: correct marks for Islamic content ─────────────
+    @staticmethod
+    def _is_islamic_content(text: str) -> bool:
+        """True when the text quotes/discusses Quran or Hadith (so the marks
+        skill should enforce ﴿ ﴾ for verses and « » for hadith)."""
+        t = text or ""
+        kw = ("قال الله", "قال تعالى", "يقول الله", "سبحانه وتعالى", "عز وجل",
+              "قال رسول الله", "قال النبي", "عن النبي", "صلى الله عليه وسلم",
+              "ﷺ", "رواه البخاري", "رواه مسلم", "حديث شريف", "الحديث الشريف",
+              "القرآن", "قرآن كريم", "آية كريمة", "الآية الكريمة",
+              "﴾", "«", "السنة النبوية", "السيرة النبوية")
+        return any(k in t for k in kw)
+
+    # the writing directive appended for Islamic content (skill's conventions)
+    _ISLAMIC_DIRECTIVE_AR = (
+        "عند الاستشهاد بآية قرآنية: ضعها بين قوسي الآية ﴿ ﴾ (لا أقواس عادية ولا "
+        "علامات اقتباس) وأتبِعها بالمصدر (السورة: رقم الآية). وعند الاستشهاد بحديث "
+        "نبوي: ضعه بين علامتي « » (لا أقواس الآية) وأتبِعه بالتخريج (رواه فلان، "
+        "الحكم). لا تخلط بين العلامتين إطلاقاً.")
+    _ISLAMIC_DIRECTIVE_EN = (
+        "When quoting a Quranic verse, enclose it in the ornamental brackets "
+        "﴿ ﴾ (never normal quotes/parentheses) and follow it with (Surah: Ayah). "
+        "When quoting a hadith, enclose it in « » (never the Quran brackets) and "
+        "follow it with its takhrij. Never mix the two marks.")
+
+    def _apply_islamic_marks(self, task: Task, card: dict, lang: str, mem):
+        """For Islamic content, enforce the skill's marks at the TEXT level so
+        every export format is correct: a verse introduced by an explicit Quran
+        lead-in gets ﴿ ﴾, a hadith introduced by an explicit lead-in gets « ».
+        ONLY the delimiter marks are changed — the quoted text itself is kept
+        verbatim (never rewritten). Then the skill's validate_marks flags any
+        remaining misuse. Additive, guarded, and a no-op for non-Islamic text.
+
+        Note: this normalizes the MARKS across all formats; the skill's richer
+        Word styling (bold verse, Kufyan font) via add_quran_verse/add_hadith
+        needs a docx object and stays a later, docx-only step."""
+        import re
+        sections = task.sections or []
+        joined = "\n".join((s.get("body", "") or "") for s in sections) \
+            or (task.draft or "")
+        if not self._is_islamic_content(joined + " " + str(card.get("topic", ""))):
+            return
+        # wire to the skill module: real marks + validator (no docx needed here)
+        try:
+            import importlib, sys as _sys, os as _os
+            sp = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "capabilities", "skills",
+                "quran_hadith_citation", "scripts"))
+            if sp not in _sys.path:
+                _sys.path.insert(0, sp)
+            qh = importlib.import_module("quran_hadith")
+        except Exception as e:
+            mem.set_status(6, f"تنسيق إسلامي (تخطّي: {e})")
+            return
+        QO, QC = qh.QURAN_OPEN, qh.QURAN_CLOSE
+        HO, HC = qh.HADITH_OPEN, qh.HADITH_CLOSE
+        q = '["“”]'      # straight or curly double quotes
+        qlead = (r'(?:قال\s+الله\s+تعالى|قال\s+تعالى|قال\s+الله|'
+                 r'يقول\s+الله(?:\s+تعالى)?|قال\s+عز\s+وجل)')
+        hlead = (r'(?:قال\s+رسول\s+الله(?:\s*ﷺ|\s*صلى\s+الله\s+عليه\s+وسلم)?|'
+                 r'قال\s+النبي(?:\s*ﷺ|\s*صلى\s+الله\s+عليه\s+وسلم)?|عن\s+النبي)')
+        q_re = re.compile(r'(' + qlead + r'\s*[:：]?\s*)' + q +
+                          r'([^"“”\n]{3,300})' + q)
+        h_re = re.compile(r'(' + hlead + r'\s*[:：]?\s*)' + q +
+                          r'([^"“”\n]{3,400})' + q)
+
+        def _norm(txt):
+            txt = q_re.sub(
+                lambda m: f'{m.group(1)}{QO} {m.group(2).strip()} {QC}', txt)
+            txt = h_re.sub(
+                lambda m: f'{m.group(1)}{HO} {m.group(2).strip()} {HC}', txt)
+            return txt
+
+        changed = 0
+        for s in sections:
+            b = s.get("body", "") or ""
+            nb = _norm(b)
+            if nb != b:
+                s["body"] = nb
+                changed += 1
+        if changed:
+            task.draft = "\n\n".join(
+                (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+                for s in sections if (s.get("heading") or s.get("body")))
+        elif task.draft:
+            task.draft = _norm(task.draft)
+        # validate remaining marks (skill's own check) and record honestly
+        try:
+            v = qh.validate_marks(task.draft or joined) or {}
+        except Exception:
+            v = {}
+        card["islamic_marks"] = v
+        if v.get("warnings"):
+            mem.set_status(6, "تنسيق إسلامي: " + "؛ ".join(v["warnings"]))
+        else:
+            mem.set_status(6, f"تنسيق إسلامي: علامات مضبوطة ({changed} تصحيح)")
+
     def _route(self, task: Task):
         """Phase 3: from the understood task_card, compute ONCE the tools &
         skills the task needs, so later layers act only on what's required
@@ -2466,6 +2563,13 @@ class WeaverOrchestrator:
             card.setdefault("model_strength", self._model_strength())
         except Exception:
             pass
+        # detect Islamic content once so the writer is guided to use the correct
+        # Quran/Hadith marks (enforced again after writing by _apply_islamic_marks)
+        try:
+            card.setdefault("islamic", self._is_islamic_content(
+                f"{card.get('topic','')} {task.description}"))
+        except Exception:
+            pass
 
         # ── YouTube path: produce the summary / transcript directly, with NO
         #    research structure or methodology, then return early.
@@ -2691,6 +2795,11 @@ class WeaverOrchestrator:
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
                 if _depth:
                     prompt = prompt + "\n\n" + _depth
+                # guide Quran/Hadith marks for Islamic content
+                if card.get("islamic"):
+                    prompt = prompt + "\n\n" + (self._ISLAMIC_DIRECTIVE_AR
+                                               if lang == "ar"
+                                               else self._ISLAMIC_DIRECTIVE_EN)
                 try:
                     body = self.llm_fn(prompt, system=system,
                                        temperature=prof.get("temp", 0.5))
@@ -2729,6 +2838,9 @@ class WeaverOrchestrator:
         # when a data file (csv/xlsx) is attached, run REAL statistics on it and
         # inject the computed results (never invented). Additive/guarded.
         self._inject_statistics(task, card, lang, mem)
+        # enforce correct Quran/Hadith marks for Islamic content (text-level,
+        # all formats). Additive/guarded; no-op for non-Islamic text.
+        self._apply_islamic_marks(task, card, lang, mem)
 
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
