@@ -1288,7 +1288,7 @@ def _sources_md(sources, isar: bool) -> str:
         t = (s.get("title") or u).strip().replace("]", "〕").replace("[", "〔")
         lines.append(f"{n}. [{t}]({u})")
         n += 1
-        if n > 8:
+        if n > 12:
             break
     if not lines:
         return ""

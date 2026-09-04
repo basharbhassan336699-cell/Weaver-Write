@@ -104,9 +104,10 @@ class YouTubeTool(BaseTool):
                 prefs.append(L); seen.add(L)
 
         with_timing = bool((inputs or {}).get("with_timing", False))
+        prefer_original = bool((inputs or {}).get("prefer_original", False))
 
         # ---- fetch captions (lazy import; degrades to ok=False) ----
-        snippets = self._fetch_snippets(vid, prefs)
+        snippets = self._fetch_snippets(vid, prefs, prefer_original=prefer_original)
         if not snippets:
             return ToolResult(
                 ok=False,
@@ -141,17 +142,59 @@ class YouTubeTool(BaseTool):
         })
 
     @staticmethod
-    def _fetch_snippets(vid: str, prefs):
+    def _fetch_snippets(vid: str, prefs, prefer_original: bool = False):
         """Return [{text,start,duration}] using youtube-transcript-api.
 
         Supports both the modern instance API (fetch/list) and the older
-        classmethod API (get_transcript). Lazy import; any failure -> []."""
+        classmethod API (get_transcript). Lazy import; any failure -> [].
+        When `prefer_original` is set, the video's OWN captions are returned
+        (never an auto-translated track), so a verbatim transcript stays in the
+        video's original language."""
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
         except Exception:
             return []
 
         import time as _time
+
+        def _out_of(fetched):
+            out = []
+            for sn in (fetched or []):
+                if isinstance(sn, dict):
+                    out.append({
+                        "text": sn.get("text", "") or "",
+                        "start": float(sn.get("start", 0.0) or 0.0),
+                        "duration": float(sn.get("duration", 0.0) or 0.0)})
+                else:
+                    out.append({
+                        "text": getattr(sn, "text", "") or "",
+                        "start": float(getattr(sn, "start", 0.0) or 0.0),
+                        "duration": float(getattr(sn, "duration", 0.0) or 0.0)})
+            return out
+
+        # prefer the ORIGINAL (non-translated) transcript when asked
+        if prefer_original:
+            try:
+                api0 = YouTubeTranscriptApi()
+                _list = getattr(api0, "list", None) or getattr(
+                    YouTubeTranscriptApi, "list_transcripts", None)
+                tl = _list(vid) if _list else None
+                if tl is not None:
+                    chosen = None
+                    manual = [t for t in tl
+                              if not getattr(t, "is_generated", True)]
+                    if manual:
+                        chosen = manual[0]
+                    else:
+                        for t in tl:                 # first = original generated
+                            chosen = t
+                            break
+                    if chosen is not None:
+                        out = _out_of(chosen.fetch())
+                        if out:
+                            return out
+            except Exception:
+                pass
 
         def _transient(exc) -> bool:
             """True only for a temporary throttle/network error worth a retry —

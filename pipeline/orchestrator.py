@@ -704,6 +704,24 @@ class WeaverOrchestrator:
                 if _yt.is_youtube_url(_u):
                     yurl = _u
                     break
+            # Follow-up with NO link in the current message but a clear video
+            # request ("فرّغه"، "لخّص الفيديو"، "أريده بالكامل") → reuse the LAST
+            # YouTube link from the conversation. Guarded so a conversation-summary
+            # request never re-summarizes an old video.
+            if not yurl:
+                _cl = " " + _cur.lower() + " "
+                _refers_video = (self._detect_youtube_intent(_cur).get("explicit")
+                                 or any(k in _cl for k in (
+                                     "الفيديو", "الفيدو", "المقطع", "الحلقة",
+                                     "المحاضرة", "بالكامل", "الكامل", " كامل ",
+                                     " video ", " full ", " complete ")))
+                if _refers_video:
+                    _last = None
+                    for _u in _re.findall(r"https?://\S+", task.description or ""):
+                        _u = _u.rstrip('.,)"\'،؛')
+                        if _yt.is_youtube_url(_u):
+                            _last = _u        # keep the LAST match
+                    yurl = _last
             if yurl:
                 kw = self._detect_youtube_intent(_cur)
                 if kw.get("explicit"):
@@ -715,8 +733,12 @@ class WeaverOrchestrator:
                     intent = (self._classify_youtube_intent_llm(_cur)
                               or {"mode": kw["mode"],
                                   "with_timing": kw["with_timing"]})
+                # ALWAYS fetch the video's ORIGINAL captions (never auto-translated
+                # Arabic) — the transcript stays in the video's own language; the
+                # summary is translated by the model per the output-language rule.
                 res = await _yt.run({"url": yurl, "lang": "ar",
-                                     "with_timing": intent["with_timing"]})
+                                     "with_timing": intent["with_timing"],
+                                     "prefer_original": True})
                 if getattr(res, "ok", False) and (res.data or {}).get("text"):
                     # Output language for the SUMMARY: an explicit request wins;
                     # "source/original" → the video's own language; otherwise the
@@ -3027,24 +3049,31 @@ def quick_live_context_ex(msg, lang="ar", max_chars=6000):
                 q = q + " site:" + _site
             _df = _df_dir or ("w" if _recency else None)
             results = WeaverOrchestrator._multi_engine_search(
-                q, lang, 6, df=_df) or []
+                q, lang, 12, df=_df) or []
             if _recency:
                 results = WeaverOrchestrator._sort_results_by_recency(results)
-            lines = []
-            for r in results[:6]:
+            lines, n = [], 1
+            for r in results[:12]:
                 title = (r.get("title") or "").strip()
                 if not title:
                     continue
                 url = (r.get("url") or "").strip()
-                snip = (r.get("content") or "").strip()[:180]
-                lines.append(f"- {title} — {snip} ({url})")
+                snip = (r.get("content") or "").strip()[:220]
+                # NUMBER each result so the model can cite [n] → the matching
+                # source; sources are collected in the SAME order.
+                lines.append(f"[{n}] {title} — {snip} ({url})")
                 if url:
                     sources.append({"title": title, "url": url})
+                n += 1
             if lines:
-                _hdr = ("[نتائج بحث حيّة، الأحدث أولاً]" if _recency
-                        else ("[نتائج بحث حيّة من موقع " + _site + "]" if _site
-                              else "[نتائج بحث حيّة]"))
-                parts.append(_hdr + "\n" + "\n".join(lines))
+                _hdr = ("[نتائج بحث حيّة مرقّمة، الأحدث أولاً]" if _recency
+                        else ("[نتائج بحث حيّة مرقّمة من موقع " + _site + "]"
+                              if _site else "[نتائج بحث حيّة مرقّمة]"))
+                _rule = ("\nقاعدة: لا تذكر خبراً/معلومة إلا إن كانت مدعومة "
+                         "بأحد المصادر المرقّمة أعلاه، واذكر رقم مصدرها [n] بعدها، "
+                         "واكتفِ بمصدر واحد لكل خبر إلا إن ورد فعلاً في أكثر من "
+                         "مصدر. لا تنسب خبراً لمصدر لا يحتويه.")
+                parts.append(_hdr + "\n" + "\n".join(lines) + _rule)
         except Exception:
             pass
     ctx = "\n\n".join(parts).strip()
