@@ -3660,12 +3660,23 @@
     const main = document.getElementById('mainContent');
     main.classList.add('chat-mode');
 
+    // snapshot + clear any attached files for THIS send
+    const filesToSend = attachedFiles.slice();
+    attachedFiles = [];
+    renderAttachChips();
+
     // Append the user message
     const messages = document.getElementById('messages');
     const userMsg = document.createElement('div');
     userMsg.className = 'msg user';
     userMsg.innerHTML = '<div class="bubble"></div>';
     userMsg.querySelector('.bubble').textContent = text;
+    if (filesToSend.length) {
+      const chip = document.createElement('div');
+      chip.style.cssText = 'margin-top:6px;font-size:12px;opacity:.75';
+      chip.textContent = '📎 ' + filesToSend.map(f => f.name).join('، ');
+      userMsg.querySelector('.bubble').appendChild(chip);
+    }
     messages.appendChild(userMsg);
 
     // Track this as a chat session (title comes from the first message, like real chat apps)
@@ -3776,10 +3787,11 @@
       try {
         const effortEl = document.getElementById('effortSelect');
         const history = currentMessages.slice(0, -1).slice(-200);
+        const files = filesToSend.length ? await readAttachedFiles(filesToSend) : [];
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history, chatId: currentChatId, effort: effortEl ? effortEl.value : 'medium' })
+          body: JSON.stringify({ message: text, history: history, chatId: currentChatId, files: files, effort: effortEl ? effortEl.value : 'medium' })
         });
         const reader = res.body.getReader();
         const dec = new TextDecoder();
@@ -3859,6 +3871,43 @@
     renderAttachChips();
     document.getElementById('attachMenu').classList.remove('show');
     document.getElementById('mainInput').focus();
+  }
+
+  // ── read attached files to send with the message ──
+  function wvIsTextFile(f) {
+    const n = (f.name || '').toLowerCase();
+    const exts = ['.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.log',
+      '.py', '.js', '.ts', '.html', '.htm', '.css', '.xml', '.yaml', '.yml',
+      '.ini', '.cfg', '.sql', '.sh', '.c', '.cpp', '.h', '.java', '.go', '.rs'];
+    if (exts.some(e => n.endsWith(e))) return true;
+    if ((f.type || '').startsWith('text/')) return true;
+    if (f.type === 'application/json') return true;
+    return false;
+  }
+  function wvReadOne(f) {
+    return new Promise(function (resolve) {
+      const r = new FileReader();
+      if (wvIsTextFile(f)) {
+        r.onload = () => resolve({ name: f.name, type: f.type, text: String(r.result || '') });
+        r.onerror = () => resolve({ name: f.name, type: f.type, text: '' });
+        r.readAsText(f);
+      } else {
+        r.onload = () => resolve({ name: f.name, type: f.type, data: String(r.result || '') });
+        r.onerror = () => resolve({ name: f.name, type: f.type });
+        r.readAsDataURL(f);
+      }
+    });
+  }
+  async function readAttachedFiles(list) {
+    const out = [];
+    for (const f of (list || []).slice(0, 5)) {
+      if (f.size && f.size > 8 * 1024 * 1024) {
+        out.push({ name: f.name, type: f.type, text: '(الملف كبير جداً — تجاوز 8 ميغابايت)' });
+        continue;
+      }
+      try { out.push(await wvReadOne(f)); } catch (e) { out.push({ name: f.name, type: f.type }); }
+    }
+    return out;
   }
 
   function renderAttachChips() {

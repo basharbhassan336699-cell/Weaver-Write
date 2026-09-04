@@ -442,6 +442,119 @@ def _read_chat_doc(cid):
         return ""
 
 
+# ── attached-file reading (the user gives ANY file + an instruction on it) ────
+_ATTACH_TEXT_EXT = {
+    ".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".log", ".rtf",
+    ".py", ".js", ".ts", ".html", ".htm", ".css", ".xml", ".yaml", ".yml",
+    ".ini", ".cfg", ".sql", ".sh", ".c", ".cpp", ".h", ".java", ".go", ".rs",
+}
+_ATTACH_MAX_CHARS = 20000      # per file, fed into the model
+
+
+def _extract_bytes(data: bytes, name: str) -> str:
+    """Best-effort text extraction from raw file bytes. Degrades to '' when a
+    format needs a library that isn't installed (honest, never crashes)."""
+    ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+    if ext in _ATTACH_TEXT_EXT:
+        for enc in ("utf-8", "utf-16", "cp1256", "latin-1"):
+            try:
+                return data.decode(enc)
+            except Exception:
+                continue
+        return ""
+    if ext == ".pdf":
+        try:
+            import io
+            import pdfplumber
+            out = []
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                for pg in pdf.pages[:50]:
+                    out.append(pg.extract_text() or "")
+            return "\n".join(out).strip()
+        except Exception:
+            return ""
+    if ext in (".docx",):
+        try:
+            import io
+            import zipfile
+            import re as _re
+            with zipfile.ZipFile(io.BytesIO(data)) as z:
+                xml = z.read("word/document.xml").decode("utf-8", "ignore")
+            xml = xml.replace("</w:p>", "\n")
+            return _re.sub(r"<[^>]+>", "", xml).strip()
+        except Exception:
+            return ""
+    # unknown/binary → try a plain decode, else give up quietly
+    try:
+        return data.decode("utf-8")
+    except Exception:
+        return ""
+
+
+def _attach_extract(files):
+    """Turn the request's attached files into one text block the model can act
+    on. Each entry may carry already-extracted `text` (text files read on the
+    client) or base64 `data` (binary files extracted here). Returns
+    (combined_text, names). Bounded and safe."""
+    import base64
+    parts, names = [], []
+    for f in (files or [])[:5]:
+        if not isinstance(f, dict):
+            continue
+        name = (f.get("name") or "ملف").strip()
+        txt = f.get("text")
+        if not txt and f.get("data"):
+            try:
+                raw = base64.b64decode((f.get("data") or "").split(",")[-1])
+                txt = _extract_bytes(raw, name)
+            except Exception:
+                txt = ""
+        txt = (txt or "").strip()
+        names.append(name)
+        if txt:
+            parts.append(f"[ملف: {name}]\n{txt[:_ATTACH_MAX_CHARS]}")
+        else:
+            parts.append(f"[ملف: {name}] (تعذّرت قراءة محتواه — صيغة غير "
+                         f"مدعومة أو مكتبة استخراج ناقصة على الجهاز)")
+    return ("\n\n".join(parts).strip(), names)
+
+
+def _wants_document_output(msg: str) -> bool:
+    """True when the message explicitly asks to PRODUCE a document/file (so an
+    attached file should feed the full pipeline), rather than just operate on the
+    attachment in chat (summarize/edit/extract → quick path)."""
+    t = (msg or "").lower()
+    return any(w in t for w in (
+        "اكتب بحث", "اكتب تقرير", "اكتب مقال", "اكتب دراسة", "اكتب رسالة علمية",
+        "حوله الى", "حوّله الى", "حوله إلى", "حوّله إلى", "اعمل عرض",
+        "بوربوينت", "انشئ ملف", "أنشئ ملف", "انشئ مستند", "أنشئ مستند",
+        "اعمل ملف", "صمم عرض",
+        "research paper", "write a report", "write an essay", "write a paper",
+        "make a presentation", "generate a document", "create a document",
+        "convert it to", "export to"))
+
+
+def _with_attachments_for_task(desc, msg, attach_text):
+    """Prepend attached-file content to a pipeline task description so the task is
+    performed on it, and (unless the user named a language) force the FILE's own
+    language per the output-language rule. Returns desc unchanged when nothing is
+    attached."""
+    if not attach_text:
+        return desc
+    lang_line = ""
+    try:
+        from pipeline.orchestrator import WeaverOrchestrator as _W
+        kind, _ = _W._requested_output_lang(msg)
+        if kind is None:
+            flang = "العربية" if _W._detect_lang(attach_text) == "ar" else "English"
+            lang_line = ("[تعليمة اللغة] اكتب المخرجات باللغة " + flang
+                         + " (لغة الملف المرفق) ما لم يُطلب غير ذلك.\n\n")
+    except Exception:
+        lang_line = ""
+    return ("[محتوى الملف/الملفات المرفقة — نفّذ عليها طلب المستخدم]\n"
+            + attach_text + "\n\n" + lang_line + desc)
+
+
 # ── cross-conversation memory ────────────────────────────────────────────────
 # The persisted chats (config/chats/*.json) ARE the long-term memory. On a new
 # message we retrieve the user's OTHER past chats that are lexically relevant and
@@ -939,7 +1052,7 @@ def _sources_md(sources, isar: bool) -> str:
 
 
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
-          context: str = None, memory: str = None) -> dict:
+          context: str = None, memory: str = None, attachments: str = None) -> dict:
     """Send a message to the configured provider using the saved key and return
     the assistant reply. OpenAI-compatible /chat/completions (works for the
     registry providers, incl. Anthropic's and Google's compatible endpoints).
@@ -1004,6 +1117,16 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
             "You have live, up-to-date sources below. Use them to answer with "
             "current information; do NOT claim you lack internet access or that "
             "your knowledge is outdated.\n\n" + context)})
+    # attached files the user wants the assistant to act on (summarize, edit,
+    # extract, …). Write the answer in the FILE's own language unless the user
+    # asked for another; the instruction is the user's message.
+    if attachments:
+        msgs.append({"role": "system", "content": (
+            "أرفق المستخدم الملف/الملفات التالية ويريد تنفيذ طلبه عليها (تلخيص، "
+            "تعديل، استخراج، إلخ). نفِّذ طلبه على محتواها، والتزم بلغة الملف نفسه "
+            "ما لم يطلب لغة أخرى.\n"
+            "The user attached the following file(s) to act on; follow their "
+            "instruction over this content:\n\n" + attachments)})
     msgs.append({"role": "user", "content": message})
     payload = json.dumps({"model": model, "messages": msgs,
                           "max_tokens": max_tokens,
@@ -1425,6 +1548,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception:
                 _is_task = True
 
+            # attached files → perform the user's instruction on them
+            attach_text, attach_names = "", []
+            try:
+                attach_text, attach_names = _attach_extract(body.get("files"))
+            except Exception:
+                attach_text, attach_names = "", []
+            if attach_text and not _wants_document_output(msg):
+                # operating on a file (summarize/edit/extract/answer) is a direct
+                # chat action, not a document to generate → quick path.
+                _is_task = False
+
             isar = any("؀" <= c <= "ۿ" for c in msg)
             # quick question → answer directly (one step). For news/recency
             # questions or a pasted link, gather live context first so the model
@@ -1443,11 +1577,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     mem_ctx = ""
                 sse({"t": "step", "label": (
-                    ("بحث حيّ" if isar else "Live search") if ctx
+                    ("قراءة الملفات" if isar else "Reading files") if attach_text
+                    else ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
-                          memory=mem_ctx)
+                          memory=mem_ctx, attachments=attach_text)
                 if r.get("error"):
                     if r.get("error") == "no_key":
                         sse({"t": "reply", "reply": (
@@ -1483,6 +1618,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
             desc = _with_memory_for_task(desc, msg, body.get("chatId"))
+            desc = _with_attachments_for_task(desc, msg, attach_text)
             try:
                 from pipeline.orchestrator import task_priority
                 prio = body.get("priority")
@@ -1522,6 +1658,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _is_task = is_document_task(msg)
             except Exception:
                 _is_task = True
+            attach_text, attach_names = "", []
+            try:
+                attach_text, attach_names = _attach_extract(body.get("files"))
+            except Exception:
+                attach_text, attach_names = "", []
+            if attach_text and not _wants_document_output(msg):
+                _is_task = False
             if not _is_task:
                 isar = any("؀" <= c <= "ۿ" for c in msg)
                 ctx, srcs = "", []
@@ -1537,7 +1680,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     mem_ctx = ""
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
-                          memory=mem_ctx)
+                          memory=mem_ctx, attachments=attach_text)
                 if not r.get("error") and (r.get("reply") or "").strip():
                     r["reply"] = r["reply"] + _sources_md(srcs, isar)
                 self._json(r)
@@ -1559,6 +1702,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
             desc = _with_memory_for_task(desc, msg, body.get("chatId"))
+            desc = _with_attachments_for_task(desc, msg, attach_text)
             try:
                 from pipeline.orchestrator import run_pipeline_sync, task_priority
                 prio = body.get("priority")
