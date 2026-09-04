@@ -505,6 +505,10 @@ class WeaverOrchestrator:
                 " presentation", "deck")):
             return "PPTX"
         if any(k in t for k in (
+                " csv", ".csv", "ملف csv", "سي اس في", "قيم مفصولة بفواصل",
+                "comma separated", "comma-separated")):
+            return "CSV"
+        if any(k in t for k in (
                 "اكسل", "إكسل", "اكسيل", "excel", "xlsx", "xls ", "جدول بيانات",
                 "جدول اكسل", "شيت", "spreadsheet", "sheet")):
             return "XLSX"
@@ -976,6 +980,71 @@ class WeaverOrchestrator:
         else:
             mem.set_status(6, f"تنسيق إسلامي: علامات مضبوطة ({changed} تصحيح)")
 
+    def _style_islamic_docx(self, path, card):
+        """Post-pass on the built .docx: embolden Quran verses (﴿…﴾) and hadith
+        («…») using the quran_hadith_citation skill's own _set_run, preserving
+        the surrounding paragraph font/size. Touches only paragraphs that carry
+        a complete mark span. Fully guarded — any failure (no python-docx, read
+        error) leaves the file exactly as built. No-op for non-Islamic docs.
+
+        This is the richer Word-only step the text-level _apply_islamic_marks
+        deferred: marks are already correct in every format; here the verse and
+        matn also become bold, per the skill's typographic rule."""
+        if not card.get("islamic"):
+            return
+        try:
+            import importlib, sys as _sys, os as _os, re as _re
+            sp = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "capabilities", "skills",
+                "quran_hadith_citation", "scripts"))
+            if sp not in _sys.path:
+                _sys.path.insert(0, sp)
+            qh = importlib.import_module("quran_hadith")
+            from docx import Document
+        except Exception:
+            return
+        QO, QC = qh.QURAN_OPEN, qh.QURAN_CLOSE
+        HO, HC = qh.HADITH_OPEN, qh.HADITH_CLOSE
+        span_re = _re.compile(
+            "(" + _re.escape(QO) + ".*?" + _re.escape(QC) + "|"
+            + _re.escape(HO) + ".*?" + _re.escape(HC) + ")")
+
+        def _is_span(seg):
+            return ((seg.startswith(QO) and seg.endswith(QC))
+                    or (seg.startswith(HO) and seg.endswith(HC)))
+        try:
+            doc = Document(path)
+        except Exception:
+            return
+        changed = False
+        for p in doc.paragraphs:
+            txt = p.text
+            if not span_re.search(txt):
+                continue
+            base = p.runs[0] if p.runs else None
+            base_font = base.font.name if base else None
+            base_size = base.font.size if base else None
+            for r in list(p.runs):
+                r._element.getparent().remove(r._element)
+            for seg in span_re.split(txt):
+                if not seg:
+                    continue
+                run = p.add_run(seg)
+                if _is_span(seg):
+                    qh._set_run(run, bold=True,
+                                font=(base_font or "Kufyan Arabic"))
+                else:
+                    if base_font:
+                        run.font.name = base_font
+                if base_size:
+                    run.font.size = base_size
+            changed = True
+        if changed:
+            try:
+                doc.save(path)
+            except Exception:
+                pass
+
     def _route(self, task: Task):
         """Phase 3: from the understood task_card, compute ONCE the tools &
         skills the task needs, so later layers act only on what's required
@@ -1063,9 +1132,10 @@ class WeaverOrchestrator:
         # served by inline code elsewhere
         "doc_read": ("inline", "web.server._extract_bytes + core.ocr"),
         "memory_store": ("inline", "TaskMemory + config/chats"),
+        # csv is now a real export format served in _export
+        "csv": ("inline", "_export csv branch"),
         # present in the registry but with no wired path yet
         "diagram": ("inactive", None),
-        "csv": ("inactive", None),
         "calendar": ("inactive", None),
         "scheduler": ("inactive", None),
         "mcp_connector": ("inactive", None),
@@ -3101,6 +3171,9 @@ class WeaverOrchestrator:
                     title=title, sections=sections, output_path=out, lang=lang,
                     font=font, references=references, toc=bool(card.get("toc")),
                     cover=cover, toc_position=toc_pos)
+                # rich Word styling for Quran/Hadith (bold verse/matn via the
+                # quran_hadith_citation skill's own _set_run). Guarded/no-op.
+                self._style_islamic_docx(out, card)
                 return out
             if fmt == "pdf":
                 out = os.path.join(out_dir, safe + ".pdf")
@@ -3161,6 +3234,25 @@ class WeaverOrchestrator:
                 self._skill_call("xlsx_builder", "build_xlsx", "build_xlsx",
                                  data=data, output_path=out, headers=headers,
                                  lang=lang)
+                return out
+            if fmt in ("csv",):
+                out = os.path.join(out_dir, safe + ".csv")
+                import csv as _csv
+                data = card.get("data") or [[s.get("heading", ""),
+                                             re.sub(r'\s+', ' ',
+                                                    (s.get("body", "") or ""))]
+                                            for s in sections]
+                headers = card.get("headers") or (
+                    ["القسم", "المحتوى"] if lang == "ar"
+                    else ["Section", "Content"])
+                # utf-8-sig so Excel opens Arabic correctly
+                with open(out, "w", encoding="utf-8-sig", newline="") as f:
+                    w = _csv.writer(f)
+                    if headers:
+                        w.writerow(headers)
+                    for row in data:
+                        w.writerow(row if isinstance(row, (list, tuple))
+                                   else [row])
                 return out
             if fmt in ("txt", "text"):
                 out = os.path.join(out_dir, safe + ".txt")
@@ -3753,7 +3845,7 @@ def export_content_to_file(content, fmt="docx", lang="ar", title=None):
             task.sections = (_content_to_slides(getattr(orch, "llm_fn", None),
                                                 content, lang)
                              or _md_to_sections(content))
-        elif fmtU == "XLSX":
+        elif fmtU in ("XLSX", "CSV"):
             tbl = _content_to_table(getattr(orch, "llm_fn", None), content, lang)
             if tbl:
                 task.task_card["headers"] = tbl.get("headers")
