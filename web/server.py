@@ -500,18 +500,39 @@ def _extract_bytes(data: bytes, name: str) -> str:
         # image → OCR (reads text inside the image; needs tesseract on device)
         return _ocr_file_bytes(data, name)
     if ext == ".pdf":
+        import io
         text = ""
+        # 1) pdfplumber (best layout)
         try:
-            import io
             import pdfplumber
             out = []
             with pdfplumber.open(io.BytesIO(data)) as pdf:
-                for pg in pdf.pages[:50]:
+                for pg in pdf.pages[:60]:
                     out.append(pg.extract_text() or "")
             text = "\n".join(out).strip()
         except Exception:
             text = ""
-        if not text:                     # scanned PDF → try OCR
+        # 2) pypdf / PyPDF2 (widely installed, fast)
+        if not text:
+            try:
+                try:
+                    from pypdf import PdfReader
+                except Exception:
+                    from PyPDF2 import PdfReader
+                r = PdfReader(io.BytesIO(data))
+                text = "\n".join((p.extract_text() or "")
+                                 for p in r.pages[:60]).strip()
+            except Exception:
+                text = ""
+        # 3) pdfminer
+        if not text:
+            try:
+                from pdfminer.high_level import extract_text as _pm
+                text = (_pm(io.BytesIO(data)) or "").strip()
+            except Exception:
+                text = ""
+        # 4) scanned PDF (no text layer) → OCR (slow; that's expected)
+        if not text:
             text = _ocr_file_bytes(data, name)
         return text
     if ext in (".docx",):
@@ -539,9 +560,8 @@ def _attach_extract(files):
     (combined_text, names). Bounded and safe."""
     import base64
     parts, names = [], []
-    for f in (files or [])[:5]:
-        if not isinstance(f, dict):
-            continue
+    flist = [f for f in (files or [])[:5] if isinstance(f, dict)]
+    for idx, f in enumerate(flist, 1):
         name = (f.get("name") or "ملف").strip()
         txt = f.get("text")
         if not txt and f.get("data"):
@@ -553,15 +573,20 @@ def _attach_extract(files):
         txt = (txt or "").strip()
         names.append(name)
         ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
-        if txt:
-            parts.append(f"[ملف: {name}]\n{txt[:_ATTACH_MAX_CHARS]}")
+        # number every file so the model never mixes two attachments up
+        tag = f"الملف {idx}" if len(flist) > 1 else "الملف"
+        if txt and ext in _IMAGE_EXTS:
+            # make it explicit this is OCR text, not the model "seeing" the image
+            parts.append(f"[{tag} — نصّ مُستخرَج عبر OCR من الصورة: {name}]\n"
+                         f"{txt[:_ATTACH_MAX_CHARS]}")
+        elif txt:
+            parts.append(f"[{tag}: {name}]\n{txt[:_ATTACH_MAX_CHARS]}")
         elif ext in _IMAGE_EXTS:
-            parts.append(f"[صورة: {name}] (تعذّرت قراءة النص من الصورة — فعّل "
-                         f"OCR على الجهاز: pkg install tesseract tesseract-data-ara "
-                         f"ثم pip install pytesseract pillow. الصور التي لا تحوي "
-                         f"نصاً تحتاج نموذج رؤية.)")
+            parts.append(f"[{tag} — صورة: {name}] (تعذّرت قراءة نصّ من الصورة عبر "
+                         f"OCR — إمّا لا تحوي نصاً، أو OCR غير مُفعّل على الجهاز. "
+                         f"وصف صورة بلا نصّ يحتاج نموذج رؤية.)")
         else:
-            parts.append(f"[ملف: {name}] (تعذّرت قراءة محتواه — صيغة غير "
+            parts.append(f"[{tag}: {name}] (تعذّرت قراءة محتواه — صيغة غير "
                          f"مدعومة أو مكتبة استخراج ناقصة على الجهاز)")
     return ("\n\n".join(parts).strip(), names)
 
@@ -680,8 +705,9 @@ def _with_attachments_for_task(desc, msg, attach_text):
                          + " (لغة الملف المرفق) ما لم يُطلب غير ذلك.\n\n")
     except Exception:
         lang_line = ""
-    return ("[محتوى الملف/الملفات المرفقة — نفّذ عليها طلب المستخدم]\n"
-            + attach_text + "\n\n" + lang_line + desc)
+    return (desc + "\n\n" + lang_line
+            + "[محتوى الملف/الملفات المرفقة — نفّذ عليها طلب المستخدم أعلاه؛ هذا "
+            "محتوى مرجعي وليس عنوان المهمة]\n" + attach_text)
 
 
 # ── cross-conversation memory ────────────────────────────────────────────────
@@ -969,10 +995,12 @@ def _recall_full_conversation(query, exclude_id=None, budget=8000):
 
 
 def _with_memory_for_task(desc, msg, chat_id):
-    """For a DOCUMENT task: if a similar task was done in an earlier chat, prepend
-    a memory block + an instruction to produce a DIFFERENT version (other
-    references/studies/sources, new angles, different wording). Returns desc
-    unchanged when there is no relevant memory. Safe/degrading."""
+    """For a DOCUMENT task: if a similar task was done in an earlier chat, APPEND
+    (never prepend) a clearly-labelled reference block + a note to produce a
+    different version. Appending keeps the real request at the TOP of the
+    description, so the pipeline's topic/filename comes from the task itself —
+    not from this injected context. Returns desc unchanged when there's no
+    relevant memory. Safe/degrading."""
     try:
         mem = _recall_memory(msg, exclude_id=chat_id, semantic=True)
     except Exception:
@@ -980,11 +1008,12 @@ def _with_memory_for_task(desc, msg, chat_id):
     if not mem:
         return desc
     return (
-        "[ذاكرة: مهام سابقة ذات صلة أنجزناها في محادثات أخرى]\n" + mem + "\n\n"
-        "[تعليمات مهمة] لقد أنجزنا مهمة مشابهة سابقاً (انظر أعلاه). أنتِج الآن "
-        "نسخة مختلفة تماماً عنها: استعمل مراجع ودراسات ومصادر أخرى، وتناول "
-        "زوايا وأفكاراً جديدة، وبأسلوب تعبير وصياغة مختلفين، دون تكرار المحتوى "
-        "أو المصادر السابقة.\n\n" + desc)
+        desc + "\n\n"
+        "[للسياق فقط — مهام سابقة ذات صلة في محادثات أخرى؛ ليست عنوان المهمة "
+        "الحالية ولا جزءاً من محتواها]\n" + mem + "\n\n"
+        "[تعليمة] بما أنّ مهمة مشابهة أُنجزت سابقاً، اجعل هذه النسخة مختلفة: "
+        "مراجع ودراسات ومصادر أخرى، وزوايا وأسلوب تعبير مختلفين، دون تكرار "
+        "المحتوى أو المصادر السابقة.")
 
 
 # ── windows (workspaces): each groups its own chats; the main list shows all ──
@@ -1259,7 +1288,7 @@ def _sources_md(sources, isar: bool) -> str:
         t = (s.get("title") or u).strip().replace("]", "〕").replace("[", "〔")
         lines.append(f"{n}. [{t}]({u})")
         n += 1
-        if n > 8:
+        if n > 12:
             break
     if not lines:
         return ""
@@ -1339,9 +1368,14 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
         msgs.append({"role": "system", "content": (
             "أرفق المستخدم الملف/الملفات التالية ويريد تنفيذ طلبه عليها (تلخيص، "
             "تعديل، استخراج، إلخ). نفِّذ طلبه على محتواها، والتزم بلغة الملف نفسه "
-            "ما لم يطلب لغة أخرى.\n"
+            "ما لم يطلب لغة أخرى. إن كان هناك أكثر من ملف فلا تخلط بينها وتحدّث "
+            "عن كلٍّ باسمه ورقمه. وما جاء موسوماً بأنه \"نصّ مُستخرَج عبر OCR من "
+            "الصورة\" فهو نصّ قُرئ من الصورة (أنت لا ترى الصورة نفسها) — اعتمد "
+            "عليه ولا تدّعِ رؤية عناصر بصرية غير مذكورة فيه.\n"
             "The user attached the following file(s) to act on; follow their "
-            "instruction over this content:\n\n" + attachments)})
+            "instruction over this content, don't mix multiple files, and treat "
+            "any \"OCR\" block as text read from an image (you cannot see the "
+            "image itself):\n\n" + attachments)})
     msgs.append({"role": "user", "content": message})
     payload = json.dumps({"model": model, "messages": msgs,
                           "max_tokens": max_tokens,
@@ -1854,7 +1888,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ctx.strip():
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
-            desc = _with_memory_for_task(desc, msg, body.get("chatId"))
+            if not attach_text:
+                desc = _with_memory_for_task(desc, msg, body.get("chatId"))
             desc = _with_attachments_for_task(desc, msg, attach_text)
             try:
                 from pipeline.orchestrator import task_priority
@@ -1952,7 +1987,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ctx.strip():
                     desc = (f"[سياق المحادثة السابقة]\n{ctx}\n\n"
                             f"[الطلب الحالي]\n{msg}")
-            desc = _with_memory_for_task(desc, msg, body.get("chatId"))
+            if not attach_text:
+                desc = _with_memory_for_task(desc, msg, body.get("chatId"))
             desc = _with_attachments_for_task(desc, msg, attach_text)
             try:
                 from pipeline.orchestrator import run_pipeline_sync, task_priority
