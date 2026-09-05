@@ -327,40 +327,193 @@ class WeaverOrchestrator:
         "in its original", "keep the language", "keep it in",
     )
 
+    # markers of a FULL-document write request — when present, the broad
+    # (non-"only") reference/outline phrasings below are NOT treated as a limiting
+    # scope (so "اكتب بحثاً عن X مع مراجع" stays a full research, not references-only).
+    _WRITE_FULL_MARK = (
+        "اكتب بحث", "اكتب لي بحث", "اكتب مقال", "اكتب دراسة", "اكتب تقرير",
+        "اكتب موضوع", "اعمل بحث", "أعد بحث", "اعد بحث", "حضّر بحث", "حضر بحث",
+        "جهّز بحث", "بحثاً كاملاً", "بحث كامل", "بحثا كاملا",
+        "write a research", "write an essay", "write a report", "write a paper",
+        "full research", "research paper")
+
     @staticmethod
-    def _task_scope(text):
-        """Detect a SCOPE that limits a document task: 'references' (only find
-        and list references/studies, no writing), 'outline' (only the structure),
-        'part' (write only a specific part), or None (full document)."""
+    def _task_scopes(text):
+        """Return the SET of limiting scopes a request asks for (composable):
+        'references' (find/list sources, no writing), 'outline' (structure only),
+        'plan' (a research proposal), 'part' (a specific part only). Empty set →
+        a full document. Broad natural phrasings resolve here; the "only"/"فقط"
+        forms fire unconditionally, while the softer forms fire only when the
+        request is NOT a full-document write (so composites like "مراجع وهيكلة
+        فقط" work, and "اكتب بحثاً + مراجع" stays a full research)."""
         t = " " + (text or "").lower() + " "
-        refs = ("مراجع فقط", "المراجع فقط", "فقط المراجع", "فقط مراجع",
-                "دراسات سابقة فقط", "فقط الدراسات", "الدراسات فقط", "فقط المصادر",
-                "المصادر فقط", "قائمة مراجع", "قائمة المراجع", "قائمة مصادر",
-                "اوجد مراجع", "أوجد مراجع", "ابحث عن مراجع", "ابحث لي عن مراجع",
-                "جد مراجع", "هات مراجع", "اعطني مراجع", "أعطني مراجع",
-                "اعطني مصادر", "اعطني دراسات", "دون كتابة الموضوع",
-                "references only", "just references", "only references",
-                "list of references", "find references", "find sources",
-                "sources only", "only sources", "list sources", "bibliography")
-        outline = ("هيكل فقط", "الهيكل فقط", "فقط الهيكل", "العناصر فقط",
-                   "فقط العناصر", "الخطة فقط", "خطة البحث فقط", "فقط الخطة",
-                   "عناصر البحث فقط", "جدول المحتويات", "الخطوط العريضة",
-                   "outline only", "just an outline", "only an outline",
-                   "structure only", "just the outline", "table of contents",
-                   "only outline")
+        writing = any(k in t for k in WeaverOrchestrator._WRITE_FULL_MARK)
+        scopes = set()
+
+        # ── references / sources / prior studies ──
+        refs_only = ("مراجع فقط", "المراجع فقط", "فقط المراجع", "فقط مراجع",
+                     "دراسات سابقة فقط", "فقط الدراسات", "الدراسات فقط",
+                     "فقط المصادر", "المصادر فقط", "قائمة مراجع", "قائمة المراجع",
+                     "قائمة مصادر", "قائمة الدراسات", "دون كتابة الموضوع",
+                     "بلا كتابة", "references only", "just references",
+                     "only references", "list of references", "sources only",
+                     "only sources", "list sources", "bibliography")
+        refs_soft = ("اوجد مراجع", "أوجد مراجع", "إيجاد مراجع", "ايجاد مراجع",
+                     "جمع مراجع", "تجميع مصادر", "توفير مصادر", "حصر المراجع",
+                     "ابحث عن مراجع", "ابحث لي عن مراجع", "البحث عن مراجع",
+                     "جد مراجع", "هات مراجع", "هاتلي مراجع", "جيبلي مصادر",
+                     "اعطني مراجع", "أعطني مراجع", "اعطني مصادر", "اعطني دراسات",
+                     "زوّدني بمراجع", "زودني بمراجع", "دلّني على مراجع",
+                     "اجمع لي مراجع", "احضر لي مصادر", "اجلب لي مراجع",
+                     "مراجع عن", "مراجع حول", "مصادر عن", "مصادر حول",
+                     "دراسات سابقة عن", "أدبيات الموضوع", "الأدبيات السابقة",
+                     "find references", "find sources", "gather sources",
+                     "collect references", "literature list")
+        _limiting = ("فقط" in t or " only " in t or " just " in t)
+        if any(k in t for k in refs_only) or (
+                not writing and any(k in t for k in refs_soft)) or (
+                # bare "مراجع/مصادر/دراسات" counts ONLY with a limiting cue and
+                # no full-write verb — so composites like "مراجع وهيكلة فقط" work
+                # while "اكتب بحثاً عن مصادر الطاقة" stays a full research.
+                not writing and _limiting and any(
+                    w in t for w in ("مراجع", "مصادر", "دراسات سابقة",
+                                     "references", "sources"))):
+            scopes.add("references")
+
+        # ── research proposal (خطة/مقترح/بروبوزال) — distinct from an outline ──
+        plan_kw = ("خطة بحثية", "خطة بحث", "خطة الدراسة", "خطة دراسة",
+                   "خطة رسالة", "خطة أطروحة", "خطة اطروحة", "خطة ماجستير",
+                   "خطة دكتوراه", "مقترح بحثي", "المقترح البحثي", "مقترح بحث",
+                   "تصور مقترح", "تصوّر مقترح", "بروبوزال", "بروبوزل", "بروبزال",
+                   "proposal", "research proposal", "thesis proposal",
+                   "dissertation proposal", "study plan")
+        if any(k in t for k in plan_kw):
+            scopes.add("plan")
+
+        # ── outline / structure (headings only) ──
+        out_only = ("هيكل فقط", "الهيكل فقط", "فقط الهيكل", "العناصر فقط",
+                    "فقط العناصر", "عناصر البحث فقط", "جدول المحتويات",
+                    "الخطوط العريضة", "outline only", "just an outline",
+                    "only an outline", "structure only", "just the outline",
+                    "table of contents", "only outline")
+        out_soft = ("هيكلة", "هيكل بحث", "هيكل الموضوع", "هيكل البحث",
+                    "بنية البحث", "بنية الموضوع", "عناصر البحث", "عناصر الموضوع",
+                    "أقسام البحث", "اقسام البحث", "فهرس البحث", "مخطط البحث",
+                    "رؤوس الأقسام", "اعمل هيكل", "صمم هيكل", "صمّم هيكل",
+                    "قسّم لي الموضوع", "قسم لي الموضوع", "outline", "structure of")
+        if any(k in t for k in out_only) or (
+                not writing and any(k in t for k in out_soft)):
+            scopes.add("outline")
+
+        # ── a specific part only ──
         part = ("اكتب فقط", "فقط اكتب", "جزء فقط", "فقط جزء", "المقدمة فقط",
                 "فقط المقدمة", "قسم فقط", "فقط قسم", "فقرة فقط", "فقط الخاتمة",
                 "الخاتمة فقط", "فصل فقط", "فقط هذا الجزء",
                 "only the introduction", "only the conclusion",
                 "just write the", "only write the", "write only the",
                 "just the section", "only this part", "only this section")
-        if any(k in t for k in refs):
-            return "references"
-        if any(k in t for k in outline):
-            return "outline"
         if any(k in t for k in part):
-            return "part"
+            scopes.add("part")
+        return scopes
+
+    @staticmethod
+    def _task_scope(text):
+        """Back-compat single-scope view of _task_scopes: the primary limiting
+        scope, by priority references > plan > outline > part, or None."""
+        scopes = WeaverOrchestrator._task_scopes(text)
+        for s in ("references", "plan", "outline", "part"):
+            if s in scopes:
+                return s
         return None
+
+    @staticmethod
+    def _task_action(text):
+        """Detect an ACTION performed on EXISTING/PREVIOUS content rather than a
+        fresh research: 'rewrite' | 'summarize' | 'translate' | 'convert' |
+        'edit' | None. Broad natural phrasings. Order = priority."""
+        t = " " + (text or "").lower() + " "
+        edit = ("أضف إلى الملف", "أضف على الملف", "زد على نفس الملف", "عدّل الملف",
+                "عدل الملف", "كمّل الملف", "أكمل الملف", "أكمل عليه", "نفس الملف",
+                "أضف فقرة", "أضف قسم", "احذف قسم", "غيّر في الملف", "نسخة معدّلة",
+                "نسخة أخرى", "edit the file", "append", "same file",
+                "another version", "add to the file")
+        convert = ("حوّل هذا الملف", "حول هذا الملف", "حوّله إلى", "حوله الى",
+                   "اجعله بصيغة", "صدّر الناتج", "صدر الناتج", "حوّل الناتج",
+                   "خذ الملخص واعمله", "نفس المحتوى بصيغة", "أخرجه بصيغة",
+                   "convert to", "convert this", "export the previous",
+                   "same content as")
+        translate = ("ترجم", "ترجمه", "ترجم لي", "ترجمة النص", "بالإنجليزي",
+                     "بالانجليزي", "إلى الإنجليزية", "الى الانجليزية", "بالعربي",
+                     "إلى العربية", "translate", "in english", "into english",
+                     "into arabic", "to arabic", "to english")
+        summarize = ("لخّص", "لخص", "لخّصلي", "لخصلي", "لخّص لي", "اختصر",
+                     "اختصار", "ملخّص", "ملخص", "أعطني ملخصاً", "باختصار",
+                     "أهم النقاط", "اهم النقاط", "النقاط الرئيسية", "خلاصة",
+                     "زبدة", "summary", "summarize", "summarise", "tl;dr",
+                     "tldr", "key points", "in short")
+        rewrite = ("أعد صياغة", "اعد صياغة", "صُغ من جديد", "صغ من جديد",
+                   "أعد كتابة", "اعد كتابة", "حسّن الصياغة", "حسن الصياغة",
+                   "هذّب النص", "هذب النص", "نقّح", "نقح النص", "طوّر الأسلوب",
+                   "اجعله أكثر بشرية", "أنسِن", "انسن", "بأسلوب بشري",
+                   "بصياغة أفضل", "بأسلوب أكاديمي", "بلغة أبسط", "أعد صياغة الملف",
+                   "reword", "rephrase", "rewrite", "paraphrase", "humanize",
+                   "improve wording", "improve the writing")
+        for name, kws in (("edit", edit), ("convert", convert),
+                          ("translate", translate), ("summarize", summarize),
+                          ("rewrite", rewrite)):
+            if any(k in t for k in kws):
+                return name
+        return None
+
+    @staticmethod
+    def _wants_table(text):
+        """True when the user wants a TABLE inserted into the document (distinct
+        from an Excel FILE, which is a format)."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "أدرج جدول", "ادرج جدول", "أضف جدول", "اضف جدول", "اعمل جدول",
+            "ضع جدولاً", "ضع جدول", "رتّبه في جدول", "رتبه في جدول",
+            "في جدول", "على شكل جدول", "بشكل جدول", "جدول يوضّح", "جدول مقارنة",
+            "جدولاً", "insert a table", "add a table", "in a table",
+            "as a table", "tabulate", "comparison table"))
+
+    @staticmethod
+    def _wants_chart(text):
+        """True when the user wants a CHART/GRAPH drawn."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "رسم بياني", "رسمة بيانية", "رسماً بيانياً", "مخطط بياني",
+            "مخطط أعمدة", "مخطط دائري", "مخطط خطي", "رسوم بيانية", "شارت",
+            "تشارت", "بيان بياني", "رسم توضيحي بالأرقام", "chart", "graph",
+            "plot", "bar chart", "pie chart", "line chart", "diagram of data",
+            "visualize"))
+
+    @staticmethod
+    def _wants_data(text):
+        """True when the user asks to FIND/GATHER data (numbers/statistics) about
+        a topic or from a link (as opposed to writing a full research)."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "أوجد بيانات", "اوجد بيانات", "ابحث عن بيانات", "جمع بيانات",
+            "جمّع بيانات", "بيانات عن", "بيانات حول", "إحصائيات عن",
+            "احصائيات عن", "إحصاءات عن", "أرقام عن", "ارقام عن", "معطيات عن",
+            "بيانات من", "استخرج بيانات", "استخرج البيانات", "بيانات من الرابط",
+            "find data", "gather data", "data about", "statistics about",
+            "numbers about", "extract data", "data from"))
+
+    @staticmethod
+    def _proposal_sections(lang):
+        """The standard sections of a research proposal (خطة بحثية)."""
+        if lang == "ar":
+            titles = ["مشكلة البحث", "أسئلة البحث", "أهداف البحث", "أهمية البحث",
+                      "فرضيات البحث", "منهج البحث وأدواته", "حدود البحث",
+                      "مصطلحات البحث", "الدراسات السابقة", "الهيكل المقترح للبحث"]
+        else:
+            titles = ["Research Problem", "Research Questions", "Objectives",
+                      "Significance", "Hypotheses", "Methodology and Tools",
+                      "Scope and Limitations", "Key Terms", "Literature Review",
+                      "Proposed Structure"]
+        return [{"title": t, "level": 1, "key": "proposal"} for t in titles]
 
     def _format_references_only(self, card, lang):
         """Build a plain numbered references list from the gathered sources."""
@@ -1508,8 +1661,14 @@ class WeaverOrchestrator:
         task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
 
         # scope that LIMITS the task: references-only / outline-only / part-only.
-        task.task_card["scope"] = self._task_scope(
-            self._current_request(task.description))
+        _cur_req = self._current_request(task.description)
+        task.task_card["scope"] = self._task_scope(_cur_req)
+        # full composable set (references/outline/plan/part) for combined asks
+        # like "مراجع وهيكلة فقط". Single-scope consumers keep using ["scope"].
+        try:
+            task.task_card["scopes"] = sorted(self._task_scopes(_cur_req))
+        except Exception:
+            task.task_card["scopes"] = []
 
         # requested slide count (e.g. "اعمل عرض 30 شريحة") → reaches
         # design_slides. Absent → None → default behaviour unchanged.
@@ -1517,6 +1676,23 @@ class WeaverOrchestrator:
             _sc = self._extract_slide_count(task.description)
             if _sc and isinstance(task.task_card, dict):
                 task.task_card["slide_count"] = _sc
+        except Exception:
+            pass
+
+        # action + enrichment intents (rewrite/summarize/translate/convert/edit,
+        # table, chart, find-data). Detection only here; safe wirings read these
+        # flags below. Absent → nothing set → behaviour unchanged.
+        try:
+            if isinstance(task.task_card, dict):
+                _act = self._task_action(_cur_req)
+                if _act:
+                    task.task_card["action"] = _act
+                if self._wants_table(_cur_req):
+                    task.task_card["want_table"] = True
+                if self._wants_chart(_cur_req):
+                    task.task_card["want_chart"] = True
+                if self._wants_data(_cur_req):
+                    task.task_card["want_data"] = True
         except Exception:
             pass
 
@@ -1535,8 +1711,12 @@ class WeaverOrchestrator:
         # Phase 3: route tools & skills once
         self._route(task)
 
-        # references-only must actually gather sources → force the search tools.
-        if task.task_card.get("scope") == "references":
+        # references-only, a proposal, or any composite that includes references
+        # must actually gather sources → force the search tools.
+        _scs = set(task.task_card.get("scopes") or [])
+        if (task.task_card.get("scope") in ("references", "plan")
+                or "references" in _scs or "plan" in _scs
+                or task.task_card.get("want_data")):
             for _t in ("web_search", "academic_search"):
                 if _t not in task.tools:
                     task.tools.append(_t)
@@ -2713,82 +2893,119 @@ class WeaverOrchestrator:
     def _descriptive_titles(self, topic, sections_plan, lang):
         """Replace the abstract structural labels ("المبحث 1"/"المطلب 1.1"/
         "Section 1"/"Subsection 1.2") with DESCRIPTIVE, topic-specific titles the
-        model proposes — preserving the exact shape (how many مباحث, and how many
-        مطالب under each) and each slot's key/level. Intro/conclusion/references/
-        methodology titles are left untouched. Guarded: no model, a bad reply, or
-        a shape mismatch → the original plan is returned unchanged."""
+        model proposes — preserving each slot's position/key/level, and giving
+        every section a DISTINCT sub-topic (which is what stops sibling sections
+        from repeating the same generic definition).
+
+        Uses a SIMPLE numbered line-per-item request (one title per line), which
+        a weak model handles far more reliably than nested JSON — a strong model
+        produces it just as well, so quality is never capped. Intro/conclusion/
+        references are left untouched. Guarded: no model, an empty/garbled reply
+        → the original plan is returned unchanged."""
         if not self.llm_fn or not sections_plan:
             return sections_plan
         import re
         abstract_re = re.compile(
             r'^\s*(?:المبحث|المطلب|Section|Subsection)\b', re.I)
-        # group the abstract body slots: each level-1 (مبحث) with its level-2s
-        groups, cur = [], None
+        # collect the abstract body slots IN ORDER, each with a role label
+        slots, main_no = [], 0        # slots: list of (plan_index, role_text)
         for i, s in enumerate(sections_plan):
             title = (s.get("title") or s.get("heading") or "").strip()
             if not abstract_re.match(title):
                 continue
             lvl = int(s.get("level", 1) or 1)
             if lvl <= 1:
-                cur = {"main": i, "subs": []}
-                groups.append(cur)
-            elif cur is not None:
-                cur["subs"].append(i)
-        if not groups:
-            return sections_plan          # nothing abstract to rename
-        shape = [len(g["subs"]) for g in groups]
-        try:
-            import json as _json
-            if lang == "ar":
-                prompt = (
-                    f"اقترح مخطّطاً علمياً دقيقاً لبحث بعنوان: «{topic}».\n"
-                    f"أريد {len(groups)} مبحثاً رئيسياً، وعدد المطالب تحت كل "
-                    f"مبحث بالترتيب هو: {shape}.\n"
-                    "أعِد JSON فقط بلا أي نص آخر بالشكل:\n"
-                    '[{"main":"عنوان المبحث الوصفي","subs":["عنوان مطلب",...]}]\n'
-                    "عناوين وصفية تخصّ الموضوع فعلاً، بلا ترقيم وبلا كلمتي "
-                    "«مبحث»/«مطلب».")
+                main_no += 1
+                role = (f"مبحث رئيسي رقم {main_no}" if lang == "ar"
+                        else f"main section #{main_no}")
             else:
-                prompt = (
-                    f"Propose a precise academic outline for: \"{topic}\".\n"
-                    f"I need {len(groups)} main sections; the number of "
-                    f"subsections under each, in order, is: {shape}.\n"
-                    "Return JSON only, no other text:\n"
-                    '[{"main":"descriptive section title","subs":["subsection",'
-                    '...]}]\nDescriptive, topic-specific titles, no numbering, no '
-                    "the words 'Section'/'Subsection'.")
+                role = (f"مطلب فرعي تحت المبحث {main_no}" if lang == "ar"
+                        else f"subsection under section {main_no}")
+            slots.append((i, role))
+        if not slots:
+            return sections_plan          # nothing abstract to rename
+        roles_block = "\n".join(f"{n + 1}. {r}"
+                                for n, (idx, r) in enumerate(slots))
+        if lang == "ar":
+            prompt = (
+                f"أريد عناوين وصفية دقيقة لبحث علمي عن: «{topic}».\n"
+                f"لكل بندٍ في القائمة التالية اكتب عنواناً وصفياً واحداً يخصّ "
+                f"الموضوع فعلاً، ومختلفاً عن البقية (لا تعريفات عامة مكرّرة)، بلا "
+                f"كلمتَي «مبحث»/«مطلب»:\n{roles_block}\n\n"
+                f"أعِد {len(slots)} سطراً فقط، سطراً واحداً لكل عنوان وبنفس "
+                f"الترتيب، كلٌّ يبدأ برقمه هكذا: «1. العنوان».")
+        else:
+            prompt = (
+                f"I need precise descriptive titles for research on: \"{topic}\".\n"
+                f"For each item below, write ONE descriptive, topic-specific "
+                f"title, distinct from the others (no repeated general "
+                f"definitions), without the words 'Section'/'Subsection':\n"
+                f"{roles_block}\n\nReturn exactly {len(slots)} lines, one title "
+                f"per line in the same order, each starting with its number: "
+                f"\"1. Title\".")
+        try:
             raw = self.llm_fn(prompt, system=self.system_main,
                               temperature=0.3) or ""
-            # extract the JSON ARRAY (extract_json only handles a single object).
-            # tolerant to weak-model slips: single quotes, trailing commas.
-            m = re.search(r'\[.*\]', raw, re.S)
-            data = None
-            if m:
-                frag = m.group(0)
-                _q = frag.replace("'", '"')                  # single→double
-                _qc = re.sub(r',\s*([}\]])', r'\1', _q)      # + drop trailing commas
-                for _cand in (frag, _q, _qc):
-                    try:
-                        data = _json.loads(_cand)
-                        break
-                    except Exception:
-                        continue
         except Exception:
             return sections_plan
-        if not isinstance(data, list) or not data:
-            return sections_plan
-        plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
-        for gi, g in enumerate(groups):
-            if gi >= len(data) or not isinstance(data[gi], dict):
+        # parse: prefer "N. title" numbering; else take non-empty lines in order
+        titles = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
                 continue
-            mt = str(data[gi].get("main", "")).strip()
-            if mt:
-                plan[g["main"]]["title"] = mt
-            subs = data[gi].get("subs") or []
-            for si, sidx in enumerate(g["subs"]):
-                if si < len(subs) and str(subs[si]).strip():
-                    plan[sidx]["title"] = str(subs[si]).strip()
+            m = re.match(r'^[\(\[]?(\d{1,3})[\)\].\-:،]\s*(.+)$', line)
+            if m:
+                n = int(m.group(1))
+                if 1 <= n <= len(slots):
+                    titles[n - 1] = m.group(2).strip()
+        if not titles:
+            lines = [re.sub(r'^[\-\*•\d\.\)\(:،\s]+', '', l).strip()
+                     for l in raw.splitlines() if l.strip()]
+            lines = [l for l in lines if l]
+            for k, l in enumerate(lines[:len(slots)]):
+                titles[k] = l
+        if not titles:
+            return sections_plan
+
+        def _clean(t):
+            t = (t or "").strip().strip('"“”«»').strip()
+            t = re.sub(r'^(?:المبحث|المطلب|Section|Subsection)\b[\s:،.\d]*', '',
+                       t, flags=re.I).strip()
+            return t
+        plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
+        for k, (idx, role) in enumerate(slots):
+            if k in titles:
+                ct = _clean(titles[k])
+                if ct:
+                    plan[idx]["title"] = ct
         return plan
+
+    @staticmethod
+    def _clean_section_body(body, title):
+        """Tidy a written section body: drop a leading duplicate of its own
+        heading (the "المطلب 1.3: …" leak), and strip leaked markdown heading
+        markers (## …) that the docx builder would otherwise show literally.
+        Prose content is preserved. Safe on empty input."""
+        import re
+        if not body:
+            return body
+        b = body.lstrip()
+        t = (title or "").strip()
+        # strip a leading duplicate of the heading ONLY when it reads as a
+        # heading (title then ":"/"："/line-break/end) — never when the title
+        # naturally opens the first sentence (e.g. "التركيب … هو الوحدة …").
+        if t and b.startswith(t):
+            _rest = b[len(t):]
+            _after = _rest.lstrip()
+            if _rest[:1] == "\n" or _after[:1] in (":", "：") or _after == "":
+                b = _rest.lstrip(" :：،.-\n")
+        # a leading abstract label glued to the start ("المطلب 1.3: ")
+        b = re.sub(r'^\s*(?:المبحث|المطلب|Section|Subsection)\s*[\d.]*\s*'
+                   r'[:：]?\s*', '', b)
+        # markdown heading markers at line starts → keep text, drop the hashes
+        b = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', b)
+        return b.strip()
 
     async def _layer_6(self, task: Task, mem: TaskMemory):
         """٦: الصياغة — بناء البنية ثم المنهجية ثم كتابة كل قسم.
@@ -2914,6 +3131,41 @@ class WeaverOrchestrator:
         # ── scope limits (references-only / part-only handled here; outline-only
         #    after the structure is built below) ──
         scope = card.get("scope")
+        scopes = set(card.get("scopes") or ([scope] if scope else []))
+
+        # composite (no-write): references + outline together → one document with
+        # the outline block AND the references block. Placed before the single
+        # scopes so the combined ask isn't collapsed to references-only.
+        if {"references", "outline"} <= scopes and "part" not in scopes:
+            out_head = "هيكل العمل" if lang == "ar" else "Outline"
+            ref_head = "المراجع والدراسات" if lang == "ar" else "References"
+            _sp = card.get("sections")
+            if not _sp:
+                try:
+                    _pl = self._skill_call("research_structure", "structures",
+                                           "build_structure", card, lang)
+                    _sp = (_pl or {}).get("sections") or []
+                except Exception:
+                    _sp = []
+            try:
+                _sp = self._descriptive_titles(
+                    card.get("topic", "") or task.description, _sp, lang)
+            except Exception:
+                pass
+            _ol = []
+            for sec in _sp:
+                _lvl = int(sec.get("level", 1) or 1)
+                _ti = sec.get("title") or sec.get("heading") or ""
+                if _ti:
+                    _ol.append(("  " * max(0, _lvl - 1)) + "- " + _ti)
+            _ob = "\n".join(_ol)
+            _rb = self._format_references_only(card, lang)
+            task.sections = [{"heading": out_head, "body": _ob},
+                             {"heading": ref_head, "body": _rb}]
+            task.draft = f"## {out_head}\n\n{_ob}\n\n## {ref_head}\n\n{_rb}"
+            mem.set_status(6, "إخراج: هيكل + مراجع")
+            return
+
         if scope == "references":
             head = "المراجع والدراسات" if lang == "ar" else "References"
             body = self._format_references_only(card, lang)
@@ -2946,6 +3198,14 @@ class WeaverOrchestrator:
         if not sections_plan:
             sections_plan = [{"title": card.get("topic", "") or task.description,
                               "level": 1}]
+
+        # research proposal (خطة بحثية/مقترح): use the standard proposal sections
+        # (problem, questions, objectives, significance, hypotheses, methodology,
+        # scope, terms, prior studies, proposed structure) and write them — a
+        # proposal is a real document, distinct from a bare outline.
+        if scope == "plan" or "plan" in scopes:
+            sections_plan = self._proposal_sections(lang)
+            card["sections"] = sections_plan
 
         # give the abstract "المبحث/المطلب" slots DESCRIPTIVE, topic-specific
         # titles so each section chunk has a real sub-topic to write about (the
@@ -3042,6 +3302,22 @@ class WeaverOrchestrator:
             if self.llm_fn and not body:
                 from pipeline import prompts as _p
                 _topic = card.get("topic", "") or task.description
+                # prior-sections context so each section knows what was already
+                # written and does NOT repeat the general definition (the direct
+                # cause of sibling sections all restating the same opening). Helps
+                # a strong model cohere and a weak one avoid loops alike.
+                _prior = ""
+                _pi = [f"- {o.get('heading', '')}: "
+                       f"{' '.join((o.get('body', '') or '').split())[:110]}"
+                       for o in out_sections[-6:] if (o.get('body') or '').strip()]
+                if _pi:
+                    _prior = ((
+                        "أقسامٌ كُتبت قبل هذا القسم — لا تُعِد تعريف الموضوع العام "
+                        "ولا محتواها، وركّز حصراً على الزاوية الخاصة بهذا القسم:\n"
+                        if lang == "ar" else
+                        "Sections already written — do NOT repeat the general "
+                        "definition or their content; focus only on THIS "
+                        "section's angle:\n") + "\n".join(_pi) + "\n")
                 # MODEL-AGNOSTIC safety net: if the title is still an abstract
                 # structural label (a weak model may not have produced a
                 # descriptive one), frame it with the topic so the writer knows
@@ -3061,21 +3337,21 @@ class WeaverOrchestrator:
                     prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
                         section_name=section_name, topic=card.get("topic", ""),
                         length=card.get("page_count", ""),
-                        rag_contexts=rag_ctx or "(none)", prior_content="")
+                        rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 elif mode == "none" or no_ctx:
                     # explicit no-sources request, OR sources were required but
                     # none could be retrieved — write from knowledge, no refusal
                     prompt = _p.PROMPT_LAYER_6_WRITE_NO_SOURCES.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        length=card.get("page_count", ""), prior_content="")
+                        length=card.get("page_count", ""), prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 else:
                     prompt = _p.PROMPT_LAYER_6_WRITE.format(
                         section_name=section_name, topic=card.get("topic", ""),
                         citation_style=card.get("citation_style", ""),
                         length=card.get("page_count", ""),
-                        rag_contexts=rag_ctx or "(none)", prior_content="")
+                        rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
                     system = _p.SYSTEM_PROMPT_WRITE
@@ -3135,6 +3411,8 @@ class WeaverOrchestrator:
                             body = _db.strip()
                     except Exception:
                         pass
+            # tidy leaked heading duplicates / markdown markers before shipping
+            body = self._clean_section_body(body, title)
             parts.append((f"{title}\n{body}").strip())
             out_sections.append({"heading": title, "body": body})
         task.draft = "\n\n".join(p for p in parts if p)
@@ -3149,6 +3427,44 @@ class WeaverOrchestrator:
         # enforce correct Quran/Hadith marks for Islamic content (text-level,
         # all formats). Additive/guarded; no-op for non-Islamic text.
         self._apply_islamic_marks(task, card, lang, mem)
+        # optional enrichments the user explicitly asked for (additive/guarded)
+        self._enrich_table_chart(task, card, lang, mem)
+
+    def _enrich_table_chart(self, task, card, lang, mem):
+        """When the request asked for a table and/or a chart, derive them from
+        the written content and attach them. A table becomes its own section; a
+        chart spec is stored on the card so _maybe_chart renders it at export.
+        Never fabricates numbers (the model is told to return empty otherwise).
+        Additive and fully guarded — a miss changes nothing."""
+        if not self.llm_fn:
+            return
+        content = task.draft or "\n".join(
+            (s.get("body", "") or "") for s in (task.sections or []))
+        if not content.strip():
+            return
+        if card.get("want_table"):
+            try:
+                tbl = _content_to_table(self.llm_fn, content, lang)
+                if tbl and tbl.get("headers") and tbl.get("rows"):
+                    md = self._skill_call("table_builder", "make_table",
+                                          "make_table", tbl["headers"],
+                                          tbl["rows"], lang=lang)
+                    head = "جدول توضيحي" if lang == "ar" else "Table"
+                    if md:
+                        task.sections = (task.sections or []) + [
+                            {"heading": head, "body": md}]
+                        task.draft = (task.draft or "") + f"\n\n## {head}\n\n{md}"
+                        mem.set_status(6, "أُدرج جدول من المحتوى")
+            except Exception as e:
+                mem.set_status(6, f"جدول (تخطّي: {e})")
+        if card.get("want_chart") and not card.get("chart"):
+            try:
+                spec = _content_to_chart(self.llm_fn, content, lang)
+                if spec:
+                    card["chart"] = spec        # _maybe_chart renders at export
+                    mem.set_status(6, "أُعدّ رسم بياني من المحتوى")
+            except Exception as e:
+                mem.set_status(6, f"رسم بياني (تخطّي: {e})")
 
     async def _layer_6_6(self, task, mem):
         """٦.٦: تحقق الطول والتغطية — بين الكتابة (6) والأنسنة (6.5).
@@ -4154,6 +4470,46 @@ def _content_to_table(llm_fn, content, lang="ar"):
         rows = [[str(c) for c in r] for r in rows if isinstance(r, list) and r]
         if headers and rows:
             return {"headers": [str(h) for h in headers], "rows": rows}
+        return None
+    except Exception:
+        return None
+
+
+def _content_to_chart(llm_fn, content, lang="ar"):
+    """Ask the model to pull a small chartable series (labels + numeric values)
+    from content. Returns a chart spec {"type","data":{"labels","values"},
+    "title"} ready for _maybe_chart, or None when there's nothing numeric."""
+    if not llm_fn:
+        return None
+    try:
+        from core.llm import extract_json
+        prompt = (
+            "استخرج من المحتوى سلسلةً رقمية قابلة للرسم (تسميات وقيَم عددية). "
+            "إن لم توجد أرقام حقيقية فأعِد {\"values\":[]} فقط دون اختلاق. أعِد "
+            "JSON فقط: {\"type\":\"bar|pie|line\",\"title\":\"..\","
+            "\"labels\":[\"..\"],\"values\":[رقم,..]}:\n\n"
+            if lang == "ar" else
+            "Extract a small chartable numeric series (labels + numeric values) "
+            "from the content. If there are no real numbers, return "
+            "{\"values\":[]} — never fabricate. Return JSON only: "
+            "{\"type\":\"bar|pie|line\",\"title\":\"..\",\"labels\":[..],"
+            "\"values\":[num,..]}:\n\n"
+        ) + (content or "")[:9000]
+        data = extract_json(llm_fn(prompt, temperature=0.1)) or {}
+        labels = [str(x) for x in (data.get("labels") or [])]
+        vals = []
+        for v in (data.get("values") or []):
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                vals = []
+                break
+        if labels and vals and len(labels) == len(vals) and len(vals) >= 2:
+            ctype = str(data.get("type", "bar")).lower()
+            if ctype not in ("bar", "pie", "line"):
+                ctype = "bar"
+            return {"type": ctype, "title": str(data.get("title", "")),
+                    "data": {"labels": labels, "values": vals}}
         return None
     except Exception:
         return None
