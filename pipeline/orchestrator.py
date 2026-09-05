@@ -2710,6 +2710,75 @@ class WeaverOrchestrator:
         task.task_card["credibility"] = {"kept": len(kept), "dropped": dropped}
         mem.set_status(5, f"مصداقية: قُبل {len(kept)}، رُفض {len(dropped)}")
 
+    def _descriptive_titles(self, topic, sections_plan, lang):
+        """Replace the abstract structural labels ("المبحث 1"/"المطلب 1.1"/
+        "Section 1"/"Subsection 1.2") with DESCRIPTIVE, topic-specific titles the
+        model proposes — preserving the exact shape (how many مباحث, and how many
+        مطالب under each) and each slot's key/level. Intro/conclusion/references/
+        methodology titles are left untouched. Guarded: no model, a bad reply, or
+        a shape mismatch → the original plan is returned unchanged."""
+        if not self.llm_fn or not sections_plan:
+            return sections_plan
+        import re
+        abstract_re = re.compile(
+            r'^\s*(?:المبحث|المطلب|Section|Subsection)\b', re.I)
+        # group the abstract body slots: each level-1 (مبحث) with its level-2s
+        groups, cur = [], None
+        for i, s in enumerate(sections_plan):
+            title = (s.get("title") or s.get("heading") or "").strip()
+            if not abstract_re.match(title):
+                continue
+            lvl = int(s.get("level", 1) or 1)
+            if lvl <= 1:
+                cur = {"main": i, "subs": []}
+                groups.append(cur)
+            elif cur is not None:
+                cur["subs"].append(i)
+        if not groups:
+            return sections_plan          # nothing abstract to rename
+        shape = [len(g["subs"]) for g in groups]
+        try:
+            import json as _json
+            if lang == "ar":
+                prompt = (
+                    f"اقترح مخطّطاً علمياً دقيقاً لبحث بعنوان: «{topic}».\n"
+                    f"أريد {len(groups)} مبحثاً رئيسياً، وعدد المطالب تحت كل "
+                    f"مبحث بالترتيب هو: {shape}.\n"
+                    "أعِد JSON فقط بلا أي نص آخر بالشكل:\n"
+                    '[{"main":"عنوان المبحث الوصفي","subs":["عنوان مطلب",...]}]\n'
+                    "عناوين وصفية تخصّ الموضوع فعلاً، بلا ترقيم وبلا كلمتي "
+                    "«مبحث»/«مطلب».")
+            else:
+                prompt = (
+                    f"Propose a precise academic outline for: \"{topic}\".\n"
+                    f"I need {len(groups)} main sections; the number of "
+                    f"subsections under each, in order, is: {shape}.\n"
+                    "Return JSON only, no other text:\n"
+                    '[{"main":"descriptive section title","subs":["subsection",'
+                    '...]}]\nDescriptive, topic-specific titles, no numbering, no '
+                    "the words 'Section'/'Subsection'.")
+            raw = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.3) or ""
+            # extract the JSON ARRAY (extract_json only handles a single object)
+            m = re.search(r'\[.*\]', raw, re.S)
+            data = _json.loads(m.group(0)) if m else None
+        except Exception:
+            return sections_plan
+        if not isinstance(data, list) or not data:
+            return sections_plan
+        plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
+        for gi, g in enumerate(groups):
+            if gi >= len(data) or not isinstance(data[gi], dict):
+                continue
+            mt = str(data[gi].get("main", "")).strip()
+            if mt:
+                plan[g["main"]]["title"] = mt
+            subs = data[gi].get("subs") or []
+            for si, sidx in enumerate(g["subs"]):
+                if si < len(subs) and str(subs[si]).strip():
+                    plan[sidx]["title"] = str(subs[si]).strip()
+        return plan
+
     async def _layer_6(self, task: Task, mem: TaskMemory):
         """٦: الصياغة — بناء البنية ثم المنهجية ثم كتابة كل قسم.
         كل خطوة تستخدم مهارة/قالباً موجوداً؛ عند غياب النموذج تبقى مسودة فارغة."""
@@ -2867,6 +2936,17 @@ class WeaverOrchestrator:
             sections_plan = [{"title": card.get("topic", "") or task.description,
                               "level": 1}]
 
+        # give the abstract "المبحث/المطلب" slots DESCRIPTIVE, topic-specific
+        # titles so each section chunk has a real sub-topic to write about (the
+        # writer can't produce content for a meaningless "المطلب 1.1"). Additive
+        # and guarded: on any miss the original structural labels are kept.
+        try:
+            sections_plan = self._descriptive_titles(
+                card.get("topic", "") or task.description, sections_plan, lang)
+            card["sections"] = sections_plan
+        except Exception as e:
+            mem.set_status(6, f"عناوين وصفية (تخطّي: {e})")
+
         # outline-only → output just the structure, don't write any bodies
         if scope == "outline":
             head = "هيكل العمل" if lang == "ar" else "Outline"
@@ -2905,6 +2985,26 @@ class WeaverOrchestrator:
         rag = mem.get_references(card.get("topic", "") or task.description,
                                  limit=20) or []
         rag_ctx = "\n".join(str(x) for x in rag)
+        # fallback: the semantic memory search can miss even when sources WERE
+        # gathered (they live in card["sources"]). Build the context straight
+        # from them so the section writers actually receive the evidence — this
+        # is what lets the cited path (and the specialized writers) run instead
+        # of silently degrading to the no-sources path.
+        if (not rag_ctx.strip()) and card.get("sources"):
+            _lines = []
+            for s in (card.get("sources") or [])[:20]:
+                if isinstance(s, dict):
+                    _t = s.get("title") or ""
+                    _c = (s.get("content") or "")[:200]
+                    _k = s.get("key") or s.get("doi") or ""
+                    _u = s.get("url") or ""
+                    _line = f"[{_k}] {_t} — {_c} ({_u})".strip()
+                    if _line.strip("[] —()"):
+                        _lines.append(_line)
+                elif str(s).strip():
+                    _lines.append(str(s))
+            if _lines:
+                rag_ctx = "\n".join(_lines)
         no_ctx = (not rag_ctx) or rag_ctx.strip() in ("", "(none)")
         mode = card.get("sourcing_mode", "cited")
         # In "cited" mode with NO retrieved context, don't refuse — write from
