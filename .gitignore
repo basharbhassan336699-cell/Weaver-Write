@@ -26,3 +26,6 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+
+# Node deps for the html2pptx engine (installed locally via npm)
+engines/html2pptx-core/node_modules/
