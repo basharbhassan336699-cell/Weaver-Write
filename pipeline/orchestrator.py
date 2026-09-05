@@ -1206,7 +1206,8 @@ class WeaverOrchestrator:
         card = task.task_card
         of = card.get("output_format", [])
         of = of if isinstance(of, list) else [of]
-        text = f"{card.get('topic','')} {task.description} " \
+        text = f"{card.get('topic','')} " \
+               f"{self._strip_injected_memory(task.description)} " \
                f"{card.get('task_type','')} {' '.join(str(x) for x in of)}"
         if self.caps:
             task.tools = [t.name for t in self.caps.match_tools(text)]
@@ -1249,7 +1250,8 @@ class WeaverOrchestrator:
         # news/recency intent enables web_search even for non-academic tasks
         # (never academic_search — news isn't academic). Respect "none" mode below.
         if mode != "none" and self._is_recency_query(
-                f"{card.get('topic','')} {task.description}"):
+                f"{card.get('topic','')} "
+                f"{self._strip_injected_memory(task.description)}"):
             task.tools.append("web_search")
         if mode == "none":
             # explicit no-sources request: strip every source-gathering tool
@@ -1314,17 +1316,39 @@ class WeaverOrchestrator:
         if deleg:
             task.task_card["tool_delegation"] = deleg
 
+    # markers of APPENDED context the web layer adds AFTER the real request:
+    # cross-chat memory ("[للسياق فقط …]") and its follow-up instruction. These
+    # are for the WRITER only — detectors must NEVER read them, or a link/verb
+    # recalled from another conversation hijacks the current request.
+    _INJECTED_CTX_MARKERS = (
+        "[للسياق فقط", "[تعليمة]", "[مهام سابقة", "[سياق مهام",
+        "[for context only", "[note]")
+
+    @staticmethod
+    def _strip_injected_memory(text):
+        """Remove ONLY the appended cross-chat memory / instruction block, while
+        keeping the current request and this conversation's own history. Used by
+        detectors so recalled content from OTHER chats is never acted upon."""
+        t = text or ""
+        cut = len(t)
+        for m in WeaverOrchestrator._INJECTED_CTX_MARKERS:
+            i = t.find(m)
+            if i != -1 and i < cut:
+                cut = i
+        return t[:cut]
+
     @staticmethod
     def _current_request(text):
-        """Return only the CURRENT request, dropping any threaded conversation
-        history the web/terminal prefixes as
-        "[سياق المحادثة السابقة] … [الطلب الحالي] …". Used so a link or verb from
-        an EARLIER turn never hijacks the current one — e.g. asking to summarize
-        THIS conversation must not re-summarize a video linked earlier."""
+        """Return ONLY the current request: drop the threaded history the web
+        prefixes as "[سياق المحادثة السابقة] … [الطلب الحالي] …", AND drop any
+        appended cross-chat memory block. So a link or verb from an earlier turn
+        — or recalled from another conversation — never hijacks the request now
+        (e.g. "لخّص ما عملناه" must not re-summarize an old video, and asking for
+        an outline must not turn into transcribing a video from memory)."""
         t = text or ""
         if "[الطلب الحالي]" in t:
-            return t.rsplit("[الطلب الحالي]", 1)[-1]
-        return t
+            t = t.rsplit("[الطلب الحالي]", 1)[-1]
+        return WeaverOrchestrator._strip_injected_memory(t).strip()
 
     @staticmethod
     def _extract_slide_count(text):
@@ -1509,7 +1533,11 @@ class WeaverOrchestrator:
                                      " video ", " full ", " complete ")))
                 if _refers_video:
                     _last = None
-                    for _u in _re.findall(r"https?://\S+", task.description or ""):
+                    # reuse a link from THIS conversation's history, but NEVER
+                    # from the appended cross-chat memory block.
+                    for _u in _re.findall(
+                            r"https?://\S+",
+                            self._strip_injected_memory(task.description)):
                         _u = _u.rstrip('.,)"\'،؛')
                         if _yt.is_youtube_url(_u):
                             _last = _u        # keep the LAST match
@@ -3025,7 +3053,8 @@ class WeaverOrchestrator:
         # Quran/Hadith marks (enforced again after writing by _apply_islamic_marks)
         try:
             card.setdefault("islamic", self._is_islamic_content(
-                f"{card.get('topic','')} {task.description}"))
+                f"{card.get('topic','')} "
+                f"{self._strip_injected_memory(task.description)}"))
         except Exception:
             pass
 
