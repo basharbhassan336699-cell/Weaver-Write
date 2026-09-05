@@ -327,40 +327,118 @@ class WeaverOrchestrator:
         "in its original", "keep the language", "keep it in",
     )
 
+    # markers of a FULL-document write request — when present, the broad
+    # (non-"only") reference/outline phrasings below are NOT treated as a limiting
+    # scope (so "اكتب بحثاً عن X مع مراجع" stays a full research, not references-only).
+    _WRITE_FULL_MARK = (
+        "اكتب بحث", "اكتب لي بحث", "اكتب مقال", "اكتب دراسة", "اكتب تقرير",
+        "اكتب موضوع", "اعمل بحث", "أعد بحث", "اعد بحث", "حضّر بحث", "حضر بحث",
+        "جهّز بحث", "بحثاً كاملاً", "بحث كامل", "بحثا كاملا",
+        "write a research", "write an essay", "write a report", "write a paper",
+        "full research", "research paper")
+
     @staticmethod
-    def _task_scope(text):
-        """Detect a SCOPE that limits a document task: 'references' (only find
-        and list references/studies, no writing), 'outline' (only the structure),
-        'part' (write only a specific part), or None (full document)."""
+    def _task_scopes(text):
+        """Return the SET of limiting scopes a request asks for (composable):
+        'references' (find/list sources, no writing), 'outline' (structure only),
+        'plan' (a research proposal), 'part' (a specific part only). Empty set →
+        a full document. Broad natural phrasings resolve here; the "only"/"فقط"
+        forms fire unconditionally, while the softer forms fire only when the
+        request is NOT a full-document write (so composites like "مراجع وهيكلة
+        فقط" work, and "اكتب بحثاً + مراجع" stays a full research)."""
         t = " " + (text or "").lower() + " "
-        refs = ("مراجع فقط", "المراجع فقط", "فقط المراجع", "فقط مراجع",
-                "دراسات سابقة فقط", "فقط الدراسات", "الدراسات فقط", "فقط المصادر",
-                "المصادر فقط", "قائمة مراجع", "قائمة المراجع", "قائمة مصادر",
-                "اوجد مراجع", "أوجد مراجع", "ابحث عن مراجع", "ابحث لي عن مراجع",
-                "جد مراجع", "هات مراجع", "اعطني مراجع", "أعطني مراجع",
-                "اعطني مصادر", "اعطني دراسات", "دون كتابة الموضوع",
-                "references only", "just references", "only references",
-                "list of references", "find references", "find sources",
-                "sources only", "only sources", "list sources", "bibliography")
-        outline = ("هيكل فقط", "الهيكل فقط", "فقط الهيكل", "العناصر فقط",
-                   "فقط العناصر", "الخطة فقط", "خطة البحث فقط", "فقط الخطة",
-                   "عناصر البحث فقط", "جدول المحتويات", "الخطوط العريضة",
-                   "outline only", "just an outline", "only an outline",
-                   "structure only", "just the outline", "table of contents",
-                   "only outline")
+        writing = any(k in t for k in WeaverOrchestrator._WRITE_FULL_MARK)
+        scopes = set()
+
+        # ── references / sources / prior studies ──
+        refs_only = ("مراجع فقط", "المراجع فقط", "فقط المراجع", "فقط مراجع",
+                     "دراسات سابقة فقط", "فقط الدراسات", "الدراسات فقط",
+                     "فقط المصادر", "المصادر فقط", "قائمة مراجع", "قائمة المراجع",
+                     "قائمة مصادر", "قائمة الدراسات", "دون كتابة الموضوع",
+                     "بلا كتابة", "references only", "just references",
+                     "only references", "list of references", "sources only",
+                     "only sources", "list sources", "bibliography")
+        refs_soft = ("اوجد مراجع", "أوجد مراجع", "إيجاد مراجع", "ايجاد مراجع",
+                     "جمع مراجع", "تجميع مصادر", "توفير مصادر", "حصر المراجع",
+                     "ابحث عن مراجع", "ابحث لي عن مراجع", "البحث عن مراجع",
+                     "جد مراجع", "هات مراجع", "هاتلي مراجع", "جيبلي مصادر",
+                     "اعطني مراجع", "أعطني مراجع", "اعطني مصادر", "اعطني دراسات",
+                     "زوّدني بمراجع", "زودني بمراجع", "دلّني على مراجع",
+                     "اجمع لي مراجع", "احضر لي مصادر", "اجلب لي مراجع",
+                     "مراجع عن", "مراجع حول", "مصادر عن", "مصادر حول",
+                     "دراسات سابقة عن", "أدبيات الموضوع", "الأدبيات السابقة",
+                     "find references", "find sources", "gather sources",
+                     "collect references", "literature list")
+        _limiting = ("فقط" in t or " only " in t or " just " in t)
+        if any(k in t for k in refs_only) or (
+                not writing and any(k in t for k in refs_soft)) or (
+                # bare "مراجع/مصادر/دراسات" counts ONLY with a limiting cue and
+                # no full-write verb — so composites like "مراجع وهيكلة فقط" work
+                # while "اكتب بحثاً عن مصادر الطاقة" stays a full research.
+                not writing and _limiting and any(
+                    w in t for w in ("مراجع", "مصادر", "دراسات سابقة",
+                                     "references", "sources"))):
+            scopes.add("references")
+
+        # ── research proposal (خطة/مقترح/بروبوزال) — distinct from an outline ──
+        plan_kw = ("خطة بحثية", "خطة بحث", "خطة الدراسة", "خطة دراسة",
+                   "خطة رسالة", "خطة أطروحة", "خطة اطروحة", "خطة ماجستير",
+                   "خطة دكتوراه", "مقترح بحثي", "المقترح البحثي", "مقترح بحث",
+                   "تصور مقترح", "تصوّر مقترح", "بروبوزال", "بروبوزل", "بروبزال",
+                   "proposal", "research proposal", "thesis proposal",
+                   "dissertation proposal", "study plan")
+        if any(k in t for k in plan_kw):
+            scopes.add("plan")
+
+        # ── outline / structure (headings only) ──
+        out_only = ("هيكل فقط", "الهيكل فقط", "فقط الهيكل", "العناصر فقط",
+                    "فقط العناصر", "عناصر البحث فقط", "جدول المحتويات",
+                    "الخطوط العريضة", "outline only", "just an outline",
+                    "only an outline", "structure only", "just the outline",
+                    "table of contents", "only outline")
+        out_soft = ("هيكلة", "هيكل بحث", "هيكل الموضوع", "هيكل البحث",
+                    "بنية البحث", "بنية الموضوع", "عناصر البحث", "عناصر الموضوع",
+                    "أقسام البحث", "اقسام البحث", "فهرس البحث", "مخطط البحث",
+                    "رؤوس الأقسام", "اعمل هيكل", "صمم هيكل", "صمّم هيكل",
+                    "قسّم لي الموضوع", "قسم لي الموضوع", "outline", "structure of")
+        if any(k in t for k in out_only) or (
+                not writing and any(k in t for k in out_soft)):
+            scopes.add("outline")
+
+        # ── a specific part only ──
         part = ("اكتب فقط", "فقط اكتب", "جزء فقط", "فقط جزء", "المقدمة فقط",
                 "فقط المقدمة", "قسم فقط", "فقط قسم", "فقرة فقط", "فقط الخاتمة",
                 "الخاتمة فقط", "فصل فقط", "فقط هذا الجزء",
                 "only the introduction", "only the conclusion",
                 "just write the", "only write the", "write only the",
                 "just the section", "only this part", "only this section")
-        if any(k in t for k in refs):
-            return "references"
-        if any(k in t for k in outline):
-            return "outline"
         if any(k in t for k in part):
-            return "part"
+            scopes.add("part")
+        return scopes
+
+    @staticmethod
+    def _task_scope(text):
+        """Back-compat single-scope view of _task_scopes: the primary limiting
+        scope, by priority references > plan > outline > part, or None."""
+        scopes = WeaverOrchestrator._task_scopes(text)
+        for s in ("references", "plan", "outline", "part"):
+            if s in scopes:
+                return s
         return None
+
+    @staticmethod
+    def _proposal_sections(lang):
+        """The standard sections of a research proposal (خطة بحثية)."""
+        if lang == "ar":
+            titles = ["مشكلة البحث", "أسئلة البحث", "أهداف البحث", "أهمية البحث",
+                      "فرضيات البحث", "منهج البحث وأدواته", "حدود البحث",
+                      "مصطلحات البحث", "الدراسات السابقة", "الهيكل المقترح للبحث"]
+        else:
+            titles = ["Research Problem", "Research Questions", "Objectives",
+                      "Significance", "Hypotheses", "Methodology and Tools",
+                      "Scope and Limitations", "Key Terms", "Literature Review",
+                      "Proposed Structure"]
+        return [{"title": t, "level": 1, "key": "proposal"} for t in titles]
 
     def _format_references_only(self, card, lang):
         """Build a plain numbered references list from the gathered sources."""
@@ -1508,8 +1586,14 @@ class WeaverOrchestrator:
         task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
 
         # scope that LIMITS the task: references-only / outline-only / part-only.
-        task.task_card["scope"] = self._task_scope(
-            self._current_request(task.description))
+        _cur_req = self._current_request(task.description)
+        task.task_card["scope"] = self._task_scope(_cur_req)
+        # full composable set (references/outline/plan/part) for combined asks
+        # like "مراجع وهيكلة فقط". Single-scope consumers keep using ["scope"].
+        try:
+            task.task_card["scopes"] = sorted(self._task_scopes(_cur_req))
+        except Exception:
+            task.task_card["scopes"] = []
 
         # requested slide count (e.g. "اعمل عرض 30 شريحة") → reaches
         # design_slides. Absent → None → default behaviour unchanged.
@@ -1535,8 +1619,11 @@ class WeaverOrchestrator:
         # Phase 3: route tools & skills once
         self._route(task)
 
-        # references-only must actually gather sources → force the search tools.
-        if task.task_card.get("scope") == "references":
+        # references-only, a proposal, or any composite that includes references
+        # must actually gather sources → force the search tools.
+        _scs = set(task.task_card.get("scopes") or [])
+        if (task.task_card.get("scope") in ("references", "plan")
+                or "references" in _scs or "plan" in _scs):
             for _t in ("web_search", "academic_search"):
                 if _t not in task.tools:
                     task.tools.append(_t)
@@ -2951,6 +3038,41 @@ class WeaverOrchestrator:
         # ── scope limits (references-only / part-only handled here; outline-only
         #    after the structure is built below) ──
         scope = card.get("scope")
+        scopes = set(card.get("scopes") or ([scope] if scope else []))
+
+        # composite (no-write): references + outline together → one document with
+        # the outline block AND the references block. Placed before the single
+        # scopes so the combined ask isn't collapsed to references-only.
+        if {"references", "outline"} <= scopes and "part" not in scopes:
+            out_head = "هيكل العمل" if lang == "ar" else "Outline"
+            ref_head = "المراجع والدراسات" if lang == "ar" else "References"
+            _sp = card.get("sections")
+            if not _sp:
+                try:
+                    _pl = self._skill_call("research_structure", "structures",
+                                           "build_structure", card, lang)
+                    _sp = (_pl or {}).get("sections") or []
+                except Exception:
+                    _sp = []
+            try:
+                _sp = self._descriptive_titles(
+                    card.get("topic", "") or task.description, _sp, lang)
+            except Exception:
+                pass
+            _ol = []
+            for sec in _sp:
+                _lvl = int(sec.get("level", 1) or 1)
+                _ti = sec.get("title") or sec.get("heading") or ""
+                if _ti:
+                    _ol.append(("  " * max(0, _lvl - 1)) + "- " + _ti)
+            _ob = "\n".join(_ol)
+            _rb = self._format_references_only(card, lang)
+            task.sections = [{"heading": out_head, "body": _ob},
+                             {"heading": ref_head, "body": _rb}]
+            task.draft = f"## {out_head}\n\n{_ob}\n\n## {ref_head}\n\n{_rb}"
+            mem.set_status(6, "إخراج: هيكل + مراجع")
+            return
+
         if scope == "references":
             head = "المراجع والدراسات" if lang == "ar" else "References"
             body = self._format_references_only(card, lang)
@@ -2983,6 +3105,14 @@ class WeaverOrchestrator:
         if not sections_plan:
             sections_plan = [{"title": card.get("topic", "") or task.description,
                               "level": 1}]
+
+        # research proposal (خطة بحثية/مقترح): use the standard proposal sections
+        # (problem, questions, objectives, significance, hypotheses, methodology,
+        # scope, terms, prior studies, proposed structure) and write them — a
+        # proposal is a real document, distinct from a bare outline.
+        if scope == "plan" or "plan" in scopes:
+            sections_plan = self._proposal_sections(lang)
+            card["sections"] = sections_plan
 
         # give the abstract "المبحث/المطلب" slots DESCRIPTIVE, topic-specific
         # titles so each section chunk has a real sub-topic to write about (the
