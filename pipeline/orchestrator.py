@@ -227,6 +227,7 @@ class WeaverOrchestrator:
             await self._layer_4(task, mem)
             await self._layer_5(task, mem)
             await self._layer_6(task, mem)
+            await self._layer_6_6(task, mem)
             await self._layer_6_5(task, mem)
             await self._layer_7(task, mem)
             await self._layer_8(task, mem)
@@ -1193,6 +1194,55 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
+    def extract_length_target(text):
+        """→ {'words': int|None, 'pages': int|None} from the request; None if
+        unstated. Pages → estimated words (~500 words/academic page) when the
+        word count itself isn't given. (tested)"""
+        import re
+        if not text:
+            return {"words": None, "pages": None}
+        words = pages = None
+        m = re.search(r'(\d{2,6})\s*(?:كلمة|كلمات|words?|word)', text, re.I)
+        if m:
+            words = int(m.group(1))
+        m = re.search(r'(\d{1,4})\s*(?:صفحة|صفحات|pages?|page)', text, re.I)
+        if m:
+            pages = int(m.group(1))
+        if words is None and pages:
+            words = pages * 500
+        return {"words": words, "pages": pages}
+
+    @staticmethod
+    def count_words(text):
+        """Deterministic word count — Arabic + Latin, after light markdown
+        stripping. This is arithmetic (len of tokens), never an estimate."""
+        import re
+        if not text:
+            return 0
+        clean = re.sub(r'[#*_`>\-]+', ' ', text)
+        return len([w for w in clean.split() if any(c.isalnum() for c in w)])
+
+    @staticmethod
+    def verify_sections_coverage(required_titles, sections):
+        """Return the required titles NOT covered by any written section
+        (flexible two-way substring match). (tested)"""
+        present = [(s.get("heading") or "").strip() for s in sections
+                   if (s.get("heading") or s.get("body"))]
+        present_l = [p.lower() for p in present if p]
+        joined = " ".join(present_l)
+        missing = []
+        for req in required_titles:
+            r = (req or "").strip().lower()
+            if not r:
+                continue
+            if r in joined:
+                continue
+            if any(r in p or p in r for p in present_l):
+                continue
+            missing.append(req)
+        return missing
+
+    @staticmethod
     def _detect_youtube_intent(text):
         """Keyword heuristic for what to do with a YouTube link. Returns
         {"mode", "with_timing", "explicit"} where `explicit` is True only when a
@@ -1467,6 +1517,18 @@ class WeaverOrchestrator:
             _sc = self._extract_slide_count(task.description)
             if _sc and isinstance(task.task_card, dict):
                 task.task_card["slide_count"] = _sc
+        except Exception:
+            pass
+
+        # requested length (words/pages) → recorded for the writer/export and
+        # read by layer 6.6. Absent → nothing set → behaviour unchanged.
+        try:
+            _lt = self.extract_length_target(task.description)
+            if isinstance(task.task_card, dict):
+                if _lt.get("words"):
+                    task.task_card["target_words"] = _lt["words"]
+                if _lt.get("pages"):
+                    task.task_card["target_pages"] = _lt["pages"]
         except Exception:
             pass
 
@@ -2941,6 +3003,91 @@ class WeaverOrchestrator:
         # all formats). Additive/guarded; no-op for non-Islamic text.
         self._apply_islamic_marks(task, card, lang, mem)
 
+    async def _layer_6_6(self, task, mem):
+        """٦.٦: تحقق الطول والتغطية — بين الكتابة (6) والأنسنة (6.5).
+
+        يمنح النظام ما يفعله المحرّر يدوياً: يتأكّد أن كل قسم مطلوب كُتب فعلاً
+        (فيكتب الناقص)، وأن طول النص قريب من الهدف المطلوب (فيوسّع القصير).
+        حلقة تصحيح واحدة، آمنة (تعود مبكّراً بلا تعديل عند غياب طول/أقسام/نموذج).
+
+        صدق القياس: عدّ الكلمات حتمي ودقيق (len(split))، لا تقدير. أمّا الصفحات
+        فتقديرية (~500 كلمة/صفحة) ما لم يُفتح الملف بعد التصدير — والتحقق الفعلي
+        من الصفحات بعد التصدير مهمّة منفصلة لاحقة، لا تُنفَّذ هنا."""
+        try:
+            card = task.task_card or {}
+            # تخطَّ أوضاع يوتيوب/التفريغ ومهام بلا كتابة
+            yt = card.get("youtube")
+            if yt and yt.get("mode") in ("transcript", "both"):
+                return
+            if not task.sections:
+                return
+
+            # ── (أ) تحقق تغطية الأقسام ──
+            plan = card.get("sections") or []
+            required = [(s.get("title") or s.get("heading") or "") for s in plan]
+            required = [r for r in required if r]
+            if required:
+                missing = self.verify_sections_coverage(required, task.sections)
+                if missing and self.llm_fn:
+                    for title in missing:
+                        try:
+                            body = self.llm_fn(
+                                f"اكتب قسم «{title}» لهذا الموضوع: "
+                                f"{card.get('topic', task.description)}. "
+                                f"اكتب المحتوى مباشرة دون عنوان.",
+                                system=getattr(self, "system_write", None)
+                                or getattr(self, "system_main", None),
+                                temperature=0.5) or ""
+                        except Exception:
+                            body = ""
+                        if body.strip():
+                            task.sections.append({"heading": title,
+                                                  "body": body.strip()})
+                    mem.set_status(66, f"تغطية: أُضيف {len(missing)} قسم ناقص")
+
+            # ── (ب) تحقق الطول (كلمات) ──
+            target = self.extract_length_target(task.description)
+            tw = target.get("words")
+            if tw:
+                actual = self.count_words(task.draft or "")
+                lo, hi = int(tw * 0.9), int(tw * 1.15)
+                if actual < lo and self.llm_fn:
+                    # النص أقصر من المطلوب → وسّع أضعف الأقسام (الأقصر)
+                    deficit = tw - actual
+                    secs = sorted(task.sections,
+                                  key=lambda s: self.count_words(s.get("body", "")))
+                    for s in secs[: max(1, len(secs) // 2)]:
+                        if deficit <= 0:
+                            break
+                        try:
+                            more = self.llm_fn(
+                                f"وسّع الفقرة التالية بعمق أكبر وتفصيل دقيق "
+                                f"(أضِف نحو {min(deficit, 300)} كلمة) دون تكرار "
+                                f"ودون حشو:\n\n{s.get('body', '')}",
+                                system=getattr(self, "system_write", None)
+                                or getattr(self, "system_main", None),
+                                temperature=0.5) or ""
+                        except Exception:
+                            more = ""
+                        if more.strip():
+                            added = (self.count_words(more)
+                                     - self.count_words(s.get("body", "")))
+                            s["body"] = more.strip()
+                            deficit -= max(0, added)
+                    mem.set_status(66, f"طول: وُسّع النص نحو الهدف {tw}")
+
+                # أعد بناء draft بعد أي تعديل
+                task.draft = "\n\n".join(
+                    (f"{s.get('heading', '')}\n{s.get('body', '')}").strip()
+                    for s in task.sections if (s.get("heading") or s.get("body")))
+
+                final = self.count_words(task.draft)
+                card["word_count_actual"] = final
+                card["word_count_target"] = tw
+                mem.set_status(66, f"طول نهائي: {final} كلمة (هدف {tw})")
+        except Exception as e:
+            mem.set_status(66, f"تحقق الطول/التغطية (تخطّي: {e})")
+
     async def _layer_6_5(self, task: Task, mem: TaskMemory):
         """٦.٥: إعادة الصياغة والتنظيف — أنسنة النص وإزالة البصمة الآلية.
 
@@ -3575,6 +3722,8 @@ class WeaverOrchestrator:
             self._emit("detail", "",
                        L(f"{len(task.sections or [])} قسم",
                          f"{len(task.sections or [])} sections"))
+
+            await self._layer_6_6(task, mem)
 
             self._emit("step", L("تنظيف وأنسنة النص", "Cleaning up the text"))
             await self._layer_6_5(task, mem)
