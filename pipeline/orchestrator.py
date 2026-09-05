@@ -1173,6 +1173,26 @@ class WeaverOrchestrator:
         return t
 
     @staticmethod
+    def _extract_slide_count(text):
+        """Extract a requested slide count from the request. None if unstated.
+        Feeds design_slides so "اعمل عرض 30 شريحة" honours 30. (tested)"""
+        import re
+        if not text:
+            return None
+        patterns = [
+            r'(\d{1,3})\s*(?:شريحة|شرائح|slides?|slide)',
+            r'(?:شريحة|شرائح|slides?|عرض)\D{0,10}?(\d{1,3})',
+            r'(?:عدد|count|number)\D{0,15}?(\d{1,3})',
+        ]
+        for p in patterns:
+            m = re.search(p, text, re.I)
+            if m:
+                n = int(m.group(1))
+                if 1 <= n <= 100:
+                    return n
+        return None
+
+    @staticmethod
     def _detect_youtube_intent(text):
         """Keyword heuristic for what to do with a YouTube link. Returns
         {"mode", "with_timing", "explicit"} where `explicit` is True only when a
@@ -1440,6 +1460,15 @@ class WeaverOrchestrator:
         # scope that LIMITS the task: references-only / outline-only / part-only.
         task.task_card["scope"] = self._task_scope(
             self._current_request(task.description))
+
+        # requested slide count (e.g. "اعمل عرض 30 شريحة") → reaches
+        # design_slides. Absent → None → default behaviour unchanged.
+        try:
+            _sc = self._extract_slide_count(task.description)
+            if _sc and isinstance(task.task_card, dict):
+                task.task_card["slide_count"] = _sc
+        except Exception:
+            pass
 
         # Phase 3: route tools & skills once
         self._route(task)
@@ -3200,6 +3229,22 @@ class WeaverOrchestrator:
                 plan_sections = [{"title": s.get("heading", ""),
                                   "points": _slide_points(s.get("body", ""))}
                                  for s in sections]
+                # ── creative path first ("the Claude way"): llm_deck_generator
+                #    authors free HTML/CSS per slide, then the (now multi-slide)
+                #    bridge converts to native PPTX. Needs llm_fn + the Node
+                #    engine; on ANY miss we fall through to the template builder
+                #    below — unchanged — so nothing breaks without them.
+                if self.llm_fn:
+                    try:
+                        gen = self._skill_call(
+                            "pptx_builder", "llm_deck_generator",
+                            "generate_and_convert", title, plan_sections, out,
+                            lang=lang, llm_fn=self.llm_fn)
+                        if (gen and gen.get("ok") and os.path.exists(out)
+                                and os.path.getsize(out) > 0):
+                            return out
+                    except Exception:
+                        pass
                 slides = None
                 # slide_designer: build the slide PLAN (title/points/visual,
                 # ≤5 points per slide, academic skeleton when empty). Its

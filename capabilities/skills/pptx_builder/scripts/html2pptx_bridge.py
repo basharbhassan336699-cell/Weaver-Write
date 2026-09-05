@@ -13,9 +13,11 @@ installed once in engines/html2pptx-core/.
 from __future__ import annotations
 import argparse
 import os
+import re
 import subprocess
 import tempfile
 import shutil
+from copy import deepcopy
 
 _ENGINE = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
@@ -25,7 +27,92 @@ _ENGINE = os.path.join(
 
 def html_to_pptx(html_path_or_str, output_path, is_string=False):
     """
-    Convert an HTML file (or HTML string) to native PPTX via the Node engine.
+    Convert an HTML file (or HTML string) to native PPTX.
+
+    Backward-compatible entry point. A file input, or a single-slide string,
+    behaves EXACTLY as before (one Node conversion). A multi-slide HTML string
+    (several `<div class="slide">`) is split, each slide converted via the Node
+    engine, and the parts merged — working around the engine's one-page limit
+    without touching it. Returns
+    {"ok": bool, "output_path": str, "engine": str, "slides": int?, "error": str?}
+    """
+    if is_string:
+        return html_to_pptx_multi(html_path_or_str, output_path,
+                                  _html_to_pptx_single)
+    return _html_to_pptx_single(html_path_or_str, output_path, is_string=False)
+
+
+def split_slides_html(html: str):
+    """Return a list of HTML documents, each holding ONE slide + the same
+    <head>/<style>. If there is only one slide, return [html] unchanged (so the
+    original single-conversion path is used). (tested)"""
+    head_m = re.search(r"<head>.*?</head>", html, re.S | re.I)
+    head = head_m.group(0) if head_m else "<head></head>"
+    slides = re.findall(
+        r'<div class="slide".*?</div>\s*(?=<div class="slide"|</body>|</html>|$)',
+        html, re.S | re.I)
+    if len(slides) <= 1:
+        return [html]
+    return [f"<!DOCTYPE html><html>{head}<body>{s}</body></html>"
+            for s in slides]
+
+
+def html_to_pptx_multi(html_str: str, output_path: str, single_fn):
+    """Convert HTML (possibly several slides) into ONE PPTX holding them all.
+
+    single_fn: the original single-conversion function
+    html_to_pptx(html, out, is_string=True). Returns the same result shape as
+    the bridge: {"ok":bool,"output_path":str,"engine":str,"slides":int?,"error":str?}
+    (tested: 1 slide -> 1, 5 slides -> 5)."""
+    docs = split_slides_html(html_str)
+
+    # single slide or un-splittable -> original path (full backward compat)
+    if len(docs) <= 1:
+        return single_fn(html_str, output_path, is_string=True)
+
+    from pptx import Presentation
+
+    parts, tmps = [], []
+    try:
+        for i, doc in enumerate(docs):
+            fd, tmp = tempfile.mkstemp(suffix=f"_part{i}.pptx")
+            os.close(fd)
+            tmps.append(tmp)
+            r = single_fn(doc, tmp, is_string=True)
+            if r.get("ok") and os.path.exists(tmp):
+                parts.append(tmp)
+
+        if not parts:
+            return {"ok": False, "error": "no slides converted"}
+
+        merged = Presentation(parts[0])           # first part = the base
+        for p in parts[1:]:                        # append the rest's slides
+            src = Presentation(p)
+            blank = (merged.slide_layouts[6]
+                     if len(merged.slide_layouts) > 6
+                     else merged.slide_layouts[-1])
+            for slide in src.slides:
+                new_slide = merged.slides.add_slide(blank)
+                for shape in slide.shapes:
+                    new_slide.shapes._spTree.append(deepcopy(shape._element))
+
+        output_path = os.path.abspath(output_path)
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        merged.save(output_path)
+        return {"ok": True, "output_path": output_path,
+                "engine": "html2pptx", "slides": len(parts)}
+    finally:
+        for t in tmps:
+            try:
+                os.unlink(t)
+            except Exception:
+                pass
+
+
+def _html_to_pptx_single(html_path_or_str, output_path, is_string=False):
+    """
+    Convert ONE HTML file (or single-slide HTML string) to native PPTX via the
+    Node engine. This is the original html_to_pptx logic, unchanged.
     Returns {"ok": bool, "output_path": str, "engine": str, "error": str?}
     """
     node = shutil.which("node")
