@@ -501,6 +501,115 @@ class WeaverOrchestrator:
             "find data", "gather data", "data about", "statistics about",
             "numbers about", "extract data", "data from"))
 
+    def _intent_router(self, request):
+        """UNDERSTANDING FIRST: ask the connected model to read the user's own
+        current request and return a structured intent — instead of matching our
+        keyword lists. This is what lets any phrasing (and combinations, and
+        counts like "3 مباحث لكل منها 3 مطالب") be understood without hand-coding
+        a trigger for each. Returns a normalized dict, or None when the model is
+        unavailable or its reply is unusable (then the keyword detectors stand in
+        as a fallback). Classification only — it never writes or executes."""
+        req = (request or "").strip()
+        if not self.llm_fn or not req:
+            return None
+        try:
+            import json as _json
+            prompt = (
+                "أنت مصنِّف نيّة دقيق. اقرأ طلب المستخدم وأعد JSON فقط (بلا أي نص "
+                "آخر) يصف ما يريده، دون تنفيذ الطلب. الحقول:\n"
+                '{"action":"research|rewrite|summarize|translate|convert|edit",'
+                '"scopes":[من "references","outline","plan","part"],'
+                '"format":"docx|pdf|pptx|xlsx|csv|txt|html|inline|null",'
+                '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
+                '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
+                '"language":"ar|en|null","wants_table":true|false,'
+                '"wants_chart":true|false,"wants_data":true|false}\n'
+                "تعريفات دقيقة:\n"
+                "- action: research=كتابة/بحث جديد (الافتراضي)؛ rewrite=إعادة "
+                "صياغة نص موجود؛ summarize=تلخيص؛ translate=ترجمة؛ convert=تحويل "
+                "صيغة ناتج سابق؛ edit=تعديل/إلحاق على ملف.\n"
+                "- scopes (يمكن أكثر من واحد، فارغة=مستند كامل): references=إيجاد "
+                "مصادر/مراجع فقط بلا كتابة؛ outline=هيكل/عناوين فقط؛ plan=خطة/"
+                "مقترح بحثي؛ part=جزء محدد فقط.\n"
+                "- mabhath_count/matlab_count: إن طلب عدداً صريحاً من المباحث "
+                "وعدد المطالب تحت كل مبحث.\n"
+                "- language: لغة المخرجات إن طُلبت صراحةً فقط، وإلا null.\n"
+                "- إن كان الطلب بحثاً كاملاً عادياً: action=research وscopes=[].\n"
+                "طلب المستخدم:\n" + req[:1500]
+            )
+            from core.llm import extract_json
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.0) or ""
+            data = None
+            try:
+                data = extract_json(raw)
+            except Exception:
+                data = None
+            if not isinstance(data, dict):
+                return None
+            return self._normalize_intent(data)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _normalize_intent(d):
+        """Clean/validate the router's JSON into safe types."""
+        def _int(v):
+            try:
+                n = int(v)
+                return n if 1 <= n <= 1000 else None
+            except (TypeError, ValueError):
+                return None
+        out = {}
+        act = str(d.get("action", "") or "").lower().strip()
+        out["action"] = act if act in (
+            "research", "rewrite", "summarize", "translate", "convert",
+            "edit") else None
+        sc = d.get("scopes") or []
+        if isinstance(sc, str):
+            sc = [sc]
+        out["scopes"] = [s for s in (str(x).lower().strip() for x in sc)
+                         if s in ("references", "outline", "plan", "part")]
+        fmt = str(d.get("format", "") or "").lower().strip()
+        out["format"] = fmt if fmt in (
+            "docx", "pdf", "pptx", "xlsx", "csv", "txt", "html",
+            "inline") else None
+        out["mabhath_count"] = _int(d.get("mabhath_count"))
+        out["matlab_count"] = _int(d.get("matlab_count"))
+        out["slide_count"] = _int(d.get("slide_count"))
+        out["words"] = _int(d.get("words"))
+        out["pages"] = _int(d.get("pages"))
+        lang = str(d.get("language", "") or "").lower().strip()
+        out["language"] = lang if lang in ("ar", "en") else None
+        out["wants_table"] = bool(d.get("wants_table"))
+        out["wants_chart"] = bool(d.get("wants_chart"))
+        out["wants_data"] = bool(d.get("wants_data"))
+        return out
+
+    @staticmethod
+    def _counted_structure(lang, n_mabhath, m_matlab):
+        """Build a plan of EXACTLY n مباحث, each with m مطالب, plus intro /
+        conclusion / references. Abstract labels here get descriptive names
+        later by _descriptive_titles. Honors an explicit "N مباحث × M مطالب"."""
+        n_mabhath = max(1, min(int(n_mabhath or 1), 30))
+        m_matlab = max(0, min(int(m_matlab or 0), 20))
+        mab = "المبحث" if lang == "ar" else "Section"
+        mat = "المطلب" if lang == "ar" else "Subsection"
+        secs = [{"key": "intro",
+                 "title": "المقدمة" if lang == "ar" else "Introduction",
+                 "level": 1}]
+        for i in range(1, n_mabhath + 1):
+            secs.append({"key": "body", "title": f"{mab} {i}", "level": 1})
+            for j in range(1, m_matlab + 1):
+                secs.append({"key": "body", "title": f"{mat} {i}.{j}",
+                             "level": 2})
+        secs.append({"key": "conclusion",
+                     "title": "الخاتمة" if lang == "ar" else "Conclusion",
+                     "level": 1})
+        secs.append({"key": "references",
+                     "title": "قائمة المراجع" if lang == "ar" else "References",
+                     "level": 1})
+        return secs
+
     @staticmethod
     def _proposal_sections(lang):
         """The standard sections of a research proposal (خطة بحثية)."""
@@ -1735,6 +1844,46 @@ class WeaverOrchestrator:
                     task.task_card["target_pages"] = _lt["pages"]
         except Exception:
             pass
+
+        # ── UNDERSTANDING FIRST: let the model read the request and DECIDE the
+        #    intent; its answer OVERRIDES the keyword guesses above (which now
+        #    serve only as a fallback when the model is unavailable). This is the
+        #    real fix — the system understands any phrasing instead of matching
+        #    hand-coded words. Fully guarded and additive.
+        try:
+            _iv = self._intent_router(_cur_req)
+            if _iv and isinstance(task.task_card, dict):
+                c = task.task_card
+                if _iv.get("action"):
+                    c["action"] = _iv["action"]
+                if _iv.get("scopes"):
+                    c["scopes"] = _iv["scopes"]
+                    c["scope"] = next((s for s in ("references", "plan",
+                                                   "outline", "part")
+                                       if s in _iv["scopes"]), None)
+                if _iv.get("format"):
+                    c["output_format"] = [_iv["format"].upper()]
+                if _iv.get("slide_count"):
+                    c["slide_count"] = _iv["slide_count"]
+                if _iv.get("words"):
+                    c["target_words"] = _iv["words"]
+                if _iv.get("pages"):
+                    c["target_pages"] = _iv["pages"]
+                if _iv.get("mabhath_count"):
+                    c["mabhath_count"] = _iv["mabhath_count"]
+                if _iv.get("matlab_count"):
+                    c["matlab_count"] = _iv["matlab_count"]
+                if _iv.get("wants_table"):
+                    c["want_table"] = True
+                if _iv.get("wants_chart"):
+                    c["want_chart"] = True
+                if _iv.get("wants_data"):
+                    c["want_data"] = True
+                c["intent_source"] = "model"
+                mem.set_status(3, "فهم النية (نموذج): "
+                               + (c.get("scope") or c.get("action") or "بحث"))
+        except Exception as e:
+            mem.set_status(3, f"موجّه النية (تخطّي: {e})")
 
         # Phase 3: route tools & skills once
         self._route(task)
@@ -3235,6 +3384,16 @@ class WeaverOrchestrator:
         if scope == "plan" or "plan" in scopes:
             sections_plan = self._proposal_sections(lang)
             card["sections"] = sections_plan
+
+        # explicit counts ("3 مباحث كل منها 3 مطالب", understood by the intent
+        # router) → build the structure to EXACTLY that shape before naming it.
+        _mc = card.get("mabhath_count")
+        if _mc and not (scope == "plan" or "plan" in scopes):
+            sections_plan = self._counted_structure(
+                lang, int(_mc), int(card.get("matlab_count") or 0))
+            card["sections"] = sections_plan
+            mem.set_status(6, f"بنية بالطلب: {_mc} مبحث × "
+                           f"{card.get('matlab_count') or 0} مطلب")
 
         # give the abstract "المبحث/المطلب" slots DESCRIPTIVE, topic-specific
         # titles so each section chunk has a real sub-topic to write about (the
