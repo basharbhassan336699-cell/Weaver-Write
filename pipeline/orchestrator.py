@@ -427,6 +427,81 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
+    def _task_action(text):
+        """Detect an ACTION performed on EXISTING/PREVIOUS content rather than a
+        fresh research: 'rewrite' | 'summarize' | 'translate' | 'convert' |
+        'edit' | None. Broad natural phrasings. Order = priority."""
+        t = " " + (text or "").lower() + " "
+        edit = ("أضف إلى الملف", "أضف على الملف", "زد على نفس الملف", "عدّل الملف",
+                "عدل الملف", "كمّل الملف", "أكمل الملف", "أكمل عليه", "نفس الملف",
+                "أضف فقرة", "أضف قسم", "احذف قسم", "غيّر في الملف", "نسخة معدّلة",
+                "نسخة أخرى", "edit the file", "append", "same file",
+                "another version", "add to the file")
+        convert = ("حوّل هذا الملف", "حول هذا الملف", "حوّله إلى", "حوله الى",
+                   "اجعله بصيغة", "صدّر الناتج", "صدر الناتج", "حوّل الناتج",
+                   "خذ الملخص واعمله", "نفس المحتوى بصيغة", "أخرجه بصيغة",
+                   "convert to", "convert this", "export the previous",
+                   "same content as")
+        translate = ("ترجم", "ترجمه", "ترجم لي", "ترجمة النص", "بالإنجليزي",
+                     "بالانجليزي", "إلى الإنجليزية", "الى الانجليزية", "بالعربي",
+                     "إلى العربية", "translate", "in english", "into english",
+                     "into arabic", "to arabic", "to english")
+        summarize = ("لخّص", "لخص", "لخّصلي", "لخصلي", "لخّص لي", "اختصر",
+                     "اختصار", "ملخّص", "ملخص", "أعطني ملخصاً", "باختصار",
+                     "أهم النقاط", "اهم النقاط", "النقاط الرئيسية", "خلاصة",
+                     "زبدة", "summary", "summarize", "summarise", "tl;dr",
+                     "tldr", "key points", "in short")
+        rewrite = ("أعد صياغة", "اعد صياغة", "صُغ من جديد", "صغ من جديد",
+                   "أعد كتابة", "اعد كتابة", "حسّن الصياغة", "حسن الصياغة",
+                   "هذّب النص", "هذب النص", "نقّح", "نقح النص", "طوّر الأسلوب",
+                   "اجعله أكثر بشرية", "أنسِن", "انسن", "بأسلوب بشري",
+                   "بصياغة أفضل", "بأسلوب أكاديمي", "بلغة أبسط", "أعد صياغة الملف",
+                   "reword", "rephrase", "rewrite", "paraphrase", "humanize",
+                   "improve wording", "improve the writing")
+        for name, kws in (("edit", edit), ("convert", convert),
+                          ("translate", translate), ("summarize", summarize),
+                          ("rewrite", rewrite)):
+            if any(k in t for k in kws):
+                return name
+        return None
+
+    @staticmethod
+    def _wants_table(text):
+        """True when the user wants a TABLE inserted into the document (distinct
+        from an Excel FILE, which is a format)."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "أدرج جدول", "ادرج جدول", "أضف جدول", "اضف جدول", "اعمل جدول",
+            "ضع جدولاً", "ضع جدول", "رتّبه في جدول", "رتبه في جدول",
+            "في جدول", "على شكل جدول", "بشكل جدول", "جدول يوضّح", "جدول مقارنة",
+            "جدولاً", "insert a table", "add a table", "in a table",
+            "as a table", "tabulate", "comparison table"))
+
+    @staticmethod
+    def _wants_chart(text):
+        """True when the user wants a CHART/GRAPH drawn."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "رسم بياني", "رسمة بيانية", "رسماً بيانياً", "مخطط بياني",
+            "مخطط أعمدة", "مخطط دائري", "مخطط خطي", "رسوم بيانية", "شارت",
+            "تشارت", "بيان بياني", "رسم توضيحي بالأرقام", "chart", "graph",
+            "plot", "bar chart", "pie chart", "line chart", "diagram of data",
+            "visualize"))
+
+    @staticmethod
+    def _wants_data(text):
+        """True when the user asks to FIND/GATHER data (numbers/statistics) about
+        a topic or from a link (as opposed to writing a full research)."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "أوجد بيانات", "اوجد بيانات", "ابحث عن بيانات", "جمع بيانات",
+            "جمّع بيانات", "بيانات عن", "بيانات حول", "إحصائيات عن",
+            "احصائيات عن", "إحصاءات عن", "أرقام عن", "ارقام عن", "معطيات عن",
+            "بيانات من", "استخرج بيانات", "استخرج البيانات", "بيانات من الرابط",
+            "find data", "gather data", "data about", "statistics about",
+            "numbers about", "extract data", "data from"))
+
+    @staticmethod
     def _proposal_sections(lang):
         """The standard sections of a research proposal (خطة بحثية)."""
         if lang == "ar":
@@ -1604,6 +1679,23 @@ class WeaverOrchestrator:
         except Exception:
             pass
 
+        # action + enrichment intents (rewrite/summarize/translate/convert/edit,
+        # table, chart, find-data). Detection only here; safe wirings read these
+        # flags below. Absent → nothing set → behaviour unchanged.
+        try:
+            if isinstance(task.task_card, dict):
+                _act = self._task_action(_cur_req)
+                if _act:
+                    task.task_card["action"] = _act
+                if self._wants_table(_cur_req):
+                    task.task_card["want_table"] = True
+                if self._wants_chart(_cur_req):
+                    task.task_card["want_chart"] = True
+                if self._wants_data(_cur_req):
+                    task.task_card["want_data"] = True
+        except Exception:
+            pass
+
         # requested length (words/pages) → recorded for the writer/export and
         # read by layer 6.6. Absent → nothing set → behaviour unchanged.
         try:
@@ -1623,7 +1715,8 @@ class WeaverOrchestrator:
         # must actually gather sources → force the search tools.
         _scs = set(task.task_card.get("scopes") or [])
         if (task.task_card.get("scope") in ("references", "plan")
-                or "references" in _scs or "plan" in _scs):
+                or "references" in _scs or "plan" in _scs
+                or task.task_card.get("want_data")):
             for _t in ("web_search", "academic_search"):
                 if _t not in task.tools:
                     task.tools.append(_t)
@@ -3334,6 +3427,44 @@ class WeaverOrchestrator:
         # enforce correct Quran/Hadith marks for Islamic content (text-level,
         # all formats). Additive/guarded; no-op for non-Islamic text.
         self._apply_islamic_marks(task, card, lang, mem)
+        # optional enrichments the user explicitly asked for (additive/guarded)
+        self._enrich_table_chart(task, card, lang, mem)
+
+    def _enrich_table_chart(self, task, card, lang, mem):
+        """When the request asked for a table and/or a chart, derive them from
+        the written content and attach them. A table becomes its own section; a
+        chart spec is stored on the card so _maybe_chart renders it at export.
+        Never fabricates numbers (the model is told to return empty otherwise).
+        Additive and fully guarded — a miss changes nothing."""
+        if not self.llm_fn:
+            return
+        content = task.draft or "\n".join(
+            (s.get("body", "") or "") for s in (task.sections or []))
+        if not content.strip():
+            return
+        if card.get("want_table"):
+            try:
+                tbl = _content_to_table(self.llm_fn, content, lang)
+                if tbl and tbl.get("headers") and tbl.get("rows"):
+                    md = self._skill_call("table_builder", "make_table",
+                                          "make_table", tbl["headers"],
+                                          tbl["rows"], lang=lang)
+                    head = "جدول توضيحي" if lang == "ar" else "Table"
+                    if md:
+                        task.sections = (task.sections or []) + [
+                            {"heading": head, "body": md}]
+                        task.draft = (task.draft or "") + f"\n\n## {head}\n\n{md}"
+                        mem.set_status(6, "أُدرج جدول من المحتوى")
+            except Exception as e:
+                mem.set_status(6, f"جدول (تخطّي: {e})")
+        if card.get("want_chart") and not card.get("chart"):
+            try:
+                spec = _content_to_chart(self.llm_fn, content, lang)
+                if spec:
+                    card["chart"] = spec        # _maybe_chart renders at export
+                    mem.set_status(6, "أُعدّ رسم بياني من المحتوى")
+            except Exception as e:
+                mem.set_status(6, f"رسم بياني (تخطّي: {e})")
 
     async def _layer_6_6(self, task, mem):
         """٦.٦: تحقق الطول والتغطية — بين الكتابة (6) والأنسنة (6.5).
@@ -4339,6 +4470,46 @@ def _content_to_table(llm_fn, content, lang="ar"):
         rows = [[str(c) for c in r] for r in rows if isinstance(r, list) and r]
         if headers and rows:
             return {"headers": [str(h) for h in headers], "rows": rows}
+        return None
+    except Exception:
+        return None
+
+
+def _content_to_chart(llm_fn, content, lang="ar"):
+    """Ask the model to pull a small chartable series (labels + numeric values)
+    from content. Returns a chart spec {"type","data":{"labels","values"},
+    "title"} ready for _maybe_chart, or None when there's nothing numeric."""
+    if not llm_fn:
+        return None
+    try:
+        from core.llm import extract_json
+        prompt = (
+            "استخرج من المحتوى سلسلةً رقمية قابلة للرسم (تسميات وقيَم عددية). "
+            "إن لم توجد أرقام حقيقية فأعِد {\"values\":[]} فقط دون اختلاق. أعِد "
+            "JSON فقط: {\"type\":\"bar|pie|line\",\"title\":\"..\","
+            "\"labels\":[\"..\"],\"values\":[رقم,..]}:\n\n"
+            if lang == "ar" else
+            "Extract a small chartable numeric series (labels + numeric values) "
+            "from the content. If there are no real numbers, return "
+            "{\"values\":[]} — never fabricate. Return JSON only: "
+            "{\"type\":\"bar|pie|line\",\"title\":\"..\",\"labels\":[..],"
+            "\"values\":[num,..]}:\n\n"
+        ) + (content or "")[:9000]
+        data = extract_json(llm_fn(prompt, temperature=0.1)) or {}
+        labels = [str(x) for x in (data.get("labels") or [])]
+        vals = []
+        for v in (data.get("values") or []):
+            try:
+                vals.append(float(v))
+            except (TypeError, ValueError):
+                vals = []
+                break
+        if labels and vals and len(labels) == len(vals) and len(vals) >= 2:
+            ctype = str(data.get("type", "bar")).lower()
+            if ctype not in ("bar", "pie", "line"):
+                ctype = "bar"
+            return {"type": ctype, "title": str(data.get("title", "")),
+                    "data": {"labels": labels, "values": vals}}
         return None
     except Exception:
         return None
