@@ -2713,82 +2713,119 @@ class WeaverOrchestrator:
     def _descriptive_titles(self, topic, sections_plan, lang):
         """Replace the abstract structural labels ("المبحث 1"/"المطلب 1.1"/
         "Section 1"/"Subsection 1.2") with DESCRIPTIVE, topic-specific titles the
-        model proposes — preserving the exact shape (how many مباحث, and how many
-        مطالب under each) and each slot's key/level. Intro/conclusion/references/
-        methodology titles are left untouched. Guarded: no model, a bad reply, or
-        a shape mismatch → the original plan is returned unchanged."""
+        model proposes — preserving each slot's position/key/level, and giving
+        every section a DISTINCT sub-topic (which is what stops sibling sections
+        from repeating the same generic definition).
+
+        Uses a SIMPLE numbered line-per-item request (one title per line), which
+        a weak model handles far more reliably than nested JSON — a strong model
+        produces it just as well, so quality is never capped. Intro/conclusion/
+        references are left untouched. Guarded: no model, an empty/garbled reply
+        → the original plan is returned unchanged."""
         if not self.llm_fn or not sections_plan:
             return sections_plan
         import re
         abstract_re = re.compile(
             r'^\s*(?:المبحث|المطلب|Section|Subsection)\b', re.I)
-        # group the abstract body slots: each level-1 (مبحث) with its level-2s
-        groups, cur = [], None
+        # collect the abstract body slots IN ORDER, each with a role label
+        slots, main_no = [], 0        # slots: list of (plan_index, role_text)
         for i, s in enumerate(sections_plan):
             title = (s.get("title") or s.get("heading") or "").strip()
             if not abstract_re.match(title):
                 continue
             lvl = int(s.get("level", 1) or 1)
             if lvl <= 1:
-                cur = {"main": i, "subs": []}
-                groups.append(cur)
-            elif cur is not None:
-                cur["subs"].append(i)
-        if not groups:
-            return sections_plan          # nothing abstract to rename
-        shape = [len(g["subs"]) for g in groups]
-        try:
-            import json as _json
-            if lang == "ar":
-                prompt = (
-                    f"اقترح مخطّطاً علمياً دقيقاً لبحث بعنوان: «{topic}».\n"
-                    f"أريد {len(groups)} مبحثاً رئيسياً، وعدد المطالب تحت كل "
-                    f"مبحث بالترتيب هو: {shape}.\n"
-                    "أعِد JSON فقط بلا أي نص آخر بالشكل:\n"
-                    '[{"main":"عنوان المبحث الوصفي","subs":["عنوان مطلب",...]}]\n'
-                    "عناوين وصفية تخصّ الموضوع فعلاً، بلا ترقيم وبلا كلمتي "
-                    "«مبحث»/«مطلب».")
+                main_no += 1
+                role = (f"مبحث رئيسي رقم {main_no}" if lang == "ar"
+                        else f"main section #{main_no}")
             else:
-                prompt = (
-                    f"Propose a precise academic outline for: \"{topic}\".\n"
-                    f"I need {len(groups)} main sections; the number of "
-                    f"subsections under each, in order, is: {shape}.\n"
-                    "Return JSON only, no other text:\n"
-                    '[{"main":"descriptive section title","subs":["subsection",'
-                    '...]}]\nDescriptive, topic-specific titles, no numbering, no '
-                    "the words 'Section'/'Subsection'.")
+                role = (f"مطلب فرعي تحت المبحث {main_no}" if lang == "ar"
+                        else f"subsection under section {main_no}")
+            slots.append((i, role))
+        if not slots:
+            return sections_plan          # nothing abstract to rename
+        roles_block = "\n".join(f"{n + 1}. {r}"
+                                for n, (idx, r) in enumerate(slots))
+        if lang == "ar":
+            prompt = (
+                f"أريد عناوين وصفية دقيقة لبحث علمي عن: «{topic}».\n"
+                f"لكل بندٍ في القائمة التالية اكتب عنواناً وصفياً واحداً يخصّ "
+                f"الموضوع فعلاً، ومختلفاً عن البقية (لا تعريفات عامة مكرّرة)، بلا "
+                f"كلمتَي «مبحث»/«مطلب»:\n{roles_block}\n\n"
+                f"أعِد {len(slots)} سطراً فقط، سطراً واحداً لكل عنوان وبنفس "
+                f"الترتيب، كلٌّ يبدأ برقمه هكذا: «1. العنوان».")
+        else:
+            prompt = (
+                f"I need precise descriptive titles for research on: \"{topic}\".\n"
+                f"For each item below, write ONE descriptive, topic-specific "
+                f"title, distinct from the others (no repeated general "
+                f"definitions), without the words 'Section'/'Subsection':\n"
+                f"{roles_block}\n\nReturn exactly {len(slots)} lines, one title "
+                f"per line in the same order, each starting with its number: "
+                f"\"1. Title\".")
+        try:
             raw = self.llm_fn(prompt, system=self.system_main,
                               temperature=0.3) or ""
-            # extract the JSON ARRAY (extract_json only handles a single object).
-            # tolerant to weak-model slips: single quotes, trailing commas.
-            m = re.search(r'\[.*\]', raw, re.S)
-            data = None
-            if m:
-                frag = m.group(0)
-                _q = frag.replace("'", '"')                  # single→double
-                _qc = re.sub(r',\s*([}\]])', r'\1', _q)      # + drop trailing commas
-                for _cand in (frag, _q, _qc):
-                    try:
-                        data = _json.loads(_cand)
-                        break
-                    except Exception:
-                        continue
         except Exception:
             return sections_plan
-        if not isinstance(data, list) or not data:
-            return sections_plan
-        plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
-        for gi, g in enumerate(groups):
-            if gi >= len(data) or not isinstance(data[gi], dict):
+        # parse: prefer "N. title" numbering; else take non-empty lines in order
+        titles = {}
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
                 continue
-            mt = str(data[gi].get("main", "")).strip()
-            if mt:
-                plan[g["main"]]["title"] = mt
-            subs = data[gi].get("subs") or []
-            for si, sidx in enumerate(g["subs"]):
-                if si < len(subs) and str(subs[si]).strip():
-                    plan[sidx]["title"] = str(subs[si]).strip()
+            m = re.match(r'^[\(\[]?(\d{1,3})[\)\].\-:،]\s*(.+)$', line)
+            if m:
+                n = int(m.group(1))
+                if 1 <= n <= len(slots):
+                    titles[n - 1] = m.group(2).strip()
+        if not titles:
+            lines = [re.sub(r'^[\-\*•\d\.\)\(:،\s]+', '', l).strip()
+                     for l in raw.splitlines() if l.strip()]
+            lines = [l for l in lines if l]
+            for k, l in enumerate(lines[:len(slots)]):
+                titles[k] = l
+        if not titles:
+            return sections_plan
+
+        def _clean(t):
+            t = (t or "").strip().strip('"“”«»').strip()
+            t = re.sub(r'^(?:المبحث|المطلب|Section|Subsection)\b[\s:،.\d]*', '',
+                       t, flags=re.I).strip()
+            return t
+        plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
+        for k, (idx, role) in enumerate(slots):
+            if k in titles:
+                ct = _clean(titles[k])
+                if ct:
+                    plan[idx]["title"] = ct
         return plan
+
+    @staticmethod
+    def _clean_section_body(body, title):
+        """Tidy a written section body: drop a leading duplicate of its own
+        heading (the "المطلب 1.3: …" leak), and strip leaked markdown heading
+        markers (## …) that the docx builder would otherwise show literally.
+        Prose content is preserved. Safe on empty input."""
+        import re
+        if not body:
+            return body
+        b = body.lstrip()
+        t = (title or "").strip()
+        # strip a leading duplicate of the heading ONLY when it reads as a
+        # heading (title then ":"/"："/line-break/end) — never when the title
+        # naturally opens the first sentence (e.g. "التركيب … هو الوحدة …").
+        if t and b.startswith(t):
+            _rest = b[len(t):]
+            _after = _rest.lstrip()
+            if _rest[:1] == "\n" or _after[:1] in (":", "：") or _after == "":
+                b = _rest.lstrip(" :：،.-\n")
+        # a leading abstract label glued to the start ("المطلب 1.3: ")
+        b = re.sub(r'^\s*(?:المبحث|المطلب|Section|Subsection)\s*[\d.]*\s*'
+                   r'[:：]?\s*', '', b)
+        # markdown heading markers at line starts → keep text, drop the hashes
+        b = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', b)
+        return b.strip()
 
     async def _layer_6(self, task: Task, mem: TaskMemory):
         """٦: الصياغة — بناء البنية ثم المنهجية ثم كتابة كل قسم.
@@ -3042,6 +3079,22 @@ class WeaverOrchestrator:
             if self.llm_fn and not body:
                 from pipeline import prompts as _p
                 _topic = card.get("topic", "") or task.description
+                # prior-sections context so each section knows what was already
+                # written and does NOT repeat the general definition (the direct
+                # cause of sibling sections all restating the same opening). Helps
+                # a strong model cohere and a weak one avoid loops alike.
+                _prior = ""
+                _pi = [f"- {o.get('heading', '')}: "
+                       f"{' '.join((o.get('body', '') or '').split())[:110]}"
+                       for o in out_sections[-6:] if (o.get('body') or '').strip()]
+                if _pi:
+                    _prior = ((
+                        "أقسامٌ كُتبت قبل هذا القسم — لا تُعِد تعريف الموضوع العام "
+                        "ولا محتواها، وركّز حصراً على الزاوية الخاصة بهذا القسم:\n"
+                        if lang == "ar" else
+                        "Sections already written — do NOT repeat the general "
+                        "definition or their content; focus only on THIS "
+                        "section's angle:\n") + "\n".join(_pi) + "\n")
                 # MODEL-AGNOSTIC safety net: if the title is still an abstract
                 # structural label (a weak model may not have produced a
                 # descriptive one), frame it with the topic so the writer knows
@@ -3061,21 +3114,21 @@ class WeaverOrchestrator:
                     prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
                         section_name=section_name, topic=card.get("topic", ""),
                         length=card.get("page_count", ""),
-                        rag_contexts=rag_ctx or "(none)", prior_content="")
+                        rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 elif mode == "none" or no_ctx:
                     # explicit no-sources request, OR sources were required but
                     # none could be retrieved — write from knowledge, no refusal
                     prompt = _p.PROMPT_LAYER_6_WRITE_NO_SOURCES.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        length=card.get("page_count", ""), prior_content="")
+                        length=card.get("page_count", ""), prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 else:
                     prompt = _p.PROMPT_LAYER_6_WRITE.format(
                         section_name=section_name, topic=card.get("topic", ""),
                         citation_style=card.get("citation_style", ""),
                         length=card.get("page_count", ""),
-                        rag_contexts=rag_ctx or "(none)", prior_content="")
+                        rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
                     system = _p.SYSTEM_PROMPT_WRITE
@@ -3135,6 +3188,8 @@ class WeaverOrchestrator:
                             body = _db.strip()
                     except Exception:
                         pass
+            # tidy leaked heading duplicates / markdown markers before shipping
+            body = self._clean_section_body(body, title)
             parts.append((f"{title}\n{body}").strip())
             out_sections.append({"heading": title, "body": body})
         task.draft = "\n\n".join(p for p in parts if p)
