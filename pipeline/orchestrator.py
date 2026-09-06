@@ -1838,10 +1838,18 @@ class WeaverOrchestrator:
                 if _iv.get("action"):
                     c["action"] = _iv["action"]
                 if _iv.get("scopes"):
-                    c["scopes"] = _iv["scopes"]
-                    c["scope"] = next((s for s in ("references", "plan",
-                                                   "outline", "part")
-                                       if s in _iv["scopes"]), None)
+                    # A keyword-detected LIMITING scope is EXPLICIT (an "فقط"/
+                    # "only" cue) and authoritative — a weak on-device model must
+                    # never override or dilute it (e.g. turn a crisp "هيكلة فقط"
+                    # into a references search, which then forces the whole
+                    # research pipeline). We adopt the model's scope reading ONLY
+                    # when the keyword layer found NO limiting scope, so any
+                    # phrasing the keyword lists missed is still understood.
+                    if not (c.get("scopes") or c.get("scope")):
+                        c["scopes"] = _iv["scopes"]
+                        c["scope"] = next((s for s in ("references", "plan",
+                                                       "outline", "part")
+                                           if s in _iv["scopes"]), None)
                 if _iv.get("format"):
                     c["output_format"] = [_iv["format"].upper()]
                 if _iv.get("slide_count"):
@@ -1885,8 +1893,14 @@ class WeaverOrchestrator:
         # the whole research pipeline (search + credibility). Composites that
         # also want references/plan/data keep gathering (handled above).
         elif _scope == "outline" and not ({"references", "plan"} & _scs):
+            # No sourcing of ANY kind for a purely structural ask: drop the live
+            # search tools AND the page/document readers. With no pasted URL there
+            # is nothing for web_extract/web_document to read anyway, so keeping
+            # them only mislabels the run (and shows as active tools) — the
+            # structure is produced from the model directly, in seconds.
             task.tools = [t for t in task.tools
-                          if t not in ("web_search", "academic_search")]
+                          if t not in ("web_search", "academic_search",
+                                       "web_extract", "web_document")]
             task.task_card.pop("needs_academic_search", None)
 
     async def _layer_4(self, task: Task, mem: TaskMemory):
