@@ -732,6 +732,67 @@ def _export_previous_format(msg):
     return None
 
 
+def _web_intent(msg):
+    """Classify a web message's intent via the shared model router — the single
+    'understanding first' decision for the whole web layer. A cheap gate skips
+    the model for trivial short chats (a bare greeting) so plain conversation
+    stays instant. Returns the intent dict or None (→ keyword fallback)."""
+    try:
+        from pipeline.orchestrator import (classify_intent,
+                                           WeaverOrchestrator as _W,
+                                           is_document_task)
+        m = (msg or "").strip()
+        if not m:
+            return None
+        # only consult the model when there's something real to route: a
+        # multi-word message, a named format, or a keyword-suspected task.
+        if (len(m.split()) >= 3 or _W._requested_format(m)
+                or is_document_task(m)):
+            return classify_intent(m)
+    except Exception:
+        pass
+    return None
+
+
+def _model_export_previous(msg, iv=None):
+    """Model-based fallback for _export_previous_format: when the keyword verbs
+    miss but a format IS named, ask the intent router whether the user wants to
+    export/convert the PREVIOUS reply to that format (any phrasing, e.g. "ضيف هذا
+    الملخص إلى وورد"). Returns the format ('DOCX'/…) or None. `iv` may be a
+    pre-computed intent (avoids a second model call). Fully guarded."""
+    try:
+        from pipeline.orchestrator import WeaverOrchestrator as _W
+        fmt = _W._requested_format(msg)
+        if not fmt or fmt == "INLINE":
+            return None
+        if iv is None:
+            iv = _web_intent(msg)
+        # only a PURE export/convert of the previous output (not summarize/
+        # translate/rewrite, which need real processing, not a raw dump).
+        if iv and iv.get("on_previous") and iv.get("action") == "convert":
+            return (iv.get("format") or fmt).upper()
+    except Exception:
+        pass
+    return None
+
+
+def _apply_intent_task(is_task, iv):
+    """Let the model's intent refine the keyword 'is this a document task?'
+    decision: a research/scoped request IS a task; a plain chat or an operation
+    on a previous/attached output is NOT. Unknown → keep the keyword result."""
+    if not iv:
+        return is_task
+    a = iv.get("action")
+    if a == "research" or iv.get("scopes"):
+        return True
+    if a == "chat":
+        return False
+    if (a in ("summarize", "translate", "rewrite", "convert", "edit")
+            and iv.get("on_previous")):
+        return False
+    return is_task
+
+
 def _with_attachments_for_task(desc, msg, attach_text):
     """Prepend attached-file content to a pipeline task description so the task is
     performed on it, and (unless the user named a language) force the FILE's own
@@ -1850,9 +1911,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "output_path": ea.get("output_path")})
                     sse({"t": "done"})
                     return
-            # "أخرج/حوّل ذلك إلى وورد/pdf" → export the PREVIOUS reply directly,
-            # in seconds, without re-running the research pipeline.
+            # "أخرج/حوّل/ضيف ذلك إلى وورد/pdf" → export the PREVIOUS reply directly,
+            # in seconds, without re-running the research pipeline. Keyword first;
+            # if it misses but a format is named, let the MODEL decide (so any
+            # phrasing like "ضيف هذا الملخص إلى وورد" is understood, not just the
+            # hand-coded verbs). Model call only when a format is mentioned.
+            # UNDERSTANDING FIRST for the whole web layer: classify intent once
+            # (guarded, cheap-gated), then reuse it for both the export decision
+            # and the task-vs-chat decision below.
+            _wiv = _web_intent(msg)
             _epf = _export_previous_format(msg)
+            if not _epf:
+                _epf = _model_export_previous(msg, _wiv)
             if _epf:
                 _isar0 = any("؀" <= c <= "ۿ" for c in msg)
                 _prev = _last_assistant_reply(body.get("history"))
@@ -1875,7 +1945,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # export failed → fall through to normal handling
             try:
                 from pipeline.orchestrator import is_document_task, run_pipeline_sync
-                _is_task = is_document_task(msg)
+                _is_task = _apply_intent_task(is_document_task(msg), _wiv)
             except Exception:
                 _is_task = True
 
@@ -1997,8 +2067,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ea is not None:
                     self._json(ea)
                     return
-            # "أخرج/حوّل ذلك إلى وورد/pdf" → export the previous reply directly
+            # "أخرج/حوّل/ضيف ذلك إلى وورد/pdf" → export the previous reply directly.
+            # Keyword first; if it misses but a format is named, the MODEL decides.
+            _wiv = _web_intent(msg)
             _epf = _export_previous_format(msg)
+            if not _epf:
+                _epf = _model_export_previous(msg, _wiv)
             if _epf:
                 _isar0 = any("؀" <= c <= "ۿ" for c in msg)
                 _prev = _last_assistant_reply(body.get("history"))
@@ -2019,7 +2093,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # Document/generation task → the FULL pipeline below.
             try:
                 from pipeline.orchestrator import is_document_task
-                _is_task = is_document_task(msg)
+                _is_task = _apply_intent_task(is_document_task(msg), _wiv)
             except Exception:
                 _is_task = True
             attach_text, attach_names = "", []
