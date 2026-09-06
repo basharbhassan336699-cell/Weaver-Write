@@ -586,12 +586,31 @@ class WeaverOrchestrator:
         return out
 
     @staticmethod
+    def _as_int(v, default=None):
+        """Robustly coerce a model-provided value to an int. Handles ranges
+        ("5-8" → 5), floats, and stray text — the model may return a range or
+        words where a number is expected, and a bare int() would crash. Returns
+        `default` when no digit is found."""
+        if isinstance(v, bool):
+            return default
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float):
+            return int(v)
+        try:
+            import re
+            m = re.search(r'\d+', str(v))
+            return int(m.group(0)) if m else default
+        except Exception:
+            return default
+
+    @staticmethod
     def _counted_structure(lang, n_mabhath, m_matlab):
         """Build a plan of EXACTLY n مباحث, each with m مطالب, plus intro /
         conclusion / references. Abstract labels here get descriptive names
         later by _descriptive_titles. Honors an explicit "N مباحث × M مطالب"."""
-        n_mabhath = max(1, min(int(n_mabhath or 1), 30))
-        m_matlab = max(0, min(int(m_matlab or 0), 20))
+        n_mabhath = max(1, min(WeaverOrchestrator._as_int(n_mabhath, 1) or 1, 30))
+        m_matlab = max(0, min(WeaverOrchestrator._as_int(m_matlab, 0) or 0, 20))
         mab = "المبحث" if lang == "ar" else "Section"
         mat = "المطلب" if lang == "ar" else "Subsection"
         secs = [{"key": "intro",
@@ -2742,7 +2761,7 @@ class WeaverOrchestrator:
         if not query:
             return
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
-        limit = int(card.get("reference_count") or 8)
+        limit = self._as_int(card.get("reference_count"), 8) or 8
         try:
             results = self._scholarly_search(query, lang, limit)
         except Exception:
@@ -2951,7 +2970,7 @@ class WeaverOrchestrator:
         if not query:
             return
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
-        limit = int(card.get("reference_count") or 8)
+        limit = self._as_int(card.get("reference_count"), 8) or 8
 
         # news/recency intent → date-augmented query + time filter + recency sort
         is_recency = self._is_recency_query(
@@ -3390,7 +3409,7 @@ class WeaverOrchestrator:
         _mc = card.get("mabhath_count")
         if _mc and not (scope == "plan" or "plan" in scopes):
             sections_plan = self._counted_structure(
-                lang, int(_mc), int(card.get("matlab_count") or 0))
+                lang, self._as_int(_mc, 1) or 1, self._as_int(card.get("matlab_count"), 0) or 0)
             card["sections"] = sections_plan
             mem.set_status(6, f"بنية بالطلب: {_mc} مبحث × "
                            f"{card.get('matlab_count') or 0} مطلب")
