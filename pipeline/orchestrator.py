@@ -3228,6 +3228,131 @@ class WeaverOrchestrator:
             plan[idx]["title"] = got[k]
         return plan
 
+    def _rich_outline_chunked(self, topic, card, lang, context=""):
+        """Build the rich outline in SMALL per-section calls instead of one huge
+        generation. A weak/slow on-device model returns an EMPTY completion on a
+        big ask (that was the "رد فارغ" + 7-minute retry waste); small asks come
+        back reliably and fast. One backbone call (proposed title + main section
+        titles), then one small call per main section for its subsections, then a
+        small references call. Returns assembled text, or None if the backbone is
+        unusable (caller then tries the single-call path, then the flat list).
+
+        Arabic only for now; other languages fall through to the single-call path.
+        """
+        import os, re
+        if not self.llm_fn or lang != "ar":
+            return None
+        topic = (topic or "").strip()
+        if not topic:
+            return None
+        _mc = self._as_int(card.get("mabhath_count"), 0) or 0
+        _mm = self._as_int(card.get("matlab_count"), 0) or 0
+        ctx = (context or "").strip()
+        ctx_line = ("سياق هذه المحادثة (لتحديد الموضوع إن لزم، ولا تسأل عنه): "
+                    + ctx[:800] + "\n\n") if ctx else ""
+        try:
+            _to = int(os.environ.get("WEAVER_OUTLINE_CHUNK_TIMEOUT", "120")
+                      or 120)
+        except Exception:
+            _to = 120
+
+        def _call(prompt, mx):
+            try:
+                return self.llm_fn(prompt, system=self.system_main,
+                                   temperature=0.4, max_tokens=mx,
+                                   timeout=_to) or ""
+            except TypeError:
+                try:
+                    return self.llm_fn(prompt, system=self.system_main,
+                                       temperature=0.4) or ""
+                except Exception:
+                    return ""
+            except Exception:
+                return ""
+
+        def _clean_line(s):
+            return s.strip().lstrip("-*•").strip().lstrip("0123456789").lstrip(
+                ".)( \t").strip()
+
+        # 1) BACKBONE: proposed title + main section (مبحث) titles.
+        count_req = (f"اجعل عدد المباحث الرئيسية {_mc} بالضبط.\n" if _mc else
+                     "اجعل عدد المباحث الرئيسية بين 3 و5 بحسب الموضوع.\n")
+        bb = _call(
+            ctx_line + f"لبحثٍ عن موضوع: «{topic}».\n{count_req}"
+            "أعطِ الهيكل الأعلى فقط: سطر «العنوان: <عنوان مقترح للبحث>»، ثم سطرٌ "
+            "لكل مبحث رئيسي بصيغة «مبحث: <عنوان موضوعي دالٌّ ودقيق>» (بلا أرقام "
+            "وبلا مطالب وبلا شرح). سطر واحد لكل عنصر، ولا تكتب أي نصٍّ آخر.", 600)
+        if not bb or not bb.strip():
+            return None
+        title, mains = "", []
+        for line in bb.splitlines():
+            s = _clean_line(line)
+            if not s:
+                continue
+            if s.startswith("العنوان") and ":" in s:
+                title = s.split(":", 1)[1].strip()
+            elif s.startswith("مبحث") and ":" in s:
+                t = s.split(":", 1)[1].strip()
+                if t:
+                    mains.append(t)
+        if _mc:
+            mains = mains[:_mc]
+        mains = [m for m in mains if m][:30]
+        if not mains:
+            return None
+
+        # 2) DETAIL each main section with its subsections (مطالب).
+        ordn = ["الأول", "الثاني", "الثالث", "الرابع", "الخامس", "السادس",
+                "السابع", "الثامن", "التاسع", "العاشر", "الحادي عشر",
+                "الثاني عشر"]
+        parts = []
+        if title:
+            parts.append(f"عنوان البحث: {title}")
+        parts += ["المقدمة", "- تمهيد للموضوع وبيان أهميته.",
+                  "- إشكالية البحث وأسئلته.", "- أهداف البحث.",
+                  "- منهج البحث."]
+        for i, mt in enumerate(mains):
+            label = f"المبحث {ordn[i]}" if i < len(ordn) else f"المبحث {i + 1}"
+            parts.append(f"{label}: {mt}")
+            mreq = (f"اذكر {_mm} مطالب بالضبط" if _mm
+                    else "اذكر 3 إلى 4 مطالب")
+            det = _call(
+                f"في بحثٍ عن «{topic}»، وضمن المبحث: «{mt}».\n{mreq}، كلُّ مطلبٍ "
+                "بعنوانٍ دالٍّ يتبعه سطرٌ تعريفي موجز؛ وإن ناسب الموضوع (قرآني/"
+                "علمي) فأشِر إلى الآية أو الدليل أو التطابق العلمي بإيجاز. اكتب "
+                "كل مطلب في سطر بصيغة «مطلب: <العنوان> — <شرح موجز>»، ولا تكتب "
+                "أي نصٍّ آخر.", 600)
+            got = 0
+            for line in (det or "").splitlines():
+                s = _clean_line(line)
+                if not s:
+                    continue
+                if s.startswith("مطلب") and ":" in s:
+                    s = s.split(":", 1)[1].strip()
+                if len(s) >= 4:
+                    parts.append(f"- {s}")
+                    got += 1
+                if _mm and got >= _mm:
+                    break
+        parts += ["الخاتمة", "- خلاصة النتائج وأبرز التوصيات."]
+
+        # 3) REFERENCES: a small call for named, concrete sources.
+        refs = _call(
+            f"لبحثٍ عن «{topic}»، اذكر من 4 إلى 6 مصادر ومراجع مقترحة بأسماء "
+            "محدّدة (كتب/مؤلّفين/دراسات)، كلُّ مرجعٍ في سطرٍ يبدأ بـ«- »، بلا أي "
+            "نصٍّ آخر.", 400)
+        ref_lines = [("- " + _clean_line(l)) for l in (refs or "").splitlines()
+                     if _clean_line(l)]
+        parts.append("قائمة المصادر والمراجع")
+        parts += (ref_lines[:8] if ref_lines
+                  else ["- مصادر ومراجع تُختار بحسب دقّة الموضوع."])
+
+        text = "\n".join(parts).strip()
+        if len(text) < 200 or len([l for l in text.splitlines()
+                                   if l.strip()]) < 6:
+            return None
+        return text
+
     def _rich_outline(self, topic, card, lang, context=""):
         """DESIGN a complete, richly-detailed research outline by UNLEASHING the
         model on the topic — instead of only naming pre-fixed structural slots.
@@ -3254,6 +3379,18 @@ class WeaverOrchestrator:
             self._rich_reason = "لا موضوع"
             return None
         import os, re
+        # PREFER small per-section calls: reliable and fast on a weak model that
+        # returns empty on one huge generation. Falls through to the single big
+        # call below when chunked is unusable (or for non-Arabic).
+        if os.environ.get("WEAVER_OUTLINE_CHUNKED", "1").lower() not in (
+                "0", "false", "no"):
+            try:
+                _ch = self._rich_outline_chunked(topic, card, lang, context)
+            except Exception:
+                _ch = None
+            if _ch:
+                self._rich_reason = "نجح (دفعات)"
+                return _ch
         _mc = self._as_int(card.get("mabhath_count"), 0) or 0
         _mm = self._as_int(card.get("matlab_count"), 0) or 0
         context = (context or "").strip()
