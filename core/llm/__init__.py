@@ -15,6 +15,7 @@ offline "placeholder" behaviour, so nothing crashes without a key.
 from __future__ import annotations
 import os
 import json
+import time
 import urllib.request
 import urllib.error
 
@@ -67,21 +68,52 @@ def get_llm_fn():
                    [{"role": "user", "content": prompt}]
             payload = {"model": model, "temperature": temperature,
                        "max_tokens": max_tokens or 4096, "messages": msgs}
-        req = urllib.request.Request(
-            url, data=json.dumps(payload).encode("utf-8"),
-            headers=headers, method="POST")
+        body = json.dumps(payload).encode("utf-8")
         # per-call timeout wins; otherwise WEAVER_TIMEOUT (default 180s) — slow
         # on-device models need more than 120s for long generations.
         try:
             _to = int(timeout or os.environ.get("WEAVER_TIMEOUT", "180") or 180)
         except Exception:
             _to = 180
-        with urllib.request.urlopen(req, timeout=_to) as r:
-            data = json.loads(r.read().decode("utf-8"))
-        if anthropic:
-            return "".join(b.get("text", "") for b in data.get("content", [])
-                           if isinstance(b, dict))
-        return data["choices"][0]["message"]["content"]
+
+        def _extract(data):
+            if anthropic:
+                return "".join(b.get("text", "") for b in data.get("content", [])
+                               if isinstance(b, dict))
+            try:
+                return data["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, TypeError):
+                return ""
+
+        # ROBUSTNESS: on-device servers intermittently return an EMPTY completion
+        # (load/overflow), which otherwise surfaces as "(رد فارغ من المزوّد)" and
+        # makes rich generations silently fall back. Retry a few times — an empty
+        # reply comes back fast, so retries are cheap — and retry transient network
+        # errors once. Non-empty replies are returned immediately (no behaviour
+        # change). Bounded by WEAVER_LLM_RETRIES (default 3 attempts total).
+        try:
+            _tries = int(os.environ.get("WEAVER_LLM_RETRIES", "3") or 3)
+        except Exception:
+            _tries = 3
+        _tries = max(1, min(_tries, 6))
+        last = ""
+        for _i in range(_tries):
+            req = urllib.request.Request(url, data=body, headers=headers,
+                                         method="POST")
+            # a network/timeout error propagates immediately (callers handle it,
+            # and a big generation must not be retried into a multi-minute wait).
+            with urllib.request.urlopen(req, timeout=_to) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            content = _extract(data)
+            if content and content.strip():
+                return content
+            # EMPTY completion (provider quirk under load) → retry; empties come
+            # back fast so this is cheap, and it is the one thing that otherwise
+            # silently degrades rich generations to a thin fallback.
+            last = content or ""
+            if _i < _tries - 1:
+                time.sleep(1.0 * (_i + 1))
+        return last
 
     return llm_fn
 
