@@ -52,8 +52,8 @@ def _is_anthropic():
     return "anthropic.com" in BASE.lower()
 
 
-def _one_call(max_tokens):
-    """نداء واحد؛ يعيد (elapsed, http_error, raw_dict)."""
+def _one_call(max_tokens, extra=None):
+    """نداء واحد؛ يعيد (elapsed, http_error, raw_dict). extra=بارامترات إضافية."""
     anthropic = _is_anthropic()
     if anthropic:
         url = BASE.rstrip("/") + "/messages"
@@ -68,6 +68,8 @@ def _one_call(max_tokens):
                    "content-type": "application/json"}
         payload = {"model": MODEL, "temperature": 0.4, "max_tokens": max_tokens,
                    "messages": [{"role": "user", "content": PROMPT}]}
+    if extra:
+        payload.update(extra)
     req = urllib.request.Request(
         url, data=json.dumps(payload).encode("utf-8"),
         headers=headers, method="POST")
@@ -116,11 +118,12 @@ def _extract(data):
     return "", "", None, usage
 
 
-def _report(tag, max_tokens):
+def _report(tag, max_tokens, extra=None):
     print("\n" + "=" * 60)
-    print(f"[{tag}] نداء واحد — max_tokens={max_tokens}")
+    print(f"[{tag}] نداء واحد — max_tokens={max_tokens}"
+          + (f" + {extra}" if extra else ""))
     print("=" * 60)
-    dt, err, data = _one_call(max_tokens)
+    dt, err, data = _one_call(max_tokens, extra)
     if err:
         print(f"الزمن: {dt:.1f}s — فشل: {err}")
         print("→ خطأ من المزوّد/الشبكة (ليس من الطبقات).")
@@ -155,15 +158,16 @@ def main():
     if not KEY:
         print("لا يوجد WEAVER_API_KEY في config/.env — لا يمكن الفحص.")
         return
-    _report("أ", 3000)
-    _report("ب", 8000)
+    # علاجان مرشّحان:
+    # (ج) ميزانية توكن كبيرة → هل يُنهي التفكير ويكتب content؟
+    _report("ج — سقف كبير", 16000)
+    # (د) تقليل التفكير عبر reasoning_effort=low (إن دعمه المزوّد) → سرعة + content
+    _report("د — تقليل التفكير", 6000, extra={"reasoning_effort": "low"})
     print("\n" + "=" * 60)
-    print("كيف تقرأ النتيجة:")
-    print("• content ممتلئ في إحدى الحالتين → النموذج يعمل؛ نضبط الطلب في النظام.")
-    print("• content فارغ و reasoning ممتلئ → النموذج مفكِّر والنص في حقلٍ آخر؛")
-    print("  الحل: نقرأ reasoning و/أو نرفع max_tokens (عام لأي نموذج مفكِّر).")
-    print("• finish_reason=length و usage عالٍ → السقف قليل؛ نرفعه.")
-    print("• خطأ HTTP فيه اسم الموديل → اسم الموديل غير مقبول عند المزوّد.")
+    print("خلاصة العلاج (سأطبّقه في عميل النموذج core/llm — مكان واحد يصلح الكل):")
+    print("• إن امتلأ content في [ج] → نرفع سقف التوكن للنماذج المفكِّرة.")
+    print("• إن امتلأ content في [د] بسرعة → نمرّر reasoning_effort=low (الأفضل: سريع).")
+    print("• إن بقي content فارغاً والتفكير ممتلئ → نقرأ reasoning_content كشبكة أمان.")
     print("=" * 60)
 
 
