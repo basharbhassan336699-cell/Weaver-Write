@@ -3105,61 +3105,85 @@ class WeaverOrchestrator:
             slots.append((i, role))
         if not slots:
             return sections_plan          # nothing abstract to rename
-        roles_block = "\n".join(f"{n + 1}. {r}"
-                                for n, (idx, r) in enumerate(slots))
-        if lang == "ar":
-            prompt = (
-                f"أريد عناوين وصفية دقيقة لبحث علمي عن: «{topic}».\n"
-                f"لكل بندٍ في القائمة التالية اكتب عنواناً وصفياً واحداً يخصّ "
-                f"الموضوع فعلاً، ومختلفاً عن البقية (لا تعريفات عامة مكرّرة)، بلا "
-                f"كلمتَي «مبحث»/«مطلب»:\n{roles_block}\n\n"
-                f"أعِد {len(slots)} سطراً فقط، سطراً واحداً لكل عنوان وبنفس "
-                f"الترتيب، كلٌّ يبدأ برقمه هكذا: «1. العنوان».")
-        else:
-            prompt = (
-                f"I need precise descriptive titles for research on: \"{topic}\".\n"
-                f"For each item below, write ONE descriptive, topic-specific "
-                f"title, distinct from the others (no repeated general "
-                f"definitions), without the words 'Section'/'Subsection':\n"
-                f"{roles_block}\n\nReturn exactly {len(slots)} lines, one title "
-                f"per line in the same order, each starting with its number: "
-                f"\"1. Title\".")
-        try:
-            raw = self.llm_fn(prompt, system=self.system_main,
-                              temperature=0.3) or ""
-        except Exception:
-            return sections_plan
-        # parse: prefer "N. title" numbering; else take non-empty lines in order
-        titles = {}
-        for line in raw.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            m = re.match(r'^[\(\[]?(\d{1,3})[\)\].\-:،]\s*(.+)$', line)
-            if m:
-                n = int(m.group(1))
-                if 1 <= n <= len(slots):
-                    titles[n - 1] = m.group(2).strip()
-        if not titles:
-            lines = [re.sub(r'^[\-\*•\d\.\)\(:،\s]+', '', l).strip()
-                     for l in raw.splitlines() if l.strip()]
-            lines = [l for l in lines if l]
-            for k, l in enumerate(lines[:len(slots)]):
-                titles[k] = l
-        if not titles:
-            return sections_plan
 
         def _clean(t):
             t = (t or "").strip().strip('"“”«»').strip()
             t = re.sub(r'^(?:المبحث|المطلب|Section|Subsection)\b[\s:،.\d]*', '',
                        t, flags=re.I).strip()
             return t
+
+        def _valid(ct):
+            # reject empty / single-word / truncated stubs (e.g. a cut-off "تو")
+            # so a garbled reply can never leak a broken bullet into the outline.
+            return bool(ct) and len(ct) >= 4 and len(ct.split()) >= 2
+
+        def _ask(roles):
+            """Ask the model for one descriptive title per role. Returns a list
+            (same order) with '' where the reply was missing or invalid."""
+            block = "\n".join(f"{n + 1}. {r}" for n, r in enumerate(roles))
+            if lang == "ar":
+                prompt = (
+                    f"أريد عناوين وصفية دقيقة لبحث علمي عن: «{topic}».\n"
+                    f"لكل بندٍ في القائمة التالية اكتب عنواناً وصفياً واحداً يخصّ "
+                    f"الموضوع فعلاً، ومختلفاً عن البقية (لا تعريفات عامة مكرّرة)، "
+                    f"بلا كلمتَي «مبحث»/«مطلب»:\n{block}\n\n"
+                    f"أعِد {len(roles)} سطراً فقط، سطراً واحداً لكل عنوان وبنفس "
+                    f"الترتيب، كلٌّ يبدأ برقمه هكذا: «1. العنوان».")
+            else:
+                prompt = (
+                    f"I need precise descriptive titles for research on: "
+                    f"\"{topic}\".\nFor each item below, write ONE descriptive, "
+                    f"topic-specific title, distinct from the others (no repeated "
+                    f"general definitions), without the words 'Section'/"
+                    f"'Subsection':\n{block}\n\nReturn exactly {len(roles)} lines, "
+                    f"one title per line in the same order, each starting with its "
+                    f"number: \"1. Title\".")
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.3) or ""
+            except Exception:
+                return [""] * len(roles)
+            out = [""] * len(roles)
+            numbered = False
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = re.match(r'^[\(\[]?(\d{1,3})[\)\].\-:،]\s*(.+)$', line)
+                if m:
+                    numbered = True
+                    n = int(m.group(1))
+                    if 1 <= n <= len(roles):
+                        ct = _clean(m.group(2))
+                        if _valid(ct):
+                            out[n - 1] = ct
+            if not numbered:      # model ignored numbering → take lines in order
+                lines = [re.sub(r'^[\-\*•\d\.\)\(:،\s]+', '', l).strip()
+                         for l in raw.splitlines() if l.strip()]
+                for k, l in enumerate([x for x in lines if x][:len(roles)]):
+                    ct = _clean(l)
+                    if _valid(ct):
+                        out[k] = ct
+            return out
+
+        roles = [r for (idx, r) in slots]
+        got = _ask(roles)
+        # ONE short retry to fill only the slots still missing a valid title.
+        missing = [k for k, t in enumerate(got) if not t]
+        if missing and self.llm_fn:
+            fill = _ask([roles[k] for k in missing])
+            for j, k in enumerate(missing):
+                if j < len(fill) and fill[j]:
+                    got[k] = fill[j]
+        # ALL-OR-NOTHING: rename only when EVERY abstract slot got a valid,
+        # topic-specific title. Otherwise keep the clean abstract labels — never
+        # a half-renamed mix, and never a truncated stub. Weak models half-fail,
+        # and a consistent outline beats a patchy one.
+        if any(not t for t in got):
+            return sections_plan
         plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
         for k, (idx, role) in enumerate(slots):
-            if k in titles:
-                ct = _clean(titles[k])
-                if ct:
-                    plan[idx]["title"] = ct
+            plan[idx]["title"] = got[k]
         return plan
 
     @staticmethod
