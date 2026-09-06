@@ -3676,6 +3676,15 @@ class WeaverOrchestrator:
                 return
             if not task.sections:
                 return
+            # نطاق مُقيِّد (هيكلة/مراجع/خطة/جزء) → المخرَج مكتمل كما أنتجته الطبقة 6.
+            # حلقة التغطية هنا تعتبر كل عنوان في الخطة «ناقصاً» (لأن المخرَج سطرٌ
+            # واحد «هيكل العمل») فتكتب جسماً كاملاً لكل عنوان عبر النموذج — وهذا
+            # يحوّل الهيكلة إلى بحث كامل بطيء. تحقّق الطول/التغطية للمستند الكامل
+            # فقط (scope=None و scopes فارغة).
+            _scope = card.get("scope")
+            _scopes = set(card.get("scopes") or ([_scope] if _scope else []))
+            if _scope in ("outline", "references", "plan", "part") or _scopes:
+                return
 
             # ── (أ) تحقق تغطية الأقسام ──
             plan = card.get("sections") or []
@@ -4369,8 +4378,14 @@ class WeaverOrchestrator:
                     d += L(f" (قراءة كاملة لـ {_nfull})", f" ({_nfull} read in full)")
                 self._emit("detail", "", d)
 
-            self._emit("step", L("فحص مصداقية المصادر", "Checking source credibility"))
-            await self._layer_5(task, mem)
+            # credibility only matters when sources were actually gathered. For a
+            # structural ask (outline/plan) or any request with no sources, showing
+            # this step made a fast, search-free run look identical to a full
+            # research — so gate both the step and the layer on real sources.
+            if task.task_card.get("sources"):
+                self._emit("step", L("فحص مصداقية المصادر",
+                                     "Checking source credibility"))
+                await self._layer_5(task, mem)
 
             self._emit("step", L("كتابة المحتوى", "Writing the content"))
             await self._layer_6(task, mem)
