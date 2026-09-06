@@ -1872,13 +1872,22 @@ class WeaverOrchestrator:
         # references-only, a proposal, or any composite that includes references
         # must actually gather sources → force the search tools.
         _scs = set(task.task_card.get("scopes") or [])
-        if (task.task_card.get("scope") in ("references", "plan")
+        _scope = task.task_card.get("scope")
+        if (_scope in ("references", "plan")
                 or "references" in _scs or "plan" in _scs
                 or task.task_card.get("want_data")):
             for _t in ("web_search", "academic_search"):
                 if _t not in task.tools:
                     task.tools.append(_t)
             task.task_card["needs_academic_search"] = True
+        # a PURELY structural scope (outline-only) needs NO sources — strip the
+        # search tools so it returns the structure in seconds instead of running
+        # the whole research pipeline (search + credibility). Composites that
+        # also want references/plan/data keep gathering (handled above).
+        elif _scope == "outline" and not ({"references", "plan"} & _scs):
+            task.tools = [t for t in task.tools
+                          if t not in ("web_search", "academic_search")]
+            task.task_card.pop("needs_academic_search", None)
 
     async def _layer_4(self, task: Task, mem: TaskMemory):
         """٤: البحث — أكاديمي (PaperQA) + بحث ويب حي (SearXNG). يُشغَّل ما وُجّهت
