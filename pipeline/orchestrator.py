@@ -4968,6 +4968,178 @@ def classify_intent(request, llm_fn=None, system=None):
         return None
 
 
+def capability_catalog(lang="ar"):
+    """A concise MENU of everything Weaver can actually do — task types, scopes,
+    formats, in-document inserts, sources, targets, counts, language. It is handed
+    to the unified understanding step so the model chooses from REAL capabilities
+    instead of us guessing with keyword lists. Pure text; no side effects.
+
+    Step 1 of making the model the brain: this is the vocabulary the brain speaks.
+    """
+    if lang == "en":
+        return (
+            "Available system capabilities (choose by understanding the request):\n"
+            "- action: research=new writing/research; rewrite=rephrase text; "
+            "summarize; translate; convert=render a previous output/content into a "
+            "file format; edit=modify/append inside a file; chat=Q&A that produces "
+            "no file.\n"
+            "- scopes (empty=full document): references=sources only; outline=research "
+            "structure only; plan=research proposal; part=one specific part only.\n"
+            "- format: docx, pdf, pptx, xlsx, csv, txt, html, inline (inline=shown in "
+            "chat, no file).\n"
+            "- in-document inserts: wants_table, wants_chart, wants_data (find "
+            "numbers/statistics).\n"
+            "- source: topic=a textual subject; previous_output=an earlier reply/"
+            "output; pasted_link=a page/YouTube link to read/transcribe; "
+            "attached_file=a Word/PDF/Excel/image whose content is read; "
+            "instructions_in_file=the instructions live inside the attached file.\n"
+            "- target: inline=in chat; new_file=a new file; same_file=the attached "
+            "file itself; specific_file=a file named explicitly.\n"
+            "- counts when asked: mabhath_count, matlab_count, slide_count, words, "
+            "pages.\n"
+            "- language: the requested output language, or the attached file's own "
+            "language, else null.\n"
+            "- one request may contain MORE THAN ONE task (multiple tasks).")
+    return (
+        "قدرات النظام المتاحة (اختر منها بحسب فهمك للطلب):\n"
+        "• أنواع المهام (action): research=كتابة/بحث جديد؛ rewrite=إعادة صياغة نص؛ "
+        "summarize=تلخيص؛ translate=ترجمة؛ convert=تحويل ناتجٍ/محتوى سابق إلى ملف "
+        "بصيغة؛ edit=تعديل/إلحاق داخل ملف؛ chat=حوار/سؤال لا يُنتج ملفاً.\n"
+        "• النطاقات (scopes، فارغة=مستند كامل): references=مصادر/مراجع فقط؛ "
+        "outline=هيكل بحثي فقط؛ plan=خطة/مقترح بحثي؛ part=جزء محدّد فقط.\n"
+        "• الصيغ (format): docx, pdf, pptx, xlsx, csv, txt, html, inline "
+        "(inline=إظهار في المحادثة دون ملف).\n"
+        "• إدراجات داخل المستند: wants_table=جدول، wants_chart=رسم بياني، "
+        "wants_data=إيجاد بيانات/أرقام.\n"
+        "• المصدر (source): topic=موضوع نصّي؛ previous_output=ناتج/ردّ سابق؛ "
+        "pasted_link=رابط مُدرَج (صفحة/يوتيوب) يُقرأ ويُفرَّغ؛ attached_file=ملف "
+        "مرفق (وورد/PDF/إكسل/صورة) يُقرأ محتواه؛ instructions_in_file=التعليمات "
+        "داخل نفس الملف المرفق.\n"
+        "• الهدف (target): inline=في المحادثة؛ new_file=ملف جديد؛ same_file=نفس "
+        "الملف المرفق؛ specific_file=ملف باسمٍ محدّد.\n"
+        "• الأعداد عند طلبها: mabhath_count, matlab_count, slide_count, words, "
+        "pages.\n"
+        "• اللغة (language): لغة المخرجات المطلوبة صراحةً أو لغة الملف الأصلية، "
+        "وإلا null.\n"
+        "• قد يحوي الطلب الواحد أكثر من مهمة (tasks متعدّدة).")
+
+
+def _normalize_plan(d):
+    """Validate the unified understanding JSON into safe types. Reuses
+    _normalize_intent for each task's shared fields and adds the plan-only fields
+    (topic / source / target / target_file). Returns a plan dict with a non-empty
+    `tasks` list, or None when unusable."""
+    if not isinstance(d, dict):
+        return None
+    tasks_in = d.get("tasks")
+    # tolerate a single-task shape ({action:..} without a tasks[] wrapper)
+    if not tasks_in and isinstance(d.get("action"), str):
+        tasks_in = [d]
+    if not isinstance(tasks_in, list) or not tasks_in:
+        return None
+    _src_ok = ("topic", "previous_output", "pasted_link", "attached_file",
+               "instructions_in_file")
+    _tgt_ok = ("inline", "new_file", "same_file", "specific_file")
+    out_tasks = []
+    for t in tasks_in:
+        if not isinstance(t, dict):
+            continue
+        base = WeaverOrchestrator._normalize_intent(t)
+        src = str(t.get("source", "") or "").lower().strip()
+        base["source"] = src if src in _src_ok else None
+        tgt = str(t.get("target", "") or "").lower().strip()
+        base["target"] = tgt if tgt in _tgt_ok else None
+        tf = str(t.get("target_file", "") or "").strip()
+        base["target_file"] = tf[:200] or None
+        tp = str(t.get("topic", "") or "").strip()
+        base["topic"] = tp[:300] or None
+        out_tasks.append(base)
+    if not out_tasks:
+        return None
+    lang = str(d.get("language", "") or "").lower().strip()
+    return {"language": lang if lang in ("ar", "en") else None,
+            "tasks": out_tasks}
+
+
+def understand_request(conversation, request, attachments=None, llm_fn=None,
+                       system=None):
+    """UNIFIED UNDERSTANDING — the brain. Give the model the FULL conversation,
+    any attachment/link info, and the capability catalog, and let IT produce a
+    complete execution PLAN (one or more tasks) instead of hand-coded keyword
+    detection. This is what lets any phrasing/dialect/language be understood, and
+    what stops the second message from forgetting the first (full context in, not
+    a stripped single line).
+
+    Returns a normalized plan dict, or None when the model is unavailable or its
+    reply is unusable (callers keep the keyword + classify_intent fallback).
+    Classification only — never writes or executes.
+
+    DORMANT for now: built and tested here, wired into the pipeline in the next
+    step so behaviour is unchanged until then."""
+    req = (request or "").strip()
+    convo = (conversation or "").strip()
+    if not req and not convo:
+        return None
+    if llm_fn is None:
+        try:
+            from core.llm import get_llm_fn
+            llm_fn = get_llm_fn()
+        except Exception:
+            llm_fn = None
+    if not llm_fn:
+        return None
+    try:
+        import os
+        cat = capability_catalog("ar")
+        att = ""
+        if attachments:
+            att = ("الملفات/الروابط المرفقة:\n"
+                   + "\n".join("- " + str(a) for a in attachments) + "\n\n")
+        prompt = (
+            "أنت عقل التخطيط في نظام كتابة بحثي. اقرأ المحادثة كاملةً والطلب "
+            "الحالي، وحدِّد ما يريده المستخدم فعلاً — دون تنفيذ — وأعِد JSON فقط "
+            "(بلا أي نص آخر).\n\n" + cat + "\n\n"
+            "أعِد الخطة بهذا الشكل بالضبط:\n"
+            '{"language":"ar|en|null","tasks":[{'
+            '"action":"research|rewrite|summarize|translate|convert|edit|chat",'
+            '"scopes":[من "references","outline","plan","part"],'
+            '"format":"docx|pdf|pptx|xlsx|csv|txt|html|inline|null",'
+            '"language":"ar|en|null",'
+            '"topic":"موضوع المهمة","source":"topic|previous_output|pasted_link|'
+            'attached_file|instructions_in_file",'
+            '"target":"inline|new_file|same_file|specific_file",'
+            '"target_file":"اسم|null","on_previous":true|false,'
+            '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
+            '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
+            '"wants_table":true|false,"wants_chart":true|false,'
+            '"wants_data":true|false}]}\n\n'
+            "قواعد مهمة:\n"
+            "- استعمل المحادثة كاملةً لتحديد الموضوع: إن كان الطلب الحالي تعليمةَ "
+            "تنسيق (مثل «اجعلها 3 مباحث») دون ذكر الموضوع، فخذ الموضوع من الرسائل "
+            "السابقة ولا تسأل عنه.\n"
+            "- إن طلب المستخدم أكثر من شيء، اجعل tasks متعدّدة بالترتيب.\n"
+            "- بحث كامل عادي: action=research وscopes=[].\n\n"
+            + att + "المحادثة (الأقدم فالأحدث):\n" + convo[:4000] + "\n\n"
+            "الطلب الحالي:\n" + req[:1500])
+        from core.llm import extract_json
+        try:
+            _to = int(os.environ.get("WEAVER_UNDERSTAND_TIMEOUT", "45") or 45)
+        except Exception:
+            _to = 45
+        try:
+            raw = llm_fn(prompt, system=system, temperature=0.0,
+                         max_tokens=700, timeout=_to) or ""
+        except TypeError:
+            raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+        try:
+            data = extract_json(raw)
+        except Exception:
+            data = None
+        return _normalize_plan(data)
+    except Exception:
+        return None
+
+
 def _content_to_chart(llm_fn, content, lang="ar"):
     """Ask the model to pull a small chartable series (labels + numeric values)
     from content. Returns a chart spec {"type","data":{"labels","values"},
