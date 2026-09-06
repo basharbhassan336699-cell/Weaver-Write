@@ -1848,7 +1848,33 @@ class WeaverOrchestrator:
         #    real fix — the system understands any phrasing instead of matching
         #    hand-coded words. Fully guarded and additive.
         try:
-            _iv = self._intent_router(_cur_req)
+            # Prefer the UNIFIED brain: it reads THIS conversation's full history
+            # + the capability catalog, so any phrasing is understood and a
+            # follow-up never forgets the subject. Fall back to the single-line
+            # keyword classifier only when the brain is unavailable/unusable — so
+            # nothing is lost. The merge below is unchanged: it still treats an
+            # explicit keyword scope as authoritative.
+            _iv = None
+            _plan = None
+            try:
+                _plan = understand_request(
+                    self._conversation_context(task.description), _cur_req,
+                    llm_fn=self.llm_fn, system=self.system_main)
+            except Exception:
+                _plan = None
+            if _plan and _plan.get("tasks"):
+                _iv = _plan["tasks"][0]                 # primary task
+                if isinstance(task.task_card, dict):
+                    task.task_card["plan"] = _plan       # kept for later steps
+                    task.task_card["plan_tasks"] = _plan["tasks"]
+                    # the plan saw the WHOLE conversation, so its topic is the
+                    # reliable subject even when the current line is only a format
+                    # instruction ("اجعلها 3 مباحث") — this is the general fix for
+                    # "forgot the topic".
+                    if _iv.get("topic"):
+                        task.task_card["topic"] = _iv["topic"]
+            if not _iv:
+                _iv = self._intent_router(_cur_req)     # keyword-model fallback
             if _iv and isinstance(task.task_card, dict):
                 c = task.task_card
                 if _iv.get("action"):
