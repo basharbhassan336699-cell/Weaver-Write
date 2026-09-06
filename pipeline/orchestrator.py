@@ -3186,6 +3186,85 @@ class WeaverOrchestrator:
             plan[idx]["title"] = got[k]
         return plan
 
+    def _rich_outline(self, topic, card, lang):
+        """DESIGN a complete, richly-detailed research outline by UNLEASHING the
+        model on the topic — instead of only naming pre-fixed structural slots.
+        The model proposes a title, a structured introduction (تمهيد/إشكالية/
+        أهداف/منهج), each main section with annotated sub-points, topic-relevant
+        evidence hints (آيات/أدلة/تطابق علمي where fitting), a conclusion, and a
+        suggested references list. Honors an explicit "N مباحث × M مطالب" count.
+
+        This is the whole point of the outline path: the SAME model that returns
+        a thin heading list when asked slot-by-slot returns a deep, useful outline
+        when asked to author the structure itself — one call, no search.
+
+        Returns ready-to-render markdown-ish text, or None when the model is
+        unavailable or the reply is too thin (caller then falls back to the flat
+        structural list, so nothing breaks and weak models still get output)."""
+        if not self.llm_fn:
+            return None
+        topic = (topic or "").strip()
+        if not topic:
+            return None
+        import re
+        _mc = self._as_int(card.get("mabhath_count"), 0) or 0
+        _mm = self._as_int(card.get("matlab_count"), 0) or 0
+        if lang == "ar":
+            count_line = ""
+            if _mc:
+                count_line = (
+                    f"اجعل الهيكل {_mc} مباحث رئيسية بالضبط، وكل مبحث {_mm or 3} "
+                    f"مطالب، وتحت كل مطلب نقاط فرعية مرقّمة (أولاً، ثانياً، "
+                    f"ثالثاً).\n")
+            prompt = (
+                f"أنت باحث أكاديمي متمرّس. صمّم هيكلاً بحثياً متكاملاً ومفصّلاً "
+                f"لموضوع: «{topic}».\n{count_line}"
+                "اجعل الهيكل يتضمّن:\n"
+                "- عنواناً مقترحاً دقيقاً للبحث.\n"
+                "- مقدمة مقسّمة إلى: تمهيد، إشكالية، أهداف، منهج.\n"
+                "- المباحث/المحاور، كلٌّ بعنوان دالٍّ وتحته مطالب أو نقاط فرعية "
+                "مشروحة بإيجاز (سطر تعريفي موجز لكل نقطة).\n"
+                "- حيثما يناسب الموضوع (شرعي/علمي): أشِر باختصار إلى الآيات أو "
+                "الأدلة أو التطابق العلمي داخل النقاط.\n"
+                "- خاتمة (خلاصة، نتائج، توصيات).\n"
+                "- قائمة مصادر ومراجع مقترحة.\n\n"
+                "أخرِج الهيكل مباشرةً بصيغة نصية منسّقة: عناوين واضحة كنصٍّ عادي "
+                "(مثل «المبحث الأول: ...» و«المطلب الأول: ...») ونقاط بادئة بـ«- »، "
+                "دون أي تمهيد كلامي منك ودون رموز «#». اكتب بالعربية الفصحى.")
+        else:
+            count_line = ""
+            if _mc:
+                count_line = (
+                    f"Make it exactly {_mc} main sections, each with {_mm or 3} "
+                    f"subsections, and numbered sub-points under each.\n")
+            prompt = (
+                f"You are an experienced academic researcher. Design a complete, "
+                f"detailed research outline for: \"{topic}\".\n{count_line}"
+                "Include: a proposed precise title; an introduction split into "
+                "background, problem statement, objectives, methodology; the main "
+                "sections, each with a meaningful title and annotated sub-points "
+                "(a brief defining line each); topic-relevant evidence hints where "
+                "fitting; a conclusion (summary, findings, recommendations); and a "
+                "suggested references list.\n\nReturn the outline directly as "
+                "formatted text: plain-text headings (e.g. \"Section 1: ...\") and "
+                "\"- \" bullet points, with no conversational preamble and no '#' "
+                "symbols.")
+        try:
+            raw = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.4, max_tokens=2200) or ""
+        except Exception:
+            return None
+        txt = (raw or "").replace("```", "").strip()
+        # drop a leading conversational preamble ("بالتأكيد، إليك ..." / "Sure, ")
+        txt = re.sub(r'^\s*(?:بالتأكيد|تمام|حسناً|حسنا|إليك|طبعاً|بكل سرور|'
+                     r'sure|certainly|here(?:\'s| is))[^\n]*\n+', '', txt,
+                     flags=re.I).strip()
+        # validation: a real outline is substantial and multi-line
+        lines = [l for l in txt.splitlines() if l.strip()]
+        if len(txt) < 200 or len(lines) < 6:
+            return None
+        return txt
+
     @staticmethod
     def _clean_section_body(body, title):
         """Tidy a written section body: drop a leading duplicate of its own
@@ -3345,26 +3424,32 @@ class WeaverOrchestrator:
         if {"references", "outline"} <= scopes and "part" not in scopes:
             out_head = "هيكل العمل" if lang == "ar" else "Outline"
             ref_head = "المراجع والدراسات" if lang == "ar" else "References"
-            _sp = card.get("sections")
-            if not _sp:
-                try:
-                    _pl = self._skill_call("research_structure", "structures",
-                                           "build_structure", card, lang)
-                    _sp = (_pl or {}).get("sections") or []
-                except Exception:
-                    _sp = []
+            _topic = card.get("topic") or self._current_request(task.description)
+            _ob = None
             try:
-                _sp = self._descriptive_titles(
-                    card.get("topic", "") or task.description, _sp, lang)
+                _ob = self._rich_outline(_topic, card, lang)
             except Exception:
-                pass
-            _ol = []
-            for sec in _sp:
-                _lvl = int(sec.get("level", 1) or 1)
-                _ti = sec.get("title") or sec.get("heading") or ""
-                if _ti:
-                    _ol.append(("  " * max(0, _lvl - 1)) + "- " + _ti)
-            _ob = "\n".join(_ol)
+                _ob = None
+            if not _ob:
+                _sp = card.get("sections")
+                if not _sp:
+                    try:
+                        _pl = self._skill_call("research_structure", "structures",
+                                               "build_structure", card, lang)
+                        _sp = (_pl or {}).get("sections") or []
+                    except Exception:
+                        _sp = []
+                try:
+                    _sp = self._descriptive_titles(_topic, _sp, lang)
+                except Exception:
+                    pass
+                _ol = []
+                for sec in _sp:
+                    _lvl = int(sec.get("level", 1) or 1)
+                    _ti = sec.get("title") or sec.get("heading") or ""
+                    if _ti:
+                        _ol.append(("  " * max(0, _lvl - 1)) + "- " + _ti)
+                _ob = "\n".join(_ol)
             _rb = self._format_references_only(card, lang)
             task.sections = [{"heading": out_head, "body": _ob},
                              {"heading": ref_head, "body": _rb}]
@@ -3428,25 +3513,46 @@ class WeaverOrchestrator:
         # writer can't produce content for a meaningless "المطلب 1.1"). Additive
         # and guarded: on any miss the original structural labels are kept.
         try:
-            sections_plan = self._descriptive_titles(
-                card.get("topic", "") or task.description, sections_plan, lang)
-            card["sections"] = sections_plan
+            # outline builds its own rich structure below (skip slot-naming here
+            # so it stays a single model call in the common case).
+            if scope != "outline":
+                sections_plan = self._descriptive_titles(
+                    card.get("topic", "") or task.description, sections_plan, lang)
+                card["sections"] = sections_plan
         except Exception as e:
             mem.set_status(6, f"عناوين وصفية (تخطّي: {e})")
 
-        # outline-only → output just the structure, don't write any bodies
+        # outline-only → a COMPLETE, richly-detailed outline authored by the model
+        # itself (title, structured intro, annotated sub-points, suggested refs) —
+        # not just a flat heading list. Falls back to the descriptive one-line
+        # list when the model is unavailable or the reply is too thin.
         if scope == "outline":
             head = "هيكل العمل" if lang == "ar" else "Outline"
-            lines = []
-            for sec in sections_plan:
-                lvl = int(sec.get("level", 1) or 1)
-                title = sec.get("title") or sec.get("heading") or ""
-                if title:
-                    lines.append(("  " * max(0, lvl - 1)) + "- " + title)
-            body = "\n".join(lines)
+            _topic = card.get("topic") or self._current_request(task.description)
+            rich = None
+            try:
+                rich = self._rich_outline(_topic, card, lang)
+            except Exception as e:
+                mem.set_status(6, f"هيكل مفصّل (تخطّي: {e})")
+            if rich:
+                body = rich
+                mem.set_status(6, "إخراج: هيكل مفصّل")
+            else:
+                try:
+                    sections_plan = self._descriptive_titles(
+                        _topic, sections_plan, lang)
+                except Exception:
+                    pass
+                lines = []
+                for sec in sections_plan:
+                    lvl = int(sec.get("level", 1) or 1)
+                    title = sec.get("title") or sec.get("heading") or ""
+                    if title:
+                        lines.append(("  " * max(0, lvl - 1)) + "- " + title)
+                body = "\n".join(lines)
+                mem.set_status(6, "إخراج: هيكل فقط")
             task.sections = [{"heading": head, "body": body}]
             task.draft = f"## {head}\n\n{body}"
-            mem.set_status(6, "إخراج: هيكل فقط")
             return
 
         # part-only → write just the one part the user asked for (single section)
@@ -3791,6 +3897,18 @@ class WeaverOrchestrator:
         yt = task.task_card.get("youtube")
         if yt and yt.get("mode") in ("transcript", "both"):
             mem.set_status(65, "تفريغ حرفي — تخطّي الأنسنة")
+            return
+
+        # structural / reference outputs (an outline, a references list) are not
+        # prose to humanize — the AI-fingerprint rewriter would swap words in the
+        # headings and corrupt their meaning (e.g. "قبل" → "أخرج"). Leave them
+        # exactly as authored.
+        _card = task.task_card or {}
+        _scope = _card.get("scope")
+        _scopes = set(_card.get("scopes") or ([_scope] if _scope else []))
+        if _scope in ("outline", "references") or ({"outline", "references"}
+                                                   & _scopes):
+            mem.set_status(65, "مخرَج بنيوي — تخطّي الأنسنة")
             return
 
         lang = task.task_card.get("language", "ar")
