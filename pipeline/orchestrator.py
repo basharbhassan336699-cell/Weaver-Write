@@ -509,46 +509,7 @@ class WeaverOrchestrator:
         a trigger for each. Returns a normalized dict, or None when the model is
         unavailable or its reply is unusable (then the keyword detectors stand in
         as a fallback). Classification only — it never writes or executes."""
-        req = (request or "").strip()
-        if not self.llm_fn or not req:
-            return None
-        try:
-            import json as _json
-            prompt = (
-                "أنت مصنِّف نيّة دقيق. اقرأ طلب المستخدم وأعد JSON فقط (بلا أي نص "
-                "آخر) يصف ما يريده، دون تنفيذ الطلب. الحقول:\n"
-                '{"action":"research|rewrite|summarize|translate|convert|edit",'
-                '"scopes":[من "references","outline","plan","part"],'
-                '"format":"docx|pdf|pptx|xlsx|csv|txt|html|inline|null",'
-                '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
-                '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
-                '"language":"ar|en|null","wants_table":true|false,'
-                '"wants_chart":true|false,"wants_data":true|false}\n'
-                "تعريفات دقيقة:\n"
-                "- action: research=كتابة/بحث جديد (الافتراضي)؛ rewrite=إعادة "
-                "صياغة نص موجود؛ summarize=تلخيص؛ translate=ترجمة؛ convert=تحويل "
-                "صيغة ناتج سابق؛ edit=تعديل/إلحاق على ملف.\n"
-                "- scopes (يمكن أكثر من واحد، فارغة=مستند كامل): references=إيجاد "
-                "مصادر/مراجع فقط بلا كتابة؛ outline=هيكل/عناوين فقط؛ plan=خطة/"
-                "مقترح بحثي؛ part=جزء محدد فقط.\n"
-                "- mabhath_count/matlab_count: إن طلب عدداً صريحاً من المباحث "
-                "وعدد المطالب تحت كل مبحث.\n"
-                "- language: لغة المخرجات إن طُلبت صراحةً فقط، وإلا null.\n"
-                "- إن كان الطلب بحثاً كاملاً عادياً: action=research وscopes=[].\n"
-                "طلب المستخدم:\n" + req[:1500]
-            )
-            from core.llm import extract_json
-            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.0) or ""
-            data = None
-            try:
-                data = extract_json(raw)
-            except Exception:
-                data = None
-            if not isinstance(data, dict):
-                return None
-            return self._normalize_intent(data)
-        except Exception:
-            return None
+        return classify_intent(request, self.llm_fn, self.system_main)
 
     @staticmethod
     def _normalize_intent(d):
@@ -563,7 +524,8 @@ class WeaverOrchestrator:
         act = str(d.get("action", "") or "").lower().strip()
         out["action"] = act if act in (
             "research", "rewrite", "summarize", "translate", "convert",
-            "edit") else None
+            "edit", "chat") else None
+        out["on_previous"] = bool(d.get("on_previous"))
         sc = d.get("scopes") or []
         if isinstance(sc, str):
             sc = [sc]
@@ -4678,6 +4640,65 @@ def _content_to_table(llm_fn, content, lang="ar"):
         if headers and rows:
             return {"headers": [str(h) for h in headers], "rows": rows}
         return None
+    except Exception:
+        return None
+
+
+def classify_intent(request, llm_fn=None, system=None):
+    """Model-based intent classifier shared by the pipeline (layer 3) AND the web
+    layer's routing (export-previous vs new task). Returns a normalized intent
+    dict, or None when the model is unavailable or its reply is unusable — so the
+    caller's keyword logic remains the fallback. Classification only.
+
+    This is the "understanding first" layer applied to the WHOLE system: the same
+    model that writes also decides what the user meant, instead of keyword lists.
+    """
+    req = (request or "").strip()
+    if not req:
+        return None
+    if llm_fn is None:
+        try:
+            from core.llm import get_llm_fn
+            llm_fn = get_llm_fn()
+        except Exception:
+            llm_fn = None
+    if not llm_fn:
+        return None
+    try:
+        prompt = (
+            "أنت مصنِّف نيّة دقيق. اقرأ طلب المستخدم وأعد JSON فقط (بلا أي نص "
+            "آخر) يصف ما يريده، دون تنفيذ الطلب. الحقول:\n"
+            '{"action":"research|rewrite|summarize|translate|convert|edit|chat",'
+            '"scopes":[من "references","outline","plan","part"],'
+            '"format":"docx|pdf|pptx|xlsx|csv|txt|html|inline|null",'
+            '"on_previous":true|false,'
+            '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
+            '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
+            '"language":"ar|en|null","wants_table":true|false,'
+            '"wants_chart":true|false,"wants_data":true|false}\n'
+            "تعريفات دقيقة:\n"
+            "- action: research=كتابة/بحث جديد؛ rewrite=إعادة صياغة نص؛ "
+            "summarize=تلخيص؛ translate=ترجمة؛ convert=تحويل/إخراج ناتجٍ سابق إلى "
+            "ملف بصيغة (مثل «ضيف/أخرج/حوّل هذا الملخص إلى وورد»)؛ edit=تعديل/إلحاق "
+            "على ملف؛ chat=سؤال/حوار عادي لا يُنتج ملفاً.\n"
+            "- on_previous: true إن كان الطلب يتعامل مع ناتجٍ/ردٍّ سابق (هذا "
+            "الملخص/الرد/ما سبق) لا موضوعاً جديداً.\n"
+            "- scopes (فارغة=مستند كامل): references=مصادر فقط؛ outline=هيكل فقط؛ "
+            "plan=خطة/مقترح؛ part=جزء محدد.\n"
+            "- mabhath_count/matlab_count: عند طلب عددٍ صريح.\n"
+            "- language: لغة المخرجات إن طُلبت صراحةً، وإلا null.\n"
+            "- بحث كامل عادي: action=research وscopes=[].\n"
+            "طلب المستخدم:\n" + req[:1500]
+        )
+        from core.llm import extract_json
+        raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+        try:
+            data = extract_json(raw)
+        except Exception:
+            data = None
+        if not isinstance(data, dict):
+            return None
+        return WeaverOrchestrator._normalize_intent(data)
     except Exception:
         return None
 

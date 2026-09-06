@@ -732,6 +732,29 @@ def _export_previous_format(msg):
     return None
 
 
+def _model_export_previous(msg):
+    """Model-based fallback for _export_previous_format: when the keyword verbs
+    miss but a format IS named, ask the intent router whether the user wants to
+    export/convert the PREVIOUS reply to that format (any phrasing, e.g. "ضيف هذا
+    الملخص إلى وورد"). Returns the format ('DOCX'/…) or None. The model is only
+    called when a real (non-inline) format is mentioned, so a plain chat never
+    triggers it. Fully guarded; degrades to None."""
+    try:
+        from pipeline.orchestrator import (WeaverOrchestrator as _W,
+                                           classify_intent)
+        fmt = _W._requested_format(msg)
+        if not fmt or fmt == "INLINE":
+            return None
+        iv = classify_intent(msg)
+        # only a PURE export/convert of the previous output (not summarize/
+        # translate/rewrite, which need real processing, not a raw dump).
+        if iv and iv.get("on_previous") and iv.get("action") == "convert":
+            return (iv.get("format") or fmt).upper()
+    except Exception:
+        pass
+    return None
+
+
 def _with_attachments_for_task(desc, msg, attach_text):
     """Prepend attached-file content to a pipeline task description so the task is
     performed on it, and (unless the user named a language) force the FILE's own
@@ -1850,9 +1873,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                              "output_path": ea.get("output_path")})
                     sse({"t": "done"})
                     return
-            # "أخرج/حوّل ذلك إلى وورد/pdf" → export the PREVIOUS reply directly,
-            # in seconds, without re-running the research pipeline.
+            # "أخرج/حوّل/ضيف ذلك إلى وورد/pdf" → export the PREVIOUS reply directly,
+            # in seconds, without re-running the research pipeline. Keyword first;
+            # if it misses but a format is named, let the MODEL decide (so any
+            # phrasing like "ضيف هذا الملخص إلى وورد" is understood, not just the
+            # hand-coded verbs). Model call only when a format is mentioned.
             _epf = _export_previous_format(msg)
+            if not _epf:
+                _epf = _model_export_previous(msg)
             if _epf:
                 _isar0 = any("؀" <= c <= "ۿ" for c in msg)
                 _prev = _last_assistant_reply(body.get("history"))
@@ -1997,8 +2025,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if ea is not None:
                     self._json(ea)
                     return
-            # "أخرج/حوّل ذلك إلى وورد/pdf" → export the previous reply directly
+            # "أخرج/حوّل/ضيف ذلك إلى وورد/pdf" → export the previous reply directly.
+            # Keyword first; if it misses but a format is named, the MODEL decides.
             _epf = _export_previous_format(msg)
+            if not _epf:
+                _epf = _model_export_previous(msg)
             if _epf:
                 _isar0 = any("؀" <= c <= "ۿ" for c in msg)
                 _prev = _last_assistant_reply(body.get("history"))
