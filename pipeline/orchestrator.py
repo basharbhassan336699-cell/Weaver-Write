@@ -3200,13 +3200,18 @@ class WeaverOrchestrator:
 
         Returns ready-to-render markdown-ish text, or None when the model is
         unavailable or the reply is too thin (caller then falls back to the flat
-        structural list, so nothing breaks and weak models still get output)."""
+        structural list, so nothing breaks and weak models still get output).
+        Sets self._rich_reason to a short, on-screen-safe explanation so a
+        fallback is never silent."""
+        self._rich_reason = ""
         if not self.llm_fn:
+            self._rich_reason = "لا نموذج"
             return None
         topic = (topic or "").strip()
         if not topic:
+            self._rich_reason = "لا موضوع"
             return None
-        import re
+        import os, re
         _mc = self._as_int(card.get("mabhath_count"), 0) or 0
         _mm = self._as_int(card.get("matlab_count"), 0) or 0
         if lang == "ar":
@@ -3249,10 +3254,27 @@ class WeaverOrchestrator:
                 "formatted text: plain-text headings (e.g. \"Section 1: ...\") and "
                 "\"- \" bullet points, with no conversational preamble and no '#' "
                 "symbols.")
+        # a rich outline is a long generation; a slow on-device model needs more
+        # than the default 180s or it times out and silently falls back to the
+        # thin list. Give it a generous, configurable budget (WEAVER_RICH_TIMEOUT).
+        try:
+            _rto = int(os.environ.get("WEAVER_RICH_TIMEOUT", "420") or 420)
+        except Exception:
+            _rto = 420
         try:
             raw = self.llm_fn(prompt, system=self.system_main,
-                              temperature=0.4, max_tokens=2200) or ""
-        except Exception:
+                              temperature=0.4, max_tokens=2200,
+                              timeout=_rto) or ""
+        except TypeError:
+            # older llm_fn without a timeout kwarg
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.4, max_tokens=2200) or ""
+            except Exception as e:
+                self._rich_reason = f"خطأ نداء: {type(e).__name__}"
+                return None
+        except Exception as e:
+            self._rich_reason = f"تعذّر النداء: {type(e).__name__}"
             return None
         txt = (raw or "").replace("```", "").strip()
         # drop a leading conversational preamble ("بالتأكيد، إليك ..." / "Sure, ")
@@ -3262,7 +3284,10 @@ class WeaverOrchestrator:
         # validation: a real outline is substantial and multi-line
         lines = [l for l in txt.splitlines() if l.strip()]
         if len(txt) < 200 or len(lines) < 6:
+            self._rich_reason = (f"ردّ قصير ({len(txt)} حرف/{len(lines)} سطر)"
+                                 if txt else "ردّ فارغ")
             return None
+        self._rich_reason = "نجح"
         return txt
 
     @staticmethod
@@ -3533,7 +3558,12 @@ class WeaverOrchestrator:
             try:
                 rich = self._rich_outline(_topic, card, lang)
             except Exception as e:
+                self._rich_reason = f"استثناء: {type(e).__name__}"
                 mem.set_status(6, f"هيكل مفصّل (تخطّي: {e})")
+            # make the outcome visible on-screen so a fallback is never a silent
+            # mystery (نجح / تعذّر النداء / ردّ قصير / لا نموذج …).
+            self._emit("detail", "", "الهيكل المفصّل: "
+                       + (getattr(self, "_rich_reason", "") or "?"))
             if rich:
                 body = rich
                 mem.set_status(6, "إخراج: هيكل مفصّل")
