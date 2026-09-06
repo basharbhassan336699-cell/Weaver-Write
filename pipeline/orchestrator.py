@@ -1441,6 +1441,22 @@ class WeaverOrchestrator:
         return WeaverOrchestrator._strip_injected_memory(t).strip()
 
     @staticmethod
+    def _conversation_context(text):
+        """Return THIS conversation's own prior turns — the web layer's
+        "[سياق المحادثة السابقة] … [الطلب الحالي]" block — stripped of any
+        appended CROSS-chat memory. Empty when there is no in-conversation
+        history. Used to recover the SUBJECT for a follow-up that only adjusts
+        the format ("اجعلها 3 مباحث") without naming the topic again — this is
+        THIS chat's history, so it is safe context, unlike recalled other-chat
+        memory."""
+        t = WeaverOrchestrator._strip_injected_memory(text or "")
+        if "[سياق المحادثة السابقة]" in t and "[الطلب الحالي]" in t:
+            seg = t.split("[سياق المحادثة السابقة]", 1)[1]
+            seg = seg.split("[الطلب الحالي]", 1)[0]
+            return seg.strip()
+        return ""
+
+    @staticmethod
     def _extract_slide_count(text):
         """Extract a requested slide count from the request. None if unstated.
         Feeds design_slides so "اعمل عرض 30 شريحة" honours 30. (tested)"""
@@ -3186,7 +3202,7 @@ class WeaverOrchestrator:
             plan[idx]["title"] = got[k]
         return plan
 
-    def _rich_outline(self, topic, card, lang):
+    def _rich_outline(self, topic, card, lang, context=""):
         """DESIGN a complete, richly-detailed research outline by UNLEASHING the
         model on the topic — instead of only naming pre-fixed structural slots.
         The model proposes a title, a structured introduction (تمهيد/إشكالية/
@@ -3214,7 +3230,18 @@ class WeaverOrchestrator:
         import os, re
         _mc = self._as_int(card.get("mabhath_count"), 0) or 0
         _mm = self._as_int(card.get("matlab_count"), 0) or 0
+        context = (context or "").strip()
         if lang == "ar":
+            # a follow-up like "اجعلها 3 مباحث" carries no subject of its own —
+            # recover it from THIS conversation's history so the model never asks
+            # "ما الموضوع؟" or treats the format instruction as the subject.
+            ctx_line = ""
+            if context:
+                ctx_line = (
+                    "سياق هذه المحادثة (استعمِله لتحديد موضوع البحث إن كان الطلب "
+                    "الحالي تعليمةَ تنسيق — كعدد المباحث — دون ذكر الموضوع، ولا "
+                    "تسأل عن الموضوع ولا تعامل التعليمة كأنها الموضوع):\n"
+                    f"{context[:1200]}\n\n")
             count_line = ""
             if _mc:
                 count_line = (
@@ -3222,7 +3249,8 @@ class WeaverOrchestrator:
                     f"مطالب، وتحت كل مطلب نقاط فرعية مرقّمة (أولاً، ثانياً، "
                     f"ثالثاً).\n")
             prompt = (
-                f"أنت باحث أكاديمي متمرّس. صمّم هيكلاً بحثياً متكاملاً وعميقاً "
+                f"أنت باحث أكاديمي متمرّس. {ctx_line}"
+                f"صمّم هيكلاً بحثياً متكاملاً وعميقاً "
                 f"ومفصّلاً لموضوع: «{topic}».\n{count_line}"
                 "اجعل الهيكل يتضمّن:\n"
                 "- عنواناً مقترحاً دقيقاً للبحث.\n"
@@ -3240,13 +3268,22 @@ class WeaverOrchestrator:
                 "دون أي تمهيد كلامي منك ودون رموز «#». اجعله غنياً وعميقاً بقدر "
                 "ما يسمح الموضوع. اكتب بالعربية الفصحى.")
         else:
+            ctx_line = ""
+            if context:
+                ctx_line = (
+                    "Context of this conversation (use it to determine the "
+                    "research SUBJECT if the current request is a formatting "
+                    "instruction — like the number of sections — without naming "
+                    "the topic; do not ask for the topic and do not treat the "
+                    f"instruction as the topic):\n{context[:1200]}\n\n")
             count_line = ""
             if _mc:
                 count_line = (
                     f"Make it exactly {_mc} main sections, each with {_mm or 3} "
                     f"subsections, and numbered sub-points under each.\n")
             prompt = (
-                f"You are an experienced academic researcher. Design a complete, "
+                f"You are an experienced academic researcher. {ctx_line}"
+                f"Design a complete, "
                 f"detailed research outline for: \"{topic}\".\n{count_line}"
                 "Include: a proposed precise title; an introduction split into "
                 "background, problem statement, objectives, methodology; the main "
@@ -3453,9 +3490,10 @@ class WeaverOrchestrator:
             out_head = "هيكل العمل" if lang == "ar" else "Outline"
             ref_head = "المراجع والدراسات" if lang == "ar" else "References"
             _topic = card.get("topic") or self._current_request(task.description)
+            _ctx = self._conversation_context(task.description)
             _ob = None
             try:
-                _ob = self._rich_outline(_topic, card, lang)
+                _ob = self._rich_outline(_topic, card, lang, context=_ctx)
             except Exception:
                 _ob = None
             if not _ob:
@@ -3557,9 +3595,10 @@ class WeaverOrchestrator:
         if scope == "outline":
             head = "هيكل العمل" if lang == "ar" else "Outline"
             _topic = card.get("topic") or self._current_request(task.description)
+            _ctx = self._conversation_context(task.description)
             rich = None
             try:
-                rich = self._rich_outline(_topic, card, lang)
+                rich = self._rich_outline(_topic, card, lang, context=_ctx)
             except Exception as e:
                 self._rich_reason = f"استثناء: {type(e).__name__}"
                 mem.set_status(6, f"هيكل مفصّل (تخطّي: {e})")
