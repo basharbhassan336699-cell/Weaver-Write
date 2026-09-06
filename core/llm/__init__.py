@@ -48,7 +48,8 @@ def get_llm_fn():
     provider = os.environ.get("WEAVER_PROVIDER", "").strip()
     anthropic = _is_anthropic(provider, base)
 
-    def llm_fn(prompt, system=None, temperature=0.7, max_tokens=None):
+    def llm_fn(prompt, system=None, temperature=0.7, max_tokens=None,
+               timeout=None):
         if anthropic:
             url = base.rstrip("/") + "/messages"
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -69,7 +70,13 @@ def get_llm_fn():
         req = urllib.request.Request(
             url, data=json.dumps(payload).encode("utf-8"),
             headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=120) as r:
+        # per-call timeout wins; otherwise WEAVER_TIMEOUT (default 180s) — slow
+        # on-device models need more than 120s for long generations.
+        try:
+            _to = int(timeout or os.environ.get("WEAVER_TIMEOUT", "180") or 180)
+        except Exception:
+            _to = 180
+        with urllib.request.urlopen(req, timeout=_to) as r:
             data = json.loads(r.read().decode("utf-8"))
         if anthropic:
             return "".join(b.get("text", "") for b in data.get("content", [])

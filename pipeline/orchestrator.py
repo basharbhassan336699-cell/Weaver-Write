@@ -4665,6 +4665,7 @@ def classify_intent(request, llm_fn=None, system=None):
     if not llm_fn:
         return None
     try:
+        import os
         prompt = (
             "أنت مصنِّف نيّة دقيق. اقرأ طلب المستخدم وأعد JSON فقط (بلا أي نص "
             "آخر) يصف ما يريده، دون تنفيذ الطلب. الحقول:\n"
@@ -4691,7 +4692,19 @@ def classify_intent(request, llm_fn=None, system=None):
             "طلب المستخدم:\n" + req[:1500]
         )
         from core.llm import extract_json
-        raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+        # classification is a TINY reply; give it a SHORT own timeout and a small
+        # token cap so a slow on-device model fails fast to the keyword fallback
+        # instead of eating the task's time budget (which caused read timeouts).
+        try:
+            _to = int(os.environ.get("WEAVER_INTENT_TIMEOUT", "30") or 30)
+        except Exception:
+            _to = 30
+        try:
+            raw = llm_fn(prompt, system=system, temperature=0.0,
+                         max_tokens=400, timeout=_to) or ""
+        except TypeError:
+            # a custom llm_fn without the new kwargs
+            raw = llm_fn(prompt, system=system, temperature=0.0) or ""
         try:
             data = extract_json(raw)
         except Exception:
