@@ -3415,23 +3415,26 @@ class WeaverOrchestrator:
                     f"ثالثاً).\n")
             prompt = (
                 f"أنت باحث أكاديمي متمرّس. {ctx_line}"
-                f"صمّم هيكلاً بحثياً متكاملاً وعميقاً "
-                f"ومفصّلاً لموضوع: «{topic}».\n{count_line}"
-                "اجعل الهيكل يتضمّن:\n"
+                f"صمّم هيكلاً بحثياً عميقاً ومتكاملاً لموضوع: «{topic}».\n"
+                f"{count_line}"
+                "المطلوب هيكلٌ (رؤوس أقسام منظّمة) لا بحثٌ مكتوب، فاجعله يتضمّن:\n"
                 "- عنواناً مقترحاً دقيقاً للبحث.\n"
                 "- مقدمة مقسّمة إلى: تمهيد، إشكالية، أهداف، منهج.\n"
-                "- المباحث/المحاور، كلٌّ بعنوان دالٍّ وتحته مطالب، وكل مطلب تحته "
-                "نقاط فرعية مشروحة (سطر تعريفي واضح لكل نقطة، لا مجرّد عنوان).\n"
-                "- إذا كان الموضوع شرعياً/قرآنياً: اذكر الآيات ذات الصلة بنصّها "
-                "داخل النقاط، وبيّن وجه الدلالة. وإن كان علمياً: اذكر وجه التطابق "
-                "أو الحقيقة العلمية المقابِلة بإيجاز دقيق.\n"
+                "- المباحث، كلٌّ بعنوان دالٍّ وتحته مطالب، وكل مطلب تحته نقاط "
+                "فرعية.\n"
+                "- إذا كان الموضوع شرعياً/قرآنياً فأشِر إلى الآية بموضعها هكذا "
+                "[السورة: رقم] مع نصفِ سطرٍ لوجه الدلالة؛ وإن كان علمياً فاذكر وجه "
+                "التطابق في نصف سطر.\n"
                 "- خاتمة (خلاصة، نتائج، توصيات).\n"
-                "- قائمة مصادر ومراجع مقترحة بأسماء محدّدة (كتب/مؤلّفين/دراسات) لا "
-                "عبارات عامة.\n\n"
-                "أخرِج الهيكل مباشرةً بصيغة نصية منسّقة: عناوين واضحة كنصٍّ عادي "
-                "(مثل «المبحث الأول: ...» و«المطلب الأول: ...») ونقاط بادئة بـ«- »، "
-                "دون أي تمهيد كلامي منك ودون رموز «#». اجعله غنياً وعميقاً بقدر "
-                "ما يسمح الموضوع. اكتب بالعربية الفصحى.")
+                "- قائمة مصادر ومراجع بأسماء محدّدة (كتب/مؤلّفين/دراسات).\n\n"
+                "قواعد صارمة للإخراج:\n"
+                "• كل نقطة سطرٌ واحد موجزٌ ومركّز (لا فقرة، لا شرح مطوّل، لا نقل "
+                "الآية كاملةً) — فهذا هيكلٌ لا محتوى.\n"
+                "• أكمِل الهيكل كاملاً حتى قائمة المراجع؛ لا تتوقّف في المنتصف. "
+                "الإيجاز في كل نقطة هو ما يضمن اكتماله.\n"
+                "• عناوين واضحة كنصٍّ عادي («المبحث الأول: ...»، «المطلب الأول: "
+                "...») ونقاط بادئة بـ«- »، دون تمهيد كلامي منك ودون رموز «#». "
+                "اكتب بالعربية الفصحى.")
         else:
             ctx_line = ""
             if context:
@@ -3448,17 +3451,20 @@ class WeaverOrchestrator:
                     f"subsections, and numbered sub-points under each.\n")
             prompt = (
                 f"You are an experienced academic researcher. {ctx_line}"
-                f"Design a complete, "
-                f"detailed research outline for: \"{topic}\".\n{count_line}"
+                f"Design a deep, complete research OUTLINE (organized headings, "
+                f"not a written paper) for: \"{topic}\".\n{count_line}"
                 "Include: a proposed precise title; an introduction split into "
                 "background, problem statement, objectives, methodology; the main "
-                "sections, each with a meaningful title and annotated sub-points "
-                "(a brief defining line each); topic-relevant evidence hints where "
-                "fitting; a conclusion (summary, findings, recommendations); and a "
-                "suggested references list.\n\nReturn the outline directly as "
-                "formatted text: plain-text headings (e.g. \"Section 1: ...\") and "
-                "\"- \" bullet points, with no conversational preamble and no '#' "
-                "symbols.")
+                "sections, each with subsections and sub-points; topic-relevant "
+                "evidence hints where fitting (a half-line each); a conclusion; and "
+                "a references list with specific named sources.\n\n"
+                "Strict output rules:\n"
+                "- Each point is ONE short focused line (not a paragraph, no long "
+                "explanation) — this is an outline, not content.\n"
+                "- COMPLETE the whole outline through the references; never stop "
+                "midway. Being concise per point is what keeps it complete.\n"
+                "- Plain-text headings (\"Section 1: ...\") and \"- \" bullets, no "
+                "conversational preamble and no '#' symbols.")
         # a rich outline is a long generation; a slow on-device model needs more
         # than the default 180s or it times out and silently falls back to the
         # thin list. Give it a generous, configurable budget (WEAVER_RICH_TIMEOUT).
