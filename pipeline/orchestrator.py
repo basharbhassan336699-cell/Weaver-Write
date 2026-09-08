@@ -3594,6 +3594,67 @@ class WeaverOrchestrator:
         b = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', b)
         return b.strip()
 
+    def _model_structure(self, topic, request, card, lang="ar"):
+        """THE MODEL designs the document structure to FIT the request — instead
+        of forcing ONE academic template (intro/body/conclusion/references) onto
+        every task. A simple ask (a comparison/table, a definition, a short
+        piece) gets a small structure with no forced مقدمة/خاتمة/مراجع; a real
+        بحث/تقرير gets its proper academic structure; the model decides which.
+        Returns a sections plan [{"title","level"}] and records
+        card["needs_references"], or None on any miss (caller keeps the template
+        builder as fallback). Additive and fully guarded."""
+        if not self.llm_fn:
+            return None
+        try:
+            import os
+            from core.llm import extract_json
+            _ctx = self._conversation_context(request) or ""
+            prompt = (
+                "أنت مصمّم بنية مستندات خبير. صمّم البنية المناسبة تماماً لهذا "
+                "الطلب — دون فرض قالبٍ جاهز. أعِد JSON فقط:\n"
+                '{"sections":[{"title":"عنوان القسم الموضوعي","level":1أو2}],'
+                '"needs_references":true|false}\n'
+                "قواعد حاسمة:\n"
+                "- لاءم البنية مع الطلب فعلاً: طلبٌ بسيط (جدول مقارنة، تعريف، "
+                "شرح، فقرة، إجابة قصيرة) = بنية صغيرة (قسم أو أقسام قليلة قصيرة) "
+                "بلا مقدمة/خاتمة/توصيات/مراجع إن لم تلزم. بحث أو تقرير أكاديمي = "
+                "بنية كاملة مناسبة (مقدمة، مباحث بعناوين موضوعية محدّدة، خاتمة، "
+                "ومراجع فقط إن كان يستشهد بمصادر).\n"
+                "- العناوين موضوعية محدّدة تخصّ الموضوع، لا تسميات فارغة مثل "
+                "«المبحث 1» أو «العرض».\n"
+                "- needs_references=true فقط إذا كان العمل يستشهد فعلاً بمصادر "
+                "خارجية؛ خلا ذلك false.\n"
+                + (f"\nسياق المحادثة:\n{_ctx[:1500]}\n" if _ctx else "")
+                + f"\nالطلب:\n{(request or '')[:1200]}\nالموضوع: {topic}")
+            try:
+                _to = int(os.environ.get("WEAVER_STRUCT_TIMEOUT", "60") or 60)
+            except Exception:
+                _to = 60
+            raw = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.3, max_tokens=1200, timeout=_to) or ""
+            data = extract_json(raw)
+            secs = data.get("sections") if isinstance(data, dict) else None
+            if not isinstance(secs, list) or not secs:
+                return None
+            plan = []
+            for s in secs:
+                if not isinstance(s, dict):
+                    continue
+                t = str(s.get("title", "")).strip()
+                if not t:
+                    continue
+                try:
+                    lvl = int(s.get("level", 1))
+                except (TypeError, ValueError):
+                    lvl = 1
+                plan.append({"title": t[:200], "level": 1 if lvl < 2 else 2})
+            if not plan:
+                return None
+            card["needs_references"] = bool(data.get("needs_references"))
+            return plan
+        except Exception:
+            return None
+
     async def _layer_6(self, task: Task, mem: TaskMemory):
         """٦: الصياغة — بناء البنية ثم المنهجية ثم كتابة كل قسم.
         كل خطوة تستخدم مهارة/قالباً موجوداً؛ عند غياب النموذج تبقى مسودة فارغة."""
@@ -3778,8 +3839,24 @@ class WeaverOrchestrator:
         except Exception:
             pass
 
-        # 1) البنية — تخطّى إذا كانت المهمة تُحدّد بنيتها بنفسها (build_structure→None)
+        # 1) البنية — يقرّرها النموذج لتلائم الطلب (لا قالب مفروض على الكل). طلبٌ
+        #    بسيط (جدول/تعريف) يأخذ بنية صغيرة بلا مقدمة/خاتمة/مراجع؛ بحثٌ يأخذ
+        #    بنيته الأكاديمية. القالب الجاهز (build_structure) يبقى ارتداداً فقط
+        #    حين يتعذّر النموذج. الأقسام الصريحة (عدد مباحث/مطالب) تتجاوزه لاحقاً.
         sections_plan = card.get("sections")
+        if not sections_plan and scope not in ("outline", "references", "part") \
+                and not (scope == "plan" or "plan" in scopes):
+            try:
+                _ms = self._model_structure(
+                    card.get("topic", "") or task.description,
+                    self._current_request(task.description), card, lang)
+            except Exception:
+                _ms = None
+            if _ms:
+                sections_plan = _ms
+                card["sections"] = sections_plan
+                card["structure_source"] = "model"
+                mem.set_status(6, f"بنية يقرّرها النموذج ({len(_ms)} قسماً)")
         if not sections_plan:
             try:
                 plan = self._skill_call("research_structure", "structures",
@@ -3818,8 +3895,10 @@ class WeaverOrchestrator:
         # and guarded: on any miss the original structural labels are kept.
         try:
             # outline builds its own rich structure below (skip slot-naming here
-            # so it stays a single model call in the common case).
-            if scope != "outline":
+            # so it stays a single model call in the common case). Also skip when
+            # the MODEL designed the structure — its titles are already
+            # topic-specific, so re-naming would waste a call and could dilute them.
+            if scope != "outline" and card.get("structure_source") != "model":
                 sections_plan = self._descriptive_titles(
                     card.get("topic", "") or task.description, sections_plan, lang)
                 card["sections"] = sections_plan
