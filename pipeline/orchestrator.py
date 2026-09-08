@@ -545,6 +545,18 @@ class WeaverOrchestrator:
         out["wants_table"] = bool(d.get("wants_table"))
         out["wants_chart"] = bool(d.get("wants_chart"))
         out["wants_data"] = bool(d.get("wants_data"))
+        # TRI-STATE (True / False / None): does the answer genuinely need EXTERNAL
+        # sources (web/academic search)? None = the model didn't say, so behaviour
+        # is unchanged (never coerce a missing key to False — that would strip
+        # search from real research). Only an EXPLICIT boolean is honoured.
+        _ns = d.get("needs_sources", None)
+        if isinstance(_ns, bool):
+            out["needs_sources"] = _ns
+        elif isinstance(_ns, str) and _ns.strip().lower() in (
+                "true", "false", "yes", "no", "1", "0"):
+            out["needs_sources"] = _ns.strip().lower() in ("true", "yes", "1")
+        else:
+            out["needs_sources"] = None
         return out
 
     @staticmethod
@@ -1910,6 +1922,8 @@ class WeaverOrchestrator:
                     c["want_chart"] = True
                 if _iv.get("wants_data"):
                     c["want_data"] = True
+                if _iv.get("needs_sources") is not None:
+                    c["needs_sources"] = _iv["needs_sources"]
                 c["intent_source"] = "model"
                 mem.set_status(3, "فهم النية (نموذج): "
                                + (c.get("scope") or c.get("action") or "بحث"))
@@ -1944,6 +1958,40 @@ class WeaverOrchestrator:
                           if t not in ("web_search", "academic_search",
                                        "web_extract", "web_document")]
             task.task_card.pop("needs_academic_search", None)
+
+        # GENERAL-KNOWLEDGE gate: when the model judged the task needs NO external
+        # sources (timeless knowledge — a definition/comparison, a table of known
+        # facts, creative writing, or operating on a provided text) AND the user
+        # did not explicitly ask for sourcing, DON'T run academic/web search —
+        # answer directly (fast). This is the general fix for a simple ask (e.g.
+        # «جدول مقارنة بين الخلية الحيوانية والنباتية») being pushed through the
+        # whole research pipeline. Any explicit source signal keeps search ON, so
+        # genuine research is never weakened. Only an EXPLICIT needs_sources==False
+        # triggers this — a missing/None judgment leaves behaviour unchanged.
+        if task.task_card.get("needs_sources") is False:
+            _c = task.task_card
+            _td = f"{_c.get('topic','')} " \
+                  f"{self._strip_injected_memory(task.description)}"
+            _txt = " " + (task.description or "").lower() + " "
+            _src_words = ("مراجع", "مصادر", "استشهد", "توثيق", "دراسات",
+                          "references", "citation", "peer-reviewed", "sources")
+            _explicit = (
+                _c.get("reference_count")
+                or str(_c.get("citation_style", "")).upper()
+                not in ("", "UNSPECIFIED")
+                or _scope in ("references", "plan")
+                or ({"references", "plan"} & _scs)
+                or _c.get("want_data")
+                or self._is_recency_query(_td)
+                or any(w in _txt for w in _src_words))
+            if not _explicit:
+                task.tools = [t for t in task.tools
+                              if t not in ("web_search", "academic_search")]
+                _c.pop("needs_academic_search", None)
+                try:
+                    mem.set_status(3, "إجابة مباشرة (معرفة عامة، بلا بحث)")
+                except Exception:
+                    pass
 
     async def _layer_4(self, task: Task, mem: TaskMemory):
         """٤: البحث — أكاديمي (PaperQA) + بحث ويب حي (SearXNG). يُشغَّل ما وُجّهت
@@ -5302,13 +5350,20 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
             '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
             '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
             '"wants_table":true|false,"wants_chart":true|false,'
-            '"wants_data":true|false}]}\n\n'
+            '"wants_data":true|false,"needs_sources":true|false}]}\n\n'
             "قواعد مهمة:\n"
             "- استعمل المحادثة كاملةً لتحديد الموضوع: إن كان الطلب الحالي تعليمةَ "
             "تنسيق (مثل «اجعلها 3 مباحث») دون ذكر الموضوع، فخذ الموضوع من الرسائل "
             "السابقة ولا تسأل عنه.\n"
             "- إن طلب المستخدم أكثر من شيء، اجعل tasks متعدّدة بالترتيب.\n"
-            "- بحث كامل عادي: action=research وscopes=[].\n\n"
+            "- بحث كامل عادي: action=research وscopes=[].\n"
+            "- needs_sources: اجعلها true فقط إذا كانت الإجابة تحتاج فعلاً مصادر "
+            "خارجية أو بحثاً حياً — أي: أحداث/إحصاءات/أسعار حديثة، أو أرقام واقعية "
+            "محدّدة، أو مراجع/دراسات مطلوبة، أو معلومة متغيّرة بمرور الوقت. واجعلها "
+            "false إذا كان الطلب معرفةً عامّة ثابتة يعرفها النموذج (شرح، تعريف، "
+            "مقارنة بين مفهومين معروفين، جدول من معلومات معروفة)، أو كتابةً "
+            "إبداعية، أو تعاملاً مع نصّ/ملف مُعطى (تلخيص/ترجمة/إعادة صياغة). عند "
+            "الشكّ اجعلها true.\n\n"
             + att + "المحادثة (الأقدم فالأحدث):\n" + convo[:4000] + "\n\n"
             "الطلب الحالي:\n" + req[:1500])
         from core.llm import extract_json
