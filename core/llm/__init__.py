@@ -68,6 +68,22 @@ def get_llm_fn():
                    [{"role": "user", "content": prompt}]
             payload = {"model": model, "temperature": temperature,
                        "max_tokens": max_tokens or 4096, "messages": msgs}
+            # DeepSeek "reasoning" models (deepseek-v4-flash/pro, deepseek-reasoner)
+            # spend the ENTIRE token budget on hidden reasoning and return an EMPTY
+            # `content` (finish_reason=length, reasoning_tokens=all) unless thinking
+            # is turned OFF. That is exactly what OpenClaw does by default:
+            #   params.thinking = { type: reasoningEffort ? "enabled" : "disabled" }
+            # so the model answers directly — fast, and `content` is actually
+            # filled. We mirror it here (DeepSeek only, so other providers are
+            # untouched). Configurable via WEAVER_THINKING (disabled|enabled).
+            _dsk = ("deepseek" in provider.lower()) or (
+                "deepseek.com" in base.lower())
+            if _dsk:
+                _think = os.environ.get(
+                    "WEAVER_THINKING", "disabled").strip().lower()
+                payload["thinking"] = {
+                    "type": "enabled"
+                    if _think in ("enabled", "on", "1", "true") else "disabled"}
         body = json.dumps(payload).encode("utf-8")
         # per-call timeout wins; otherwise WEAVER_TIMEOUT (default 180s) — slow
         # on-device models need more than 120s for long generations.
@@ -81,9 +97,19 @@ def get_llm_fn():
                 return "".join(b.get("text", "") for b in data.get("content", [])
                                if isinstance(b, dict))
             try:
-                return data["choices"][0]["message"]["content"]
+                msg = data["choices"][0]["message"]
             except (KeyError, IndexError, TypeError):
                 return ""
+            if not isinstance(msg, dict):
+                return ""
+            content = msg.get("content") or ""
+            if content and content.strip():
+                return content
+            # SAFETY NET: a reasoning model that emitted only hidden reasoning and
+            # no final text (content empty). Fall back to the reasoning field so we
+            # never return nothing — mirrors OpenClaw promoting thinking→text.
+            return (msg.get("reasoning_content") or msg.get("reasoning")
+                    or msg.get("reasoning_text") or "")
 
         # ROBUSTNESS: on-device servers intermittently return an EMPTY completion
         # (load/overflow), which otherwise surfaces as "(رد فارغ من المزوّد)" and
