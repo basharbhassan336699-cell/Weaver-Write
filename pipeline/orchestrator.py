@@ -3949,6 +3949,24 @@ class WeaverOrchestrator:
             sections_plan = [{"title": self._current_request(task.description),
                               "level": 1}]
 
+        # INTEGRITY — لا مراجع مُختلقة: قسم المراجع يُكتب فقط إذا وُجدت مصادر
+        # حقيقية مُجمَّعة. بلا مصادر → نحذف أي قسم مراجع من الخطة كي لا يخترع
+        # الكاتب قائمة مراجع (والملاحظة الصادقة «تعذّر الوصول إلى مصادر» تغطّي
+        # ذلك). مهام «المراجع فقط» تُعالَج في مسارها أعلاه فلا تُمسّ هنا.
+        try:
+            _real_refs = bool(
+                card.get("sources")
+                or (card.get("paperqa_result") or {}).get("references"))
+            if (not _real_refs and scope != "references"
+                    and "references" not in scopes):
+                sections_plan = [
+                    s for s in sections_plan
+                    if not self._is_ref_heading(
+                        s.get("title") or s.get("heading") or "")]
+                card["sections"] = sections_plan
+        except Exception:
+            pass
+
         # 2) المنهجية — إن لزمت وغابت
         try:
             has_m = self._skill_call("research_methodology", "methodology",
@@ -4811,12 +4829,21 @@ class WeaverOrchestrator:
         LAST section of the report, replacing any placeholder references
         heading. No sources → nothing added."""
         card = task.task_card
+
+        def _strip_fabricated_refs():
+            # remove any references section the writer may have produced when we
+            # have NO real sources — never leave an invented reference list.
+            task.sections = [s for s in (task.sections or [])
+                             if not self._is_ref_heading(s.get("heading", ""))]
+
         # no-citation modes never get a references list
         if card.get("sourcing_mode") in ("none", "uncited"):
+            _strip_fabricated_refs()
             return
         sources = card.get("sources") or []
         pq_refs = (card.get("paperqa_result") or {}).get("references")
         if not sources and not pq_refs:
+            _strip_fabricated_refs()
             return
         lang = card.get("language", "ar")
         style = str(card.get("citation_style", "APA")).upper()
