@@ -3379,11 +3379,13 @@ class WeaverOrchestrator:
             self._rich_reason = "لا موضوع"
             return None
         import os, re
-        # PREFER small per-section calls: reliable and fast on a weak model that
-        # returns empty on one huge generation. Falls through to the single big
-        # call below when chunked is unusable (or for non-Arabic).
-        if os.environ.get("WEAVER_OUTLINE_CHUNKED", "1").lower() not in (
-                "0", "false", "no"):
+        # ONE call by default (like OpenClaw): with DeepSeek thinking disabled the
+        # model returns the full outline in a single call fast (~40s), so the
+        # multi-call chunked path (5 calls) is now only an opt-in fallback for
+        # servers that still choke on one big generation. Enable with
+        # WEAVER_OUTLINE_CHUNKED=1.
+        if os.environ.get("WEAVER_OUTLINE_CHUNKED", "0").lower() in (
+                "1", "true", "yes", "on"):
             try:
                 _ch = self._rich_outline_chunked(topic, card, lang, context)
             except Exception:
@@ -3464,9 +3466,16 @@ class WeaverOrchestrator:
             _rto = int(os.environ.get("WEAVER_RICH_TIMEOUT", "420") or 420)
         except Exception:
             _rto = 420
+        # with thinking disabled the whole budget goes to the answer, so give it
+        # room for a COMPLETE deep outline (references included) instead of being
+        # cut off at finish_reason=length. Configurable via WEAVER_RICH_MAXTOK.
+        try:
+            _rmax = int(os.environ.get("WEAVER_RICH_MAXTOK", "8000") or 8000)
+        except Exception:
+            _rmax = 8000
         try:
             raw = self.llm_fn(prompt, system=self.system_main,
-                              temperature=0.4, max_tokens=3200,
+                              temperature=0.4, max_tokens=_rmax,
                               timeout=_rto) or ""
         except TypeError:
             # older llm_fn without a timeout kwarg
