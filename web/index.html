@@ -3280,8 +3280,39 @@
   function mdIsTableSep(line){
     return /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/.test(line) && line.indexOf('-')>=0;
   }
+  // A Markdown table can arrive GLUED onto one line — rows joined by '||'
+  // (e.g. "| h1 | h2 || --- | --- || a | b |") when newlines were lost upstream.
+  // The run of separator cells gives the exact column count, so we chunk the
+  // remaining cells into rows deterministically and rebuild proper GFM lines.
+  // Returns the expanded multi-line table, or null when the line isn't one.
+  function mdUnglueTable(line){
+    if((line.match(/\|/g)||[]).length < 4) return null;
+    if(!/\|\s*:?-{2,}:?\s*\|/.test(line)) return null;
+    const toks=line.split('|').map(c=>c.trim()).filter(t=>t!=='');
+    const isSep=toks.map(t=>/^:?-{1,}:?$/.test(t));
+    const first=isSep.indexOf(true);
+    if(first<=0) return null;
+    let ncol=0,j=first;
+    while(j<toks.length && isSep[j]){ncol++;j++;}
+    if(ncol===0) return null;
+    let headers=toks.slice(0,first);
+    while(headers.length<ncol) headers.push('');
+    headers=headers.slice(0,ncol);
+    const data=toks.slice(j), rows=[];
+    for(let k=0;k<data.length;k+=ncol){
+      const r=data.slice(k,k+ncol);
+      while(r.length<ncol) r.push('');
+      if(r.some(x=>x)) rows.push(r);
+    }
+    const outl=['| '+headers.join(' | ')+' |',
+                '| '+headers.map(()=> '---').join(' | ')+' |'];
+    rows.forEach(r=>outl.push('| '+r.join(' | ')+' |'));
+    return outl.join('\n');
+  }
   function renderMarkdown(src){
     if(src==null) return '';
+    // un-glue any single-line tables FIRST, so the row detector below sees them
+    src=String(src).split('\n').map(l=>{const u=mdUnglueTable(l); return u!==null?u:l;}).join('\n');
     const lines=mdEscapeHtml(String(src)).split('\n');
     const out=[]; let para=[], listTag=null;
     // Join wrapped lines of one paragraph with <br> (GFM breaks:true), so a

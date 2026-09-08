@@ -274,6 +274,153 @@ if __name__ == "__main__":
     print("saved /tmp/advanced_test.docx")
 
 
+def _md_table_sep(line):
+    """True if `line` is a GFM table separator row (| --- | :--- | ...)."""
+    import re
+    return bool(re.match(
+        r"^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$", line)) \
+        and "-" in line
+
+
+def _md_cells(line):
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _parse_glued_table(line):
+    """A Markdown table can arrive glued onto ONE line — rows joined by '||'
+    (e.g. '| h1 | h2 || --- | --- || a | b |') when newlines were lost upstream.
+    Reconstruct it: the run of separator cells ('---'/':--:') gives the exact
+    column count, so we chunk the remaining cells into rows deterministically.
+    Returns (headers, rows) or None when the line isn't a glued table."""
+    import re
+    if line.count("|") < 4 or not re.search(r"\|\s*:?-{2,}:?\s*\|", line):
+        return None
+    toks = [c.strip() for c in line.split("|")]
+    toks = [t for t in toks if t != ""]
+    is_sep = [bool(re.match(r"^:?-{1,}:?$", t)) for t in toks]
+    if True not in is_sep:
+        return None
+    first = is_sep.index(True)
+    ncol = 0
+    j = first
+    while j < len(toks) and is_sep[j]:
+        ncol += 1
+        j += 1
+    if ncol == 0 or first == 0:
+        return None
+    headers = (toks[:first] + [""] * ncol)[:ncol]
+    data = toks[j:]
+    rows = [data[k:k + ncol] for k in range(0, len(data), ncol)]
+    rows = [(r + [""] * ncol)[:ncol] for r in rows if any(x for x in r)]
+    return headers, rows
+
+
+def _strip_inline_md(text):
+    """Drop simple inline Markdown markers so Word shows clean text, not '**'."""
+    import re
+    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+    text = re.sub(r"__([^_]+)__", r"\1", text)
+    text = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    return text
+
+
+def _add_body_markdown(doc, body, lang, theme_id, font):
+    """Render a section body as REAL Word content instead of dumping it as one
+    run. The old builder put the whole body (newlines included) into a single
+    paragraph/run; Word ignores '\\n' inside a run, so every paragraph glued
+    together AND a Markdown table collapsed to raw '| a | b || c | d |' pipes.
+    Here we split the body: blank line → new paragraph, a GFM table (header +
+    separator + rows) → a native Word table via add_table, '#' heading → a bold
+    line, '-/*' bullet → a list item. Wrapped lines of one paragraph are joined
+    with a space (Markdown soft-wrap). Safe: plain prose → same paragraphs."""
+    import re
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    rtl = (lang == "ar")
+    pal = load_palette(theme_id)
+    lines = (body or "").split("\n")
+    n = len(lines)
+    buf = []
+
+    def _para(text, size=14, color=None, bold=False, style=None):
+        text = _strip_inline_md(text).strip()
+        if not text:
+            return
+        p = doc.add_paragraph(style=style) if style else doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
+        run = p.add_run(text)
+        _set_run_font(run, font, size, color or pal["text"], bold=bold)
+        if rtl:
+            set_paragraph_rtl(p)
+
+    def _flush():
+        if buf:
+            _para(" ".join(x.strip() for x in buf))
+            buf.clear()
+
+    i = 0
+    while i < n:
+        line = lines[i]
+        # GFM table: a pipe line whose NEXT line is a separator row
+        if "|" in line and i + 1 < n and _md_table_sep(lines[i + 1]):
+            _flush()
+            headers = _md_cells(line)
+            ncol = len(headers)
+            i += 2
+            rows = []
+            while i < n and "|" in lines[i] and lines[i].strip() != "":
+                c = _md_cells(lines[i])
+                rows.append([(c[j] if j < len(c) else "") for j in range(ncol)])
+                i += 1
+            headers = [_strip_inline_md(h) for h in headers]
+            rows = [[_strip_inline_md(v) for v in r] for r in rows]
+            try:
+                add_table(doc, headers, rows, lang, theme_id, font)
+            except Exception:
+                _para(" | ".join(headers))
+                for r in rows:
+                    _para(" | ".join(r))
+            continue
+        if line.strip() == "":
+            _flush()
+            i += 1
+            continue
+        m = re.match(r"^\s*(#{1,6})\s+(.*)$", line)
+        if m:
+            _flush()
+            _para(m.group(2), size=15, color=pal["primary"], bold=True)
+            i += 1
+            continue
+        mb = re.match(r"^\s*[-*+]\s+(.*)$", line)
+        if mb:
+            _flush()
+            _para(mb.group(1), style="List Bullet")
+            i += 1
+            continue
+        # a whole table glued onto ONE line (rows joined by '||') → un-glue it
+        _gt = _parse_glued_table(line)
+        if _gt:
+            _flush()
+            _h = [_strip_inline_md(x) for x in _gt[0]]
+            _r = [[_strip_inline_md(v) for v in row] for row in _gt[1]]
+            try:
+                add_table(doc, _h, _r, lang, theme_id, font)
+            except Exception:
+                _para(" | ".join(_h))
+                for row in _r:
+                    _para(" | ".join(row))
+            i += 1
+            continue
+        buf.append(line)
+        i += 1
+    _flush()
+
+
 def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                     theme_id="academic_navy", font=None, subtitle="",
                     references=None, header_text=None, page_numbers=True,
@@ -356,12 +503,10 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         if s.get("heading"):
             add_colored_heading(doc, s["heading"], 1, lang, theme_id, font)
         if s.get("body"):
-            bp = doc.add_paragraph()
-            bp.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
-            brun = bp.add_run(s["body"])
-            _set_run_font(brun, font, 14, load_palette(theme_id)["text"])
-            if rtl:
-                set_paragraph_rtl(bp)
+            # Render the body as real paragraphs + native tables (not one glued
+            # run). This is what makes a Markdown table in the body show as a
+            # Word table instead of raw "| a | b || c | d |" pipes on one line.
+            _add_body_markdown(doc, s["body"], lang, theme_id, font)
         if s.get("table"):
             t = s["table"]
             add_table(doc, t.get("headers", []), t.get("rows", []),
