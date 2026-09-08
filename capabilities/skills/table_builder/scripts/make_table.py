@@ -14,14 +14,24 @@ import argparse
 import json
 
 
+def _cell(v):
+    """One clean single-line Markdown table cell. A cell value may arrive with a
+    newline (a multi-line "detail") or a literal '|' — either one BREAKS a GFM
+    table: the pipe row must be a single line, and an inner '|' would split into
+    a bogus extra column. Collapse ALL whitespace (incl. newlines/tabs) to single
+    spaces, and replace any inner '|' with '/', so the row stays exactly one line
+    with the intended column count. Text meaning is preserved."""
+    return " ".join(str(v).split()).replace("|", "/")
+
+
 def make_table(headers, rows, with_totals=False, lang="ar"):
     """Return a markdown table string. RTL handled by the renderer, not here."""
     rtl = (lang == "ar")
     lines = []
-    lines.append("| " + " | ".join(str(h) for h in headers) + " |")
+    lines.append("| " + " | ".join(_cell(h) for h in headers) + " |")
     lines.append("| " + " | ".join("---" for _ in headers) + " |")
     for row in rows:
-        lines.append("| " + " | ".join(str(c) for c in row) + " |")
+        lines.append("| " + " | ".join(_cell(c) for c in row) + " |")
 
     if with_totals and rows:
         totals = []
@@ -33,7 +43,7 @@ def make_table(headers, rows, with_totals=False, lang="ar"):
                 totals.append("الإجمالي" if rtl else "Total")
             else:
                 totals.append("")
-        lines.append("| " + " | ".join(str(t) for t in totals) + " |")
+        lines.append("| " + " | ".join(_cell(t) for t in totals) + " |")
 
     return "\n".join(lines)
 
