@@ -107,12 +107,26 @@ class YouTubeTool(BaseTool):
         prefer_original = bool((inputs or {}).get("prefer_original", False))
 
         # ---- fetch captions (lazy import; degrades to ok=False) ----
-        snippets = self._fetch_snippets(vid, prefs, prefer_original=prefer_original)
+        snippets, reason = self._fetch_snippets(
+            vid, prefs, prefer_original=prefer_original)
         if not snippets:
+            # HONEST, distinct reasons — a throttle (retryable) must NOT read as
+            # "no captions" (permanent). The orchestrator shows these to the user.
+            _msgs = {
+                "library_missing":
+                    "مكتبة youtube-transcript-api غير مثبّتة على الجهاز "
+                    "(ثبّتها: pip install youtube-transcript-api)",
+                "throttled":
+                    "حجب يوتيوب الطلب مؤقتاً بسبب كثرة الطلبات المتتالية — "
+                    "انتظر قليلاً ثم أعد المحاولة، ويُفضّل عدم فتح عدة محادثات "
+                    "في آنٍ واحد",
+                "no_captions":
+                    "لا يتوفّر نصّ/ترجمة تلقائية لهذا الفيديو "
+                    "(captions مُعطّلة على الفيديو نفسه)",
+            }
             return ToolResult(
                 ok=False,
-                error="no transcript available for this video "
-                      "(captions may be disabled)",
+                error=_msgs.get(reason, _msgs["no_captions"]),
             )
 
         # plain text (no timestamps) — always produced, so a caller can build a
@@ -143,19 +157,24 @@ class YouTubeTool(BaseTool):
 
     @staticmethod
     def _fetch_snippets(vid: str, prefs, prefer_original: bool = False):
-        """Return [{text,start,duration}] using youtube-transcript-api.
+        """Return (snippets, reason). snippets=[{text,start,duration}] via
+        youtube-transcript-api (modern instance API or legacy classmethod).
 
-        Supports both the modern instance API (fetch/list) and the older
-        classmethod API (get_transcript). Lazy import; any failure -> [].
-        When `prefer_original` is set, the video's OWN captions are returned
-        (never an auto-translated track), so a verbatim transcript stays in the
-        video's original language."""
+        `reason` says WHY an empty result happened so the caller can be HONEST
+        instead of always blaming "no captions":
+          ""               -> success
+          "library_missing"-> the package isn't installed
+          "throttled"      -> a transient 429/rate-limit/network error (RETRY!)
+          "no_captions"    -> the video genuinely has no captions
+        Lazy import; never raises. When `prefer_original` is set the video's OWN
+        captions are returned (never an auto-translated track)."""
         try:
             from youtube_transcript_api import YouTubeTranscriptApi
         except Exception:
-            return []
+            return [], "library_missing"
 
         import time as _time
+        _state = {"transient": False, "err": False}
 
         def _out_of(fetched):
             out = []
@@ -171,6 +190,21 @@ class YouTubeTool(BaseTool):
                         "start": float(getattr(sn, "start", 0.0) or 0.0),
                         "duration": float(getattr(sn, "duration", 0.0) or 0.0)})
             return out
+
+        def _transient(exc) -> bool:
+            """True only for a temporary throttle/network error worth a retry —
+            NOT for a video that simply has no captions (permanent)."""
+            name = type(exc).__name__.lower()
+            return ("toomanyrequests" in name or "ratelimit" in name
+                    or "timeout" in name or "connection" in name
+                    or "temporarily" in name)
+
+        def _note(exc):
+            """Remember that an error happened, and whether it was transient, so
+            an empty result can be reported HONESTLY (throttle vs no captions)."""
+            _state["err"] = True
+            if _transient(exc):
+                _state["transient"] = True
 
         # prefer the ORIGINAL (non-translated) transcript when asked
         if prefer_original:
@@ -192,17 +226,9 @@ class YouTubeTool(BaseTool):
                     if chosen is not None:
                         out = _out_of(chosen.fetch())
                         if out:
-                            return out
-            except Exception:
-                pass
-
-        def _transient(exc) -> bool:
-            """True only for a temporary throttle/network error worth a retry —
-            NOT for a video that simply has no captions (permanent)."""
-            name = type(exc).__name__.lower()
-            return ("toomanyrequests" in name or "ratelimit" in name
-                    or "timeout" in name or "connection" in name
-                    or "temporarily" in name)
+                            return out, ""
+            except Exception as e:
+                _note(e)
 
         # modern API: YouTubeTranscriptApi().fetch(id, languages=[...])
         try:
@@ -218,6 +244,7 @@ class YouTubeTool(BaseTool):
                             fetched = api.fetch(vid)  # any available language
                             break
                         except Exception as e2:
+                            _note(e2)
                             # retry ONLY a transient throttle (concurrent chats
                             # hitting YouTube); a no-captions error breaks now.
                             if _transient(e2) and attempt < 2:
@@ -232,26 +259,31 @@ class YouTubeTool(BaseTool):
                         "start": float(getattr(sn, "start", 0.0) or 0.0),
                         "duration": float(getattr(sn, "duration", 0.0) or 0.0),
                     })
-                return out
-        except Exception:
-            pass
+                if out:
+                    return out, ""
+        except Exception as e:
+            _note(e)
 
         # legacy API: YouTubeTranscriptApi.get_transcript(id, languages=[...])
         try:
             if hasattr(YouTubeTranscriptApi, "get_transcript"):
                 try:
                     raw = YouTubeTranscriptApi.get_transcript(vid, languages=prefs)
-                except Exception:
+                except Exception as e:
+                    _note(e)
                     raw = YouTubeTranscriptApi.get_transcript(vid)
-                return [{
+                out = [{
                     "text": d.get("text", "") or "",
                     "start": float(d.get("start", 0.0) or 0.0),
                     "duration": float(d.get("duration", 0.0) or 0.0),
                 } for d in (raw or [])]
-        except Exception:
-            pass
+                if out:
+                    return out, ""
+        except Exception as e:
+            _note(e)
 
-        return []
+        # empty: say WHY as precisely as we can
+        return [], ("throttled" if _state["transient"] else "no_captions")
 
 
 async def run(inputs: dict) -> ToolResult:
