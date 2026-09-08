@@ -879,6 +879,26 @@ def _wants_recall(query):
     return any(c in t for c in _RECALL_CUES)
 
 
+def _dsk_thinking(base, provider):
+    """For DeepSeek reasoning models (deepseek-v4-flash/pro/reasoner) return the
+    {"thinking": {...}} payload fragment that turns hidden reasoning OFF, so the
+    model fills `content` directly (fast) instead of spending the whole token
+    budget on reasoning_content and returning empty. This mirrors EXACTLY what
+    core/llm already does for the pipeline; here it patches the two direct
+    /chat/completions calls in this module (chat + keyword expansion) that don't
+    route through core/llm. Returns {} for any non-DeepSeek provider, so every
+    other provider's payload is byte-for-byte unchanged. Controlled by the same
+    WEAVER_THINKING env var (disabled by default)."""
+    _dsk = ("deepseek" in (provider or "").lower()) or (
+        "deepseek.com" in (base or "").lower())
+    if not _dsk:
+        return {}
+    _think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
+    return {"thinking": {"type": "enabled"
+                         if _think in ("enabled", "on", "1", "true")
+                         else "disabled"}}
+
+
 def _semantic_expand(query, timeout=20):
     """Ask the configured model for related keywords / synonyms / concepts in BOTH
     Arabic and English, so recall can match by MEANING even when the wording is
@@ -903,9 +923,11 @@ def _semantic_expand(query, timeout=20):
             "استخرج كلمات مفتاحية ومرادفات ومفاهيم قريبة من هذا الطلب لأغراض "
             "البحث الدلالي، بالعربية والإنجليزية معاً. أعِد كلمات مفصولة بفواصل "
             "فقط (5 إلى 14 كلمة)، دون أي شرح:\n\n" + (query or "")[:500])
-        payload = json.dumps({"model": model, "messages": [
+        _pl = {"model": model, "messages": [
             {"role": "user", "content": prompt}], "max_tokens": 120,
-            "temperature": 0.3}).encode("utf-8")
+            "temperature": 0.3}
+        _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", "")))
+        payload = json.dumps(_pl).encode("utf-8")
         req = urllib.request.Request(
             base + "/chat/completions", data=payload, method="POST",
             headers={"Content-Type": "application/json",
@@ -1482,9 +1504,10 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
             "any \"OCR\" block as text read from an image (you cannot see the "
             "image itself):\n\n" + attachments)})
     msgs.append({"role": "user", "content": message})
-    payload = json.dumps({"model": model, "messages": msgs,
-                          "max_tokens": max_tokens,
-                          "temperature": temperature}).encode("utf-8")
+    _pl = {"model": model, "messages": msgs,
+           "max_tokens": max_tokens, "temperature": temperature}
+    _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", "")))
+    payload = json.dumps(_pl).encode("utf-8")
     headers = {"Content-Type": "application/json",
                "Authorization": f"Bearer {key}",
                "x-api-key": key, "anthropic-version": "2023-06-01"}
@@ -1493,7 +1516,16 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
 
     def _extract_reply(data):
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            msg = data["choices"][0]["message"]
+            txt = msg.get("content") or ""
+            if txt and txt.strip():
+                return txt
+            # SAFETY NET: a reasoning model that emitted only hidden reasoning
+            # and left `content` empty — fall back to the reasoning field so we
+            # never return nothing (mirrors core/llm). Non-DeepSeek providers
+            # don't set these fields, so this is a no-op for them.
+            return (msg.get("reasoning_content") or msg.get("reasoning")
+                    or msg.get("reasoning_text") or "")
         except Exception:
             c = data.get("content")
             if isinstance(c, list):  # native Anthropic shape, just in case
