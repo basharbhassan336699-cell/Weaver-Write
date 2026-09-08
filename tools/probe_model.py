@@ -158,11 +158,11 @@ def main():
     if not KEY:
         print("لا يوجد WEAVER_API_KEY في config/.env — لا يمكن الفحص.")
         return
-    # علاجان مرشّحان:
-    # (ج) ميزانية توكن كبيرة → هل يُنهي التفكير ويكتب content؟
-    _report("ج — سقف كبير", 16000)
-    # (د) تقليل التفكير عبر reasoning_effort=low (إن دعمه المزوّد) → سرعة + content
-    _report("د — تقليل التفكير", 6000, extra={"reasoning_effort": "low"})
+    # اختبار العلاجين عند ميزانية النظام الحقيقية (4096) لحسم الأنسب:
+    # (ج) إصلاحي الحالي: thinking:{type:"disabled"} → هل يُطفئ التفكير ويملأ content؟
+    _report("ج — thinking=disabled", 4096, extra={"thinking": {"type": "disabled"}})
+    # (د) البديل المُثبَت: reasoning_effort=low
+    _report("د — reasoning_effort=low", 4096, extra={"reasoning_effort": "low"})
     print("\n" + "=" * 60)
     print("خلاصة العلاج (سأطبّقه في عميل النموذج core/llm — مكان واحد يصلح الكل):")
     print("• إن امتلأ content في [ج] → نرفع سقف التوكن للنماذج المفكِّرة.")
