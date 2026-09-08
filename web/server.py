@@ -879,24 +879,32 @@ def _wants_recall(query):
     return any(c in t for c in _RECALL_CUES)
 
 
-def _dsk_thinking(base, provider):
-    """For DeepSeek reasoning models (deepseek-v4-flash/pro/reasoner) return the
-    {"thinking": {...}} payload fragment that turns hidden reasoning OFF, so the
-    model fills `content` directly (fast) instead of spending the whole token
-    budget on reasoning_content and returning empty. This mirrors EXACTLY what
-    core/llm already does for the pipeline; here it patches the two direct
-    /chat/completions calls in this module (chat + keyword expansion) that don't
-    route through core/llm. Returns {} for any non-DeepSeek provider, so every
-    other provider's payload is byte-for-byte unchanged. Controlled by the same
-    WEAVER_THINKING env var (disabled by default)."""
-    _dsk = ("deepseek" in (provider or "").lower()) or (
-        "deepseek.com" in (base or "").lower())
-    if not _dsk:
-        return {}
-    _think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
-    return {"thinking": {"type": "enabled"
-                         if _think in ("enabled", "on", "1", "true")
-                         else "disabled"}}
+def _dsk_thinking(base, provider, model=""):
+    """Return the {"thinking": {...}} (or family-equivalent) payload fragment that
+    turns a reasoning model's hidden thinking OFF, so it fills `content` directly
+    (fast) instead of spending the whole budget on reasoning and returning empty.
+    Returns {} for any non-reasoning / unlisted model, so those payloads are
+    byte-for-byte unchanged.
+
+    SINGLE SOURCE OF TRUTH: delegates to core/llm's REASONING_FAMILIES registry,
+    so the two direct /chat/completions calls in this module (chat + keyword
+    expansion) that don't route through core/llm still use the same detection —
+    add a new family once there and it applies here too. If core/llm can't be
+    imported for any reason, fall back to inline DeepSeek detection so this
+    module never breaks. Controlled by WEAVER_THINKING (disabled by default)."""
+    try:
+        from core.llm import reasoning_payload
+        return reasoning_payload(provider, base, model)
+    except Exception:
+        _dsk = ("deepseek" in (provider or "").lower()) or (
+            "deepseek.com" in (base or "").lower()) or (
+            "deepseek" in (model or "").lower())
+        if not _dsk:
+            return {}
+        _think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
+        return {"thinking": {"type": "enabled"
+                             if _think in ("enabled", "on", "1", "true")
+                             else "disabled"}}
 
 
 def _semantic_expand(query, timeout=20):
@@ -926,7 +934,7 @@ def _semantic_expand(query, timeout=20):
         _pl = {"model": model, "messages": [
             {"role": "user", "content": prompt}], "max_tokens": 120,
             "temperature": 0.3}
-        _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", "")))
+        _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", ""), model))
         payload = json.dumps(_pl).encode("utf-8")
         req = urllib.request.Request(
             base + "/chat/completions", data=payload, method="POST",
@@ -1506,7 +1514,7 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     msgs.append({"role": "user", "content": message})
     _pl = {"model": model, "messages": msgs,
            "max_tokens": max_tokens, "temperature": temperature}
-    _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", "")))
+    _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", ""), model))
     payload = json.dumps(_pl).encode("utf-8")
     headers = {"Content-Type": "application/json",
                "Authorization": f"Bearer {key}",

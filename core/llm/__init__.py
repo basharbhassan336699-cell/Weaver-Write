@@ -36,6 +36,58 @@ def _is_anthropic(provider: str, base: str) -> bool:
     return "anthropic.com" in (base or "").lower()
 
 
+# ── reasoning-family registry (the "smart, single-place" detection) ──────────
+# A small DATA table of reasoning-model families. Each row maps a provider/model
+# match to how that family turns its hidden reasoning OFF (so `content` fills
+# fast instead of the whole token budget going to hidden reasoning and returning
+# empty). Adding a NEW family later = ONE row here, NOT new logic anywhere.
+#
+# Only DeepSeek is listed today, because it is the one family VERIFIED against a
+# live model. That is deliberate and safe: the universal safety net in llm_fn
+# (retry-on-empty + reading the reasoning field) already stops ANY model —
+# listed or not — from returning nothing, so an unlisted new family degrades
+# gracefully (never breaks); adding its row later just makes it fast/clean.
+# The "off"/"on" fragments are merged verbatim into the request payload.
+REASONING_FAMILIES = [
+    {
+        "name": "deepseek",              # DeepSeek v3/r1/v4-flash/pro/reasoner
+        "match": ("deepseek",),          # provider name, base URL, or model id
+        "off": {"thinking": {"type": "disabled"}},
+        "on": {"thinking": {"type": "enabled"}},
+    },
+    # Future families (add one row each, from that provider's docs, when you
+    # actually connect a model of that family — leave commented until tested):
+    #   {"name": "qwen", "match": ("qwen", "qwq"),
+    #    "off": {"enable_thinking": False}, "on": {"enable_thinking": True}},
+]
+
+
+def detect_reasoning_family(provider, base, model):
+    """Return the REASONING_FAMILIES row matching this provider/base/model, or
+    None for a plain (non-reasoning) or unlisted model. Matches on a case-folded
+    haystack of all three, so detection works whether the family shows up in the
+    provider name, the base URL, or the model id."""
+    hay = " ".join([(provider or ""), (base or ""), (model or "")]).lower()
+    for fam in REASONING_FAMILIES:
+        if any(tok in hay for tok in fam.get("match", ())):
+            return fam
+    return None
+
+
+def reasoning_payload(provider, base, model):
+    """Return the payload fragment that switches a reasoning model's hidden
+    thinking OFF (default) or ON, per its family in the registry. Returns {} for
+    any non-reasoning / unlisted model, so those payloads stay byte-for-byte
+    unchanged. Direction is controlled by WEAVER_THINKING (disabled by default,
+    matching OpenClaw's default of thinking:{type:"disabled"})."""
+    fam = detect_reasoning_family(provider, base, model)
+    if not fam:
+        return {}
+    think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
+    on = think in ("enabled", "on", "1", "true")
+    return dict(fam["on"] if on else fam["off"])
+
+
 def get_llm_fn():
     """Return llm_fn(prompt, system=None, temperature=0.7, max_tokens=None)->str
     built from config/.env. Returns None if no key is configured (callers must
@@ -68,22 +120,17 @@ def get_llm_fn():
                    [{"role": "user", "content": prompt}]
             payload = {"model": model, "temperature": temperature,
                        "max_tokens": max_tokens or 4096, "messages": msgs}
-            # DeepSeek "reasoning" models (deepseek-v4-flash/pro, deepseek-reasoner)
+            # Reasoning models (e.g. DeepSeek deepseek-v4-flash/pro/reasoner)
             # spend the ENTIRE token budget on hidden reasoning and return an EMPTY
             # `content` (finish_reason=length, reasoning_tokens=all) unless thinking
             # is turned OFF. That is exactly what OpenClaw does by default:
             #   params.thinking = { type: reasoningEffort ? "enabled" : "disabled" }
             # so the model answers directly — fast, and `content` is actually
-            # filled. We mirror it here (DeepSeek only, so other providers are
-            # untouched). Configurable via WEAVER_THINKING (disabled|enabled).
-            _dsk = ("deepseek" in provider.lower()) or (
-                "deepseek.com" in base.lower())
-            if _dsk:
-                _think = os.environ.get(
-                    "WEAVER_THINKING", "disabled").strip().lower()
-                payload["thinking"] = {
-                    "type": "enabled"
-                    if _think in ("enabled", "on", "1", "true") else "disabled"}
+            # filled. We look the model's family up in the REASONING_FAMILIES
+            # registry above and merge its "off" fragment; a non-reasoning /
+            # unlisted model gets {} so its payload is unchanged. Adding a new
+            # reasoning family later is ONE row there, not a change here.
+            payload.update(reasoning_payload(provider, base, model))
         body = json.dumps(payload).encode("utf-8")
         # per-call timeout wins; otherwise WEAVER_TIMEOUT (default 180s) — slow
         # on-device models need more than 120s for long generations.
