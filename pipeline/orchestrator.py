@@ -4238,14 +4238,13 @@ class WeaverOrchestrator:
             mod = __import__(fname)
             draft = task.draft or task.task_card.get("draft", "")
             if draft:
-                # Protect citations from the AI-fingerprint cleaner (which would
-                # otherwise strip "(Smith, 2023)" as a Latin-in-Arabic mix). We
-                # mask them, humanize, then restore them intact.
-                masked, cites = self._mask_citations(draft)
-                result = mod.humanize_text(masked, file_type=file_type)
-                task.draft = self._unmask_citations(result["text"], cites)
+                # Humanize PROSE only, keeping Markdown tables and fenced code
+                # blocks verbatim — the AI-fingerprint cleaner would otherwise
+                # reflow a table's '|'/'---' rows and flatten it. Citations are
+                # still masked/restored inside (per prose segment).
+                task.draft = self._humanize_draft(
+                    draft, mod.humanize_text, file_type)
                 task.task_card["humanized"] = True
-                task.task_card["cleaning_issues"] = result.get("issues", [])
         except Exception as e:
             mem.set_status(65, f"إعادة الصياغة (تخطّي: {e})")
 
@@ -4275,6 +4274,68 @@ class WeaverOrchestrator:
         return re.sub(r"(\d+)",
                       lambda m: cites[int(m.group(1))]
                       if int(m.group(1)) < len(cites) else m.group(0), text)
+
+    def _humanize_draft(self, draft, humanize_fn, file_type):
+        """Humanize PROSE only — keep Markdown tables and fenced code blocks
+        VERBATIM. The AI-fingerprint cleaner treats a table's '|' and '---' as
+        decoration and reflows its rows, which FLATTENS the table into stacked
+        lines (exactly the broken table users saw). So we split the draft into
+        protected blocks (a GFM table = a pipe line whose NEXT line is a
+        separator, run until a non-pipe/blank line; or a ```fence``` run) and
+        prose, humanize only the prose (citations masked, as before), and
+        reassemble. Additive and safe: no table/code → identical to humanizing
+        the whole draft."""
+        import re
+        lines = (draft or "").split("\n")
+        n = len(lines)
+
+        def _is_sep(s):
+            return bool(re.match(
+                r"^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$", s)) \
+                and "-" in s
+
+        out, prose = [], []
+
+        def _flush_prose():
+            if not prose:
+                return
+            text = "\n".join(prose)
+            prose.clear()
+            if not text.strip():
+                out.append(text)
+                return
+            masked, cites = self._mask_citations(text)
+            res = humanize_fn(masked, file_type=file_type)
+            out.append(self._unmask_citations(res.get("text", text), cites))
+
+        i = 0
+        while i < n:
+            line = lines[i]
+            if re.match(r"^\s*```", line):                 # fenced code block
+                _flush_prose()
+                blk = [line]
+                i += 1
+                while i < n and not re.match(r"^\s*```", lines[i]):
+                    blk.append(lines[i])
+                    i += 1
+                if i < n:
+                    blk.append(lines[i])
+                    i += 1
+                out.append("\n".join(blk))
+                continue
+            if "|" in line and i + 1 < n and _is_sep(lines[i + 1]):  # GFM table
+                _flush_prose()
+                blk = [line, lines[i + 1]]
+                i += 2
+                while i < n and "|" in lines[i] and lines[i].strip() != "":
+                    blk.append(lines[i])
+                    i += 1
+                out.append("\n".join(blk))
+                continue
+            prose.append(line)
+            i += 1
+        _flush_prose()
+        return "\n".join(out)
 
     @staticmethod
     def _allowed_keys(task: Task) -> list:
