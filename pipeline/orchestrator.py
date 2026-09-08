@@ -3479,12 +3479,24 @@ class WeaverOrchestrator:
             _rmax = int(os.environ.get("WEAVER_RICH_MAXTOK", "8000") or 8000)
         except Exception:
             _rmax = 8000
+        # LIVE STREAMING: show the outline as it is written (like OpenClaw) by
+        # forwarding each token to the progress stream as a "delta" event. Guarded
+        # by WEAVER_STREAM (default on) and only meaningful when a progress
+        # callback is attached. A first "delta_start" lets the UI open a live area.
+        _stream_on = os.environ.get("WEAVER_STREAM", "1").lower() not in (
+            "0", "false", "no")
+        _od = None
+        if _stream_on and getattr(self, "_progress", None):
+            self._emit("delta_start", "", "")
+
+            def _od(piece):
+                self._emit("delta", "", piece)
         try:
             raw = self.llm_fn(prompt, system=self.system_main,
                               temperature=0.4, max_tokens=_rmax,
-                              timeout=_rto) or ""
+                              timeout=_rto, on_delta=_od) or ""
         except TypeError:
-            # older llm_fn without a timeout kwarg
+            # older llm_fn without on_delta/timeout kwargs
             try:
                 raw = self.llm_fn(prompt, system=self.system_main,
                                   temperature=0.4, max_tokens=2200) or ""

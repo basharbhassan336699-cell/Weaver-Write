@@ -50,7 +50,7 @@ def get_llm_fn():
     anthropic = _is_anthropic(provider, base)
 
     def llm_fn(prompt, system=None, temperature=0.7, max_tokens=None,
-               timeout=None):
+               timeout=None, on_delta=None):
         if anthropic:
             url = base.rstrip("/") + "/messages"
             headers = {"x-api-key": key, "anthropic-version": "2023-06-01",
@@ -91,6 +91,48 @@ def get_llm_fn():
             _to = int(timeout or os.environ.get("WEAVER_TIMEOUT", "180") or 180)
         except Exception:
             _to = 180
+
+        # LIVE STREAMING (opt-in): when a caller passes on_delta, stream the reply
+        # token-by-token (stream:true) and hand each content piece to on_delta as
+        # it arrives — exactly what makes OpenClaw feel instant. Returns the full
+        # accumulated text (same contract as the non-stream path). Only for
+        # openai-compatible providers; anthropic and on_delta=None keep the plain
+        # path below untouched. On any streaming error we fall through to the
+        # non-stream request, so nothing regresses.
+        if on_delta is not None and not anthropic:
+            _sp = dict(payload)
+            _sp["stream"] = True
+            _sbody = json.dumps(_sp).encode("utf-8")
+            _acc = []
+            try:
+                _req = urllib.request.Request(url, data=_sbody, headers=headers,
+                                              method="POST")
+                with urllib.request.urlopen(_req, timeout=_to) as r:
+                    for _raw in r:
+                        _line = _raw.decode("utf-8", "ignore").strip()
+                        if not _line or not _line.startswith("data:"):
+                            continue
+                        _d = _line[5:].strip()
+                        if _d == "[DONE]":
+                            break
+                        try:
+                            _chunk = json.loads(_d)
+                            _delta = _chunk["choices"][0]["delta"]
+                        except (ValueError, KeyError, IndexError, TypeError):
+                            continue
+                        _piece = _delta.get("content") or ""
+                        if _piece:
+                            _acc.append(_piece)
+                            try:
+                                on_delta(_piece)
+                            except Exception:
+                                pass
+            except Exception:
+                _acc = []          # streaming failed → fall back to non-stream
+            _full = "".join(_acc)
+            if _full.strip():
+                return _full
+            # nothing streamed → fall through to the robust non-stream path
 
         def _extract(data):
             if anthropic:

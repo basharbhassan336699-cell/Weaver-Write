@@ -3773,16 +3773,24 @@
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
       let assistantFile = '';  // produced file name (for the artifacts card)
       let gotReply = false;
+      let streamBuf = '';      // live-streamed text buffer (before final reply)
+      let streaming = false;
       function applyReply(reply) {
         gotReply = true;
+        streaming = false;
         if (reply) { assistantRaw = reply; bubble.innerHTML = renderMarkdown(reply); }
+        else if (streamBuf.trim()) { assistantRaw = streamBuf; bubble.innerHTML = renderMarkdown(streamBuf); }
         else { bubble.textContent = (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)'); }
-        if (reply && typeof wvAutoSaveArtifacts === 'function') wvAutoSaveArtifacts(reply, currentChatId);
+        const _keep = reply || streamBuf;
+        if (_keep && typeof wvAutoSaveArtifacts === 'function') wvAutoSaveArtifacts(_keep, currentChatId);
       }
       function handleEvent(ev) {
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
+        // LIVE STREAM: show the reply as it is written (like OpenClaw).
+        else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; bubble.textContent = ''; }
+        else if (ev.t === 'delta') { if (streaming) { streamBuf += (ev.detail || ''); bubble.textContent = streamBuf; try { messages.scrollTop = messages.scrollHeight; } catch(e){} } }
         else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); currentActiveFile = ev.output_path; if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, currentChatId, aiMsg); } }
         else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
