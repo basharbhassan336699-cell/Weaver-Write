@@ -3775,9 +3775,20 @@
       let gotReply = false;
       let streamBuf = '';      // live-streamed text buffer (before final reply)
       let streaming = false;
+      let streamRAF = 0;       // pending animation frame for live markdown render
+      // Render the live buffer AS MARKDOWN (headings/lists/tables/code) while it
+      // streams — not raw text — so the reply looks exactly like the final one
+      // from the first token. Coalesced to one render per animation frame via
+      // requestAnimationFrame so a long, fast stream stays smooth on the phone.
+      function renderStreamLive() {
+        streamRAF = 0;
+        bubble.innerHTML = renderMarkdown(streamBuf);
+        try { messages.scrollTop = messages.scrollHeight; } catch (e) {}
+      }
       function applyReply(reply) {
         gotReply = true;
         streaming = false;
+        if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch (e) {} streamRAF = 0; }
         if (reply) { assistantRaw = reply; bubble.innerHTML = renderMarkdown(reply); }
         else if (streamBuf.trim()) { assistantRaw = streamBuf; bubble.innerHTML = renderMarkdown(streamBuf); }
         else { bubble.textContent = (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)'); }
@@ -3789,10 +3800,10 @@
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
         // LIVE STREAM: show the reply as it is written (like OpenClaw).
-        else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; bubble.textContent = ''; }
-        else if (ev.t === 'delta') { if (streaming) { streamBuf += (ev.detail || ''); bubble.textContent = streamBuf; try { messages.scrollTop = messages.scrollHeight; } catch(e){} } }
+        else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
+        else if (ev.t === 'delta') { if (streaming) { streamBuf += (ev.detail || ''); if (!streamRAF) streamRAF = requestAnimationFrame(renderStreamLive); } }
         else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); currentActiveFile = ev.output_path; if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, currentChatId, aiMsg); } }
-        else if (ev.t === 'error') { stepsFinishAll(); bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
+        else if (ev.t === 'error') { stepsFinishAll(); streaming = false; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
       }
       try {
