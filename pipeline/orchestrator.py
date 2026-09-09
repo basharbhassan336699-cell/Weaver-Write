@@ -501,6 +501,24 @@ class WeaverOrchestrator:
             "find data", "gather data", "data about", "statistics about",
             "numbers about", "extract data", "data from"))
 
+    @staticmethod
+    def _wants_cover(text):
+        """True when the user explicitly asks for a cover / title page."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "صفحة غلاف", "صفحة الغلاف", "غلاف", "بغلاف", "مع غلاف",
+            "صفحة عنوان", "صفحة العنوان", "cover page", "title page",
+            "with a cover", "add a cover"))
+
+    @staticmethod
+    def _wants_toc(text):
+        """True when the user explicitly asks for a table of contents / index."""
+        t = " " + (text or "").lower() + " "
+        return any(k in t for k in (
+            "فهرس", "صفحة فهرس", "صفحة الفهرس", "فهرست", "جدول المحتويات",
+            "قائمة المحتويات", "صفحة المحتويات", "جدول محتويات",
+            "table of contents", " toc ", "with a toc", "index page"))
+
     def _intent_router(self, request):
         """UNDERSTANDING FIRST: ask the connected model to read the user's own
         current request and return a structured intent — instead of matching our
@@ -1851,6 +1869,13 @@ class WeaverOrchestrator:
                     task.task_card["want_chart"] = True
                 if self._wants_data(_cur_req):
                     task.task_card["want_data"] = True
+                # explicit cover page / table-of-contents requests → set the
+                # flags the docx builder reads (they were never wired, so
+                # "صفحة غلاف وفهرس" produced neither). Additive.
+                if self._wants_cover(_cur_req):
+                    task.task_card["cover"] = True
+                if self._wants_toc(_cur_req):
+                    task.task_card["toc"] = True
         except Exception:
             pass
 
@@ -4535,17 +4560,35 @@ class WeaverOrchestrator:
         os.makedirs(d, exist_ok=True)
         return d
 
-    def _export_fallback(self, out_dir: str, safe: str, task: Task) -> str:
+    def _export_fallback(self, out_dir: str, safe: str, task: Task,
+                         fmt: str = None, error=None) -> str:
         """Always writes a REAL file to disk (Markdown) even when a format's
-        library is missing — so an output always exists."""
+        library is missing — so an output always exists. When a BINARY format
+        (pptx/xlsx/pdf/docx) was requested but its builder failed, prepend an
+        HONEST note explaining WHY (which library to install) instead of a
+        silent .md that looks like the wrong output — and surface it in the
+        chat reply too."""
         import os
         out = os.path.join(out_dir, safe + ".md")
         body = task.draft or ""
         if not body and task.sections:
             body = "\n\n".join(f"# {s.get('heading','')}\n{s.get('body','')}"
                                for s in task.sections)
+        _libs = {"pptx": "python-pptx", "xlsx": "openpyxl",
+                 "pdf": "reportlab", "docx": "python-docx"}
+        note = ""
+        _f = str(fmt or "").lower()
+        if _f in _libs:
+            note = (f"⚠️ تعذّر بناء ملف {_f.upper()} على الجهاز، فحُفظ المحتوى "
+                    f"كملف Markdown بدلاً منه. الأرجح أن مكتبة «{_libs[_f]}» "
+                    f"غير مثبّتة — ثبّتها ثم أعد المحاولة:\n"
+                    f"    pip install {_libs[_f]}\n\n")
+            # surface the reason in the chat reply (task.draft feeds the reply)
+            if task.draft and not task.draft.startswith("⚠️"):
+                task.draft = note + task.draft
         with open(out, "w", encoding="utf-8") as f:
-            f.write(body or "(لا يوجد محتوى بعد — لم يُضبط مفتاح النموذج)")
+            f.write((note + body) if body
+                    else (note or "(لا يوجد محتوى بعد — لم يُضبط مفتاح النموذج)"))
         return out
 
     @staticmethod
@@ -4762,9 +4805,9 @@ class WeaverOrchestrator:
                 with open(out, "w", encoding="utf-8") as f:
                     f.write(self._sections_to_html(title, sections, lang))
                 return out
-        except Exception:
-            return self._export_fallback(out_dir, safe, task)
-        return self._export_fallback(out_dir, safe, task)
+        except Exception as _e:
+            return self._export_fallback(out_dir, safe, task, fmt=fmt, error=_e)
+        return self._export_fallback(out_dir, safe, task, fmt=fmt)
 
     @staticmethod
     def _sections_to_html(title, sections, lang="ar"):
