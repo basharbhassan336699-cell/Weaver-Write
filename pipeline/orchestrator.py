@@ -4050,9 +4050,23 @@ class WeaverOrchestrator:
             card["sources_unavailable"] = True
         prof = self._strength_profile(card.get("model_strength", "medium"))
         parts, out_sections = [], []
-        for sec in sections_plan:
+        for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
             body = ""
+            # a PARENT section (a المبحث/level-1 immediately followed by its
+            # مطالب/level-2 children) must NOT restate what its subsections will
+            # cover — that is the direct cause of a المبحث and its المطلب 1.1
+            # opening almost identically. Flag it so the writer produces only a
+            # brief bridge (handled in the generic writer below).
+            _is_parent = False
+            try:
+                _lvl = int(sec.get("level", 1) or 1)
+                _nxt = sections_plan[_si + 1] if _si + 1 < len(sections_plan) \
+                    else None
+                if _lvl <= 1 and _nxt and int(_nxt.get("level", 1) or 1) >= 2:
+                    _is_parent = True
+            except Exception:
+                _is_parent = False
             # ── bound specialized section writers (skills already present, wired
             #    here) — additive: on any miss the generic writer below runs
             #    unchanged, keeping full backward compatibility ──
@@ -4136,6 +4150,20 @@ class WeaverOrchestrator:
                             prompt = prompt + "\n\n" + _sb
                     except Exception:
                         pass
+                # PARENT section → brief bridge only (no overlap with its
+                # subsections). This removes the المبحث/المطلب 1.1 duplication.
+                if _is_parent:
+                    prompt = prompt + "\n\n" + (
+                        "هذا القسم يليه مطالب فرعية تتناول تفاصيله. اكتب تمهيداً "
+                        "موجزاً جداً (٢-٤ جُمَل) يوطّئ للمطالب ويبيّن خطّتها فقط، "
+                        "دون تعريف الموضوع من جديد ودون الدخول في تفاصيل ستُعالَج "
+                        "في المطالب — تجنّباً للتكرار."
+                        if lang == "ar" else
+                        "This section is followed by subsections that cover its "
+                        "detail. Write only a very brief bridge (2-4 sentences) "
+                        "that sets up the subsections, without re-defining the "
+                        "topic or covering detail the subsections will handle — "
+                        "to avoid repetition.")
                 # adapt depth/length + temperature to the model's ceiling
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
                 if _depth:
@@ -4944,10 +4972,34 @@ class WeaverOrchestrator:
             task.draft = task.draft.rstrip() + "\n\n" + head + "\n" + refs
         card["references_list"] = refs
 
+    @staticmethod
+    def _strip_placeholder_pages(text):
+        """Remove UNRESOLVED page-number placeholders the model copies from the
+        citation template — "(المصدر، ص. X)" / "(Author, p. N)" where the page is
+        a literal letter (X/N/؟), not a real number. Keeps the citation, drops
+        only the bogus page part; real numeric pages (ص. 12) are untouched."""
+        import re
+        if not text:
+            return text
+        # ", ص. X" / "، p. N" (placeholder letter) inside/at a citation → drop it
+        text = re.sub(r"\s*[،,]\s*(?:ص|p)\s*\.?\s*[XxNn؟\?]+(?=[\)\]\s،,\.]|$)",
+                      "", text)
+        # a lone "(ص. X)" / "(p. N)" with no source → remove the empty citation
+        text = re.sub(r"[\(\[]\s*(?:ص|p)\s*\.?\s*[XxNn؟\?]+\s*[\)\]]", "", text)
+        return text
+
     async def _layer_8(self, task: Task, mem: TaskMemory):
         """٨: الإخراج — كتابة الملف النهائي على القرص في outputs/."""
         task.status = TaskStatus.LAYER_8
         mem.set_status(8, "توليد الملف النهائي")
+        # drop unresolved "(…، ص. X)" page-number placeholders before export
+        try:
+            task.draft = self._strip_placeholder_pages(task.draft)
+            if task.sections:
+                task.sections = [{**s, "body": self._strip_placeholder_pages(
+                    s.get("body", ""))} for s in task.sections]
+        except Exception:
+            pass
         # honest note when the document was written without external sources
         try:
             self._source_note(task)
