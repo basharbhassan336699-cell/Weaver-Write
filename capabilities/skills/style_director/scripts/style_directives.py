@@ -40,6 +40,18 @@ def _is_conclusion(section_name):
                                 "summary"))
 
 
+def conclusion_directive(lang: str = "ar") -> str:
+    """The non-standard-closing directive alone — reused by build_style_block and
+    passed to the specialized conclusion writer so a conclusion doesn't end with a
+    formulaic close."""
+    if lang == "en":
+        return ("Close with a non-standard touch — an open question, a paradox, "
+                "or a brief reflection — instead of a formulaic "
+                "\"In conclusion\".")
+    return ("اختم بلمسةٍ غير نمطية — سؤالٌ مفتوح، أو مفارقة، أو تأمّلٌ موجز — "
+            "بدل عبارة «في الختام» أو «وفي الخاتمة» المكرّرة.")
+
+
 def build_style_block(card=None, section_name: str = "", lang: str = "ar") -> str:
     """Return a concise style directive to append to the writing prompt, or ""
     when the section should stay plain (a references list). The directive is
@@ -65,10 +77,7 @@ def build_style_block(card=None, section_name: str = "", lang: str = "ar") -> st
             "it.",
         ]
         if _is_conclusion(section_name):
-            lines.append(
-                "- Close with a non-standard touch (an open question, a "
-                "paradox, or a brief reflection) instead of a repetitive "
-                "\"In conclusion\".")
+            lines.append("- " + conclusion_directive("en"))
         return "\n".join(lines)
 
     # Arabic (default)
@@ -84,9 +93,7 @@ def build_style_block(card=None, section_name: str = "", lang: str = "ar") -> st
         "القارئ ثم تجيب عنه.",
     ]
     if _is_conclusion(section_name):
-        lines.append(
-            "- اختم بلمسةٍ غير نمطية (سؤالٌ مفتوح، أو مفارقة، أو تأمّلٌ موجز) "
-            "بدل عبارة «في الختام» أو «وفي الخاتمة» المكرّرة.")
+        lines.append("- " + conclusion_directive("ar"))
     return "\n".join(lines)
 
 

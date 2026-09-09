@@ -936,9 +936,21 @@ class WeaverOrchestrator:
                     first = b.split("\n", 1)[0].strip()[:200]
                     if first:
                         findings.append(first)
+            # non-standard closing: hand the specialized conclusion writer the
+            # style director's closing directive (guarded + toggleable). None →
+            # unchanged behaviour.
+            _hint = None
+            if os.environ.get("WEAVER_STYLE_DIRECTOR", "1").strip().lower() \
+                    not in ("0", "false", "off", "no"):
+                try:
+                    _hint = self._skill_call(
+                        "style_director", "style_directives",
+                        "conclusion_directive", lang)
+                except Exception:
+                    _hint = None
             out = self._skill_call(
                 "conclusion_writer", "build_conclusion", "build_conclusion",
-                topic, findings, lang, self.llm_fn)
+                topic, findings, lang, self.llm_fn, _hint)
             return (out or {}).get("text") or None
         if kind == "results" and mode != "none":
             out = self._skill_call(
