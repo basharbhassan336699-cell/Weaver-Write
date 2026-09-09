@@ -25,8 +25,9 @@ Leverages the text-humanization system in WeaverCode (dictionary.py).
 ## Dictionary-based humanization
 `humanize_text(text)` now reduces AI-signature phrasing using a large bundled
 dictionary (engines/humanizer-core/): 550 EN + 131 AR curated AI-signature
-words/phrases mapped to human alternatives, plus ~104K general synonyms
-(ON by default, general_rate=0.25; dictionary to be refined later).
+words/phrases mapped to human alternatives, plus ~104K general synonyms.
+general_rate=0.0 by default (general Arabic synonyms disabled — they corrupt
+technical terms; AI_WORDS + cleaner remain active).
 Longest phrases match first; matching is case-insensitive with word
 boundaries. CITATIONS ARE PROTECTED throughout (author-year and page forms,
 Arabic and Latin) and verified intact after rewriting.
