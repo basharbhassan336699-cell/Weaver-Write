@@ -1967,14 +1967,22 @@ class WeaverOrchestrator:
         except Exception as e:
             mem.set_status(3, f"موجّه النية (تخطّي: {e})")
 
-        # ── STAGE (أ) WIRING 1 — REQUIREMENTS CHECKLIST (read + report only) ──
+        # ── STAGE (أ) WIRING 1 — REQUIREMENTS CHECKLIST (build + store) ──
         # Build the dynamic requirements checklist from the FULL request (no
-        # truncation) and store it on the card. It does NOT change routing yet —
-        # `deliverable` is recorded but DORMANT (wiring step 2 is a separate,
-        # explicitly-approved change). Its only purpose here is to let Layer 8
-        # verify what was actually delivered. Skipped for a pure chat/INLINE
-        # answer so a quick reply isn't slowed by an extra model call. Fully
-        # guarded and additive: any failure leaves behaviour unchanged.
+        # truncation) and store it on the card, so Layer 8 can verify what was
+        # actually delivered. Skipped for a pure chat/INLINE answer so a quick
+        # reply isn't slowed by an extra model call. Fully guarded and additive.
+        #
+        # ── STAGE (أ) WIRING 2 — deliverable GOVERNS the scope (the root fix) ──
+        # When the model — reading the WHOLE request — judged this a complete
+        # document (deliverable == "full_document") but a keyword guess limited
+        # the scope to a structural/partial one, the model's MEANING wins and the
+        # limiting scope is cleared, so it becomes a full research. This is the
+        # proven fix for "بحث بالكامل … الهيكلة مكوّنة من…" being mis-read as an
+        # outline: the keyword scope's source was a DESCRIPTION word («هيكلة»),
+        # not a real «only» request. ONE safe direction only — toward the fuller
+        # deliverable, never the reverse — and only on an explicit full_document
+        # judgement (a missing/other deliverable changes nothing).
         try:
             if isinstance(task.task_card, dict) and self.llm_fn:
                 _of = task.task_card.get("output_format") or []
@@ -1984,12 +1992,23 @@ class WeaverOrchestrator:
                         llm_fn=self.llm_fn, system=self.system_main)
                     if _req:
                         task.task_card["requirements"] = _req.get("requirements")
-                        # stored only — nothing reads deliverable for routing yet
                         task.task_card["deliverable"] = _req.get("deliverable")
                         _n = len(_req.get("requirements") or [])
                         _dv = _req.get("deliverable")
                         mem.set_status(3, f"متطلّبات: {_n} بند"
                                        + (f" — {_dv}" if _dv else ""))
+                        # WIRING 2: correct a limiting keyword scope toward a full
+                        # document when the model judged it full_document.
+                        if _dv == "full_document":
+                            _lim = {"outline", "references", "plan", "part"}
+                            _cur_scopes = set(task.task_card.get("scopes") or [])
+                            if (task.task_card.get("scope") in _lim
+                                    or (_cur_scopes & _lim)):
+                                task.task_card["scope"] = None
+                                task.task_card["scopes"] = []
+                                task.task_card["deliverable_override"] = True
+                                mem.set_status(
+                                    3, "تصحيح النطاق: مستند كامل (بحسب معنى الطلب)")
         except Exception as e:
             mem.set_status(3, f"استخراج المتطلّبات (تخطّي: {e})")
 
