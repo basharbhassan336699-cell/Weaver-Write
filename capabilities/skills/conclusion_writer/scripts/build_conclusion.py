@@ -23,8 +23,12 @@ SECTIONS = {
 }
 
 
-def build_conclusion(topic, main_findings=None, lang="ar", llm_fn=None):
-    """Build a conclusion. main_findings: list[str]. llm_fn optional."""
+def build_conclusion(topic, main_findings=None, lang="ar", llm_fn=None,
+                     style_hint=None):
+    """Build a conclusion. main_findings: list[str]. llm_fn optional.
+    style_hint (optional str): a closing-style directive applied to the FINAL
+    sub-section only, so the conclusion ends with a non-standard touch instead
+    of a formulaic close. None → behaviour unchanged (backward compatible)."""
     main_findings = main_findings or []
     sections = SECTIONS.get(lang, SECTIONS["en"])
     findings_block = "\n".join(f"- {f}" for f in main_findings) or (
@@ -43,11 +47,15 @@ def build_conclusion(topic, main_findings=None, lang="ar", llm_fn=None):
              "Write in academic English. Do not introduce new information. "
              "Recommendations must be actionable.")
     parts = []
-    for heading, guide in sections:
+    for _i, (heading, guide) in enumerate(sections):
         prompt = (f"{rules}\n\nالموضوع: {topic}\nالقسم: {heading}\nالتوجيه: {guide}\n"
                   f"النتائج:\n{findings_block}" if lang == "ar" else
                   f"{rules}\n\nTopic: {topic}\nSection: {heading}\nGuidance: {guide}\n"
                   f"Findings:\n{findings_block}")
+        # non-standard closing: apply the style hint to the FINAL sub-section
+        # only, so the whole conclusion ends with a question/paradox/reflection.
+        if style_hint and _i == len(sections) - 1:
+            prompt = prompt + "\n\n" + str(style_hint)
         parts.append(f"## {heading}\n{llm_fn(prompt).strip()}")
     return {"text": "\n\n".join(parts), "structured": False}
 
