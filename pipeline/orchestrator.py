@@ -519,6 +519,65 @@ class WeaverOrchestrator:
             "قائمة المحتويات", "صفحة المحتويات", "جدول محتويات",
             "table of contents", " toc ", "with a toc", "index page"))
 
+    @staticmethod
+    def _requirements_directive(card=None, section_name: str = "",
+                                lang: str = "ar") -> str:
+        """STAGE (ب) — turn the requirements checklist (from extract_requirements)
+        into a SHORT directive appended to a section's writing prompt, so every
+        section is written with the user's whole plan in view. Like the style
+        director, it is guidance the model APPLIES WHERE IT FITS — never forced,
+        and never imposed on a references list. Returns "" when there is no
+        checklist or nothing writing-relevant. Pure logic; never raises."""
+        reqs = (card or {}).get("requirements") or []
+        if not isinstance(reqs, list) or not reqs:
+            return ""
+        n = (section_name or "").lower()
+        if any(k in n for k in ("مراجع", "مصادر", "references", "bibliography")):
+            return ""
+        styles, contents, want_table = [], [], False
+        for r in reqs:
+            if not isinstance(r, dict):
+                continue
+            k = r.get("kind")
+            t = (r.get("text") or "").strip()
+            if not t:
+                continue
+            if k == "style":
+                styles.append(t)
+            elif k == "content":
+                contents.append(t)
+            elif k == "insert" and any(w in t.lower() for w in (
+                    "جدول", "جداول", "table")):   # match the plural «جداول» too
+                want_table = True
+        if not (styles or contents or want_table):
+            return ""
+        if lang == "en":
+            lines = ["Request requirements to honour in THIS section (apply "
+                     "where they fit — never force):"]
+            if styles:
+                lines.append("- Keep to the requested style: "
+                             + "؛ ".join(styles) + ".")
+            if contents:
+                lines.append("- Make sure to cover, where relevant: "
+                             + "؛ ".join(contents) + ".")
+            if want_table:
+                lines.append("- Where this section's content is a comparison or "
+                             "a set of terms/values, present it as a Markdown "
+                             "table (| … | … |) instead of prose.")
+            return "\n".join(lines)
+        lines = ["متطلّبات الطلب التي تُراعى في هذا القسم (طبّقها حيث تناسب، "
+                 "دون إقحام):"]
+        if styles:
+            lines.append("- التزم بالأسلوب المطلوب: " + "؛ ".join(styles) + ".")
+        if contents:
+            lines.append("- احرص على تغطية ما يناسب هذا القسم مِن: "
+                         + "؛ ".join(contents) + ".")
+        if want_table:
+            lines.append("- حين يكون محتوى هذا القسم مقارنةً أو مجموعةَ مصطلحاتٍ/"
+                         "قيَم، اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل "
+                         "السرد.")
+        return "\n".join(lines)
+
     def _intent_router(self, request):
         """UNDERSTANDING FIRST: ask the connected model to read the user's own
         current request and return a structured intent — instead of matching our
@@ -4193,6 +4252,21 @@ class WeaverOrchestrator:
                             "build_style_block", card, section_name, lang)
                         if _sb:
                             prompt = prompt + "\n\n" + _sb
+                    except Exception:
+                        pass
+                # STAGE (ب): write each section with the requirements checklist in
+                # view — a short, model-decided directive (style / content / a
+                # where-it-fits table hint), appended like the style block. Its
+                # source is the plan the model itself extracted, so writing now
+                # FOLLOWS the plan section by section. Guarded + toggleable
+                # (WEAVER_PLAN_WRITER); any miss → writing unchanged.
+                if os.environ.get("WEAVER_PLAN_WRITER", "1").strip().lower() \
+                        not in ("0", "false", "off", "no"):
+                    try:
+                        _rb = self._requirements_directive(card, section_name,
+                                                           lang)
+                        if _rb:
+                            prompt = prompt + "\n\n" + _rb
                     except Exception:
                         pass
                 # PARENT section → brief bridge only (no overlap with its
