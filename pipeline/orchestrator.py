@@ -5706,6 +5706,188 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
         return None
 
 
+# ── requirement kinds: a SMALL controlled vocabulary that lets a later, generic
+#    verifier route "is this satisfied?" checks. The requirement TEXT stays the
+#    user's own words (any topic, any count, any language) — nothing here is
+#    hardcoded to a subject. Unknown kinds are kept as "other" (never dropped).
+_REQ_KINDS = ("deliverable", "structure", "length", "section", "insert",
+              "content", "source", "style", "language", "format", "other")
+# what the user ultimately wants PRODUCED — decided by MEANING, not keywords.
+# This is the field that fixes the proven scope mis-routing: a "بحث بالكامل"
+# request resolves to full_document even when it also says "الهيكلة مكوّنة من…".
+_DELIVERABLES = ("full_document", "outline", "references", "plan", "part",
+                 "answer", "rewrite", "summary", "translation", "conversion",
+                 "edit")
+
+
+def _normalize_requirements(d):
+    """Validate the requirements-extraction JSON into safe types. Returns a dict
+    with a `requirements` list (possibly empty) plus `deliverable`/`language`/
+    `task_kind`/`notes`, or None when the payload is unusable. Never raises."""
+    if not isinstance(d, dict):
+        return None
+
+    def _clip(v, n):
+        return (str(v or "").strip())[:n]
+
+    def _num_or_str(v):
+        # keep an explicit number as int, otherwise a short free-form target
+        if isinstance(v, bool) or v is None:
+            return None
+        if isinstance(v, (int, float)):
+            try:
+                return int(v)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        s = str(v).strip()
+        return s[:120] or None
+
+    dv = _clip(d.get("deliverable"), 40).lower()
+    deliverable = dv if dv in _DELIVERABLES else None
+
+    reqs_in = d.get("requirements")
+    if isinstance(reqs_in, dict):          # tolerate a single-object shape
+        reqs_in = [reqs_in]
+    out_reqs = []
+    if isinstance(reqs_in, list):
+        seen_ids = set()
+        for i, r in enumerate(reqs_in):
+            if not isinstance(r, dict):
+                # tolerate a bare string requirement
+                if isinstance(r, str) and r.strip():
+                    r = {"text": r}
+                else:
+                    continue
+            text = _clip(r.get("text") or r.get("requirement") or r.get("name"),
+                         300)
+            if not text:
+                continue
+            kind = _clip(r.get("kind") or r.get("type"), 20).lower()
+            if kind not in _REQ_KINDS:
+                kind = "other"
+            rid = _clip(r.get("id"), 40) or f"{kind}_{i + 1}"
+            # keep ids unique so a later verifier can address each one
+            if rid in seen_ids:
+                rid = f"{rid}_{i + 1}"
+            seen_ids.add(rid)
+            must = r.get("must")
+            must = True if must is None else bool(must)   # default: required
+            out_reqs.append({
+                "id": rid,
+                "text": text,
+                "kind": kind,
+                "target": _num_or_str(r.get("target")),
+                "must": must,
+            })
+
+    lang = _clip(d.get("language"), 8).lower()
+    return {
+        "task_kind": _clip(d.get("task_kind"), 200) or None,
+        "deliverable": deliverable,
+        "requirements": out_reqs,
+        "language": lang if lang in ("ar", "en") else None,
+        "notes": _clip(d.get("notes"), 400) or None,
+    }
+
+
+def extract_requirements(conversation, request, attachments=None, llm_fn=None,
+                         system=None):
+    """STAGE (أ) of Plan+Verify — REQUIREMENTS EXTRACTION (model-agnostic).
+
+    Reads the FULL request and the FULL conversation — NO truncation. (The older
+    understand_request/classify_intent capped input at req[:1500]/convo[:4000],
+    which silently dropped half of a long, detailed instruction — one proven
+    cause of forgotten requirements like a cover page or a 10-page length.) It
+    asks the connected model — ANY model, on any platform — to read the request
+    and return a DYNAMIC requirements checklist: the concrete, checkable things
+    the user actually asked for, in the user's own words. Nothing here is
+    hardcoded to a topic, a structure (3×3 or otherwise), or a keyword list —
+    the model decides, and the checklist is whatever THIS request contains.
+
+    Two things it fixes at the root:
+      • `deliverable` is decided by MEANING, so "أريد بحثاً بالكامل … الهيكلة
+        مكوّنة من…" resolves to full_document, not the keyword-guessed "outline".
+      • every concrete ask (غلاف، فهرس، عدد صفحات، جداول بمصطلحات، عدد مباحث/
+        مطالب…) becomes an explicit, addressable checklist item a later verify
+        stage can confirm was actually delivered.
+
+    Returns a normalized dict (see _normalize_requirements) or None when the
+    model is unavailable or its reply is unusable — callers keep their existing
+    behaviour, so no fallback is ever removed.
+
+    DORMANT for now: built and verified here; wired into the pipeline in the
+    next approved step, so behaviour is unchanged until then. Classification
+    only — it never writes or executes."""
+    req = (request or "").strip()
+    convo = (conversation or "").strip()
+    if not req and not convo:
+        return None
+    if llm_fn is None:
+        try:
+            from core.llm import get_llm_fn
+            llm_fn = get_llm_fn()
+        except Exception:
+            llm_fn = None
+    if not llm_fn:
+        return None
+    try:
+        import os
+        att = ""
+        if attachments:
+            att = ("الملفات/الروابط المرفقة:\n"
+                   + "\n".join("- " + str(a) for a in attachments) + "\n\n")
+        prompt = (
+            "أنت محلّل متطلّبات دقيق في نظام كتابةٍ بحثيّ. مهمتك أن تقرأ طلب "
+            "المستخدم كاملاً (والمحادثة كلها) وتستخرج «قائمة المتطلّبات»: كل "
+            "شيءٍ محدّدٍ طلبه المستخدم فعلاً، بكلماته هو، دون تنفيذ الطلب ودون "
+            "إضافة متطلّباتٍ لم يذكرها. أعِد JSON فقط بلا أي نصٍّ آخر.\n\n"
+            "الشكل المطلوب بالضبط:\n"
+            '{"task_kind":"وصفٌ حرٌّ قصير لما يريده المستخدم",'
+            '"deliverable":"full_document|outline|references|plan|part|answer|'
+            'rewrite|summary|translation|conversion|edit",'
+            '"language":"ar|en|null",'
+            '"requirements":[{"id":"معرّف_قصير","text":"المتطلّب بكلمات المستخدم",'
+            '"kind":"deliverable|structure|length|section|insert|content|source|'
+            'style|language|format|other","target":عدد أو نص أو null,'
+            '"must":true|false}],'
+            '"notes":"ملاحظاتٌ قصيرة أو null"}\n\n'
+            "قواعد حاسمة:\n"
+            "- deliverable يُحدَّد بالمعنى لا بمطابقة كلمة: إن طلب المستخدم بحثاً/"
+            "مستنداً/تقريراً مكتوباً كاملاً فهو full_document، حتى لو وصف هيكله في "
+            "نفس الرسالة (وصف الهيكل ليس طلباً للهيكل وحده). لا تجعله outline إلا "
+            "إذا طلب المستخدم الهيكل/العناصر فقط دون كتابة المحتوى.\n"
+            "- استخرج كل متطلّبٍ ملموسٍ قابلٍ للتحقّق ذكره المستخدم، منها مثلاً "
+            "(إن وُجدت فقط، ولا تختلق شيئاً): نوع المخرَج، عدد المباحث/المطالب "
+            "وأيّ تقسيماتٍ أعمق، عدد الصفحات أو الكلمات، صفحة غلاف، فهرس/جدول "
+            "محتويات، جداول (وما يجب أن تحتويه كمصطلحاتٍ أو مقارنة)، رسوم بيانية، "
+            "مصادر/مراجع/دراسات وتوثيقها، لغة المخرجات، الأسلوب (أكاديمي/بشري/"
+            "سردي/نقطي)، أقسامٌ بعينها يجب أن تُذكر. اجعل كل واحدٍ عنصراً مستقلاً.\n"
+            "- target: ضع فيه القيمة المحدّدة إن ذُكرت (عدد الصفحات، عدد المباحث، "
+            "اسم قسم…) وإلا null. must=true للمتطلّب الإلزاميّ، false للمرغوب.\n"
+            "- إن لم يذكر المستخدم متطلّباتٍ تفصيلية، أعِد requirements كقائمةٍ "
+            "فارغة [] مع تحديد deliverable وtask_kind فقط. لا تختلق متطلّبات.\n"
+            "- language: لغة المخرجات إن طُلبت صراحةً، وإلا null.\n\n"
+            + att + "المحادثة (الأقدم فالأحدث):\n" + convo + "\n\n"
+            "الطلب الحالي (اقرأه كاملاً):\n" + req)
+        from core.llm import extract_json
+        try:
+            _to = int(os.environ.get("WEAVER_REQUIREMENTS_TIMEOUT", "60") or 60)
+        except Exception:
+            _to = 60
+        try:
+            raw = llm_fn(prompt, system=system, temperature=0.0,
+                         max_tokens=1200, timeout=_to) or ""
+        except TypeError:
+            raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+        try:
+            data = extract_json(raw)
+        except Exception:
+            data = None
+        return _normalize_requirements(data)
+    except Exception:
+        return None
+
+
 def _content_to_chart(llm_fn, content, lang="ar"):
     """Ask the model to pull a small chartable series (labels + numeric values)
     from content. Returns a chart spec {"type","data":{"labels","values"},
