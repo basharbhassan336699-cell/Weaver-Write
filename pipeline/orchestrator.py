@@ -1967,6 +1967,32 @@ class WeaverOrchestrator:
         except Exception as e:
             mem.set_status(3, f"موجّه النية (تخطّي: {e})")
 
+        # ── STAGE (أ) WIRING 1 — REQUIREMENTS CHECKLIST (read + report only) ──
+        # Build the dynamic requirements checklist from the FULL request (no
+        # truncation) and store it on the card. It does NOT change routing yet —
+        # `deliverable` is recorded but DORMANT (wiring step 2 is a separate,
+        # explicitly-approved change). Its only purpose here is to let Layer 8
+        # verify what was actually delivered. Skipped for a pure chat/INLINE
+        # answer so a quick reply isn't slowed by an extra model call. Fully
+        # guarded and additive: any failure leaves behaviour unchanged.
+        try:
+            if isinstance(task.task_card, dict) and self.llm_fn:
+                _of = task.task_card.get("output_format") or []
+                if list(_of) != ["INLINE"]:
+                    _req = extract_requirements(
+                        self._conversation_context(task.description), _cur_req,
+                        llm_fn=self.llm_fn, system=self.system_main)
+                    if _req:
+                        task.task_card["requirements"] = _req.get("requirements")
+                        # stored only — nothing reads deliverable for routing yet
+                        task.task_card["deliverable"] = _req.get("deliverable")
+                        _n = len(_req.get("requirements") or [])
+                        _dv = _req.get("deliverable")
+                        mem.set_status(3, f"متطلّبات: {_n} بند"
+                                       + (f" — {_dv}" if _dv else ""))
+        except Exception as e:
+            mem.set_status(3, f"استخراج المتطلّبات (تخطّي: {e})")
+
         # Phase 3: route tools & skills once
         self._route(task)
 
@@ -5020,6 +5046,40 @@ class WeaverOrchestrator:
                 mem.add_reference(f"[تقرير التحقق]\n{verify_text}", source_key="layer_8")
         except Exception:
             pass
+        # ── STAGE (ج) WIRING 1 — VERIFY REQUIREMENTS (report only) ──
+        # Check the finished draft against the requirements checklist and record
+        # the result. It does NOT block export or repair anything yet (those are
+        # separate, explicitly-approved wiring steps). When a MUST requirement is
+        # not confirmed met, it appends ONE honest, plain-text note listing what
+        # is missing — so nothing is ever silently dropped — and always logs the
+        # summary to the status line. Fully guarded and additive.
+        try:
+            _reqs = (task.task_card or {}).get("requirements")
+            if _reqs and (task.draft or "").strip():
+                _rep = verify_requirements(
+                    _reqs, task.draft, card=task.task_card,
+                    lang=task.task_card.get("language", "ar"),
+                    llm_fn=self.llm_fn, system=self.system_main)
+                if _rep:
+                    task.task_card["verification"] = _rep
+                    mem.set_status(8, _rep.get("summary", "تحقّق المتطلّبات"))
+                    if not _rep.get("all_met"):
+                        _miss = [x for x in _rep.get("results", [])
+                                 if x.get("must") and x.get("status") != "met"]
+                        if _miss:
+                            _en = (task.task_card.get("language") == "en")
+                            _hdr = ("Verification note (unconfirmed requirements):"
+                                    if _en else
+                                    "ملاحظة تحقّق (متطلّبات لم تتأكّد):")
+                            _lines = [_hdr]
+                            for x in _miss:
+                                _ev = x.get("evidence", "")
+                                _lines.append("• " + str(x.get("text", ""))
+                                              + (f" — {_ev}" if _ev else ""))
+                            task.draft = (task.draft or "").rstrip() \
+                                + "\n\n" + "\n".join(_lines)
+        except Exception as e:
+            mem.set_status(8, f"تحقّق المتطلّبات (تخطّي: {e})")
         # كتابة الملف الفعلي على القرص
         try:
             task.output_path = self._export(task)
