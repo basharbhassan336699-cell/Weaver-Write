@@ -5033,6 +5033,108 @@ class WeaverOrchestrator:
         text = re.sub(r"[\(\[]\s*(?:ص|p)\s*\.?\s*[XxNn؟\?]+\s*[\)\]]", "", text)
         return text
 
+    def _expand_draft_to_length(self, draft, target_words, lang="ar"):
+        """WIRING 3 helper — ask the model to EXPAND an under-length draft to the
+        target word count, adding depth within the EXISTING sections. Returns the
+        expanded text only when it genuinely grew AND preserved the structure
+        (headings kept, any table kept, language kept); otherwise None so the
+        original draft is left untouched. Never truncates, never raises."""
+        if not self.llm_fn or not (draft or "").strip() or not target_words:
+            return None
+        import os
+        cur = _vr_words(draft)
+        if cur >= target_words * 0.95:
+            return None
+        try:
+            _mt = int(os.environ.get("WEAVER_RICH_MAXTOK", "8000") or 8000)
+        except Exception:
+            _mt = 8000
+        heads_before = len(_vr_headings(draft))
+        had_table = _vr_has_table(draft)
+        if lang == "en":
+            prompt = (
+                f"Expand the following document to at least ~{target_words} words "
+                "by adding analytical depth, detail and examples WITHIN the "
+                "existing sections. Do not delete any existing content, do not "
+                "remove or rename headings, and keep every table and the language "
+                "intact. Return the full expanded Markdown only:\n\n" + draft)
+        else:
+            prompt = (
+                f"وسّع المستند التالي ليبلغ نحو {target_words} كلمة على الأقل، "
+                "بإضافة عمقٍ تحليليّ وتفصيلٍ وأمثلةٍ ضمن الأقسام القائمة. لا تحذف "
+                "أيّ محتوى موجود، ولا تحذف العناوين أو تُعِد تسميتها، وحافظ على "
+                "الجداول واللغة العربية كما هي. أعِد النصّ الكامل الموسَّع بصيغة "
+                "ماركداون فقط:\n\n" + draft)
+        try:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.3, max_tokens=_mt) or ""
+        except TypeError:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.3) or ""
+        out = (out or "").strip()
+        # strip a wrapping ```markdown fence if present
+        if out.startswith("```"):
+            out = out.split("\n", 1)[-1] if "\n" in out else ""
+            if out.rstrip().endswith("```"):
+                out = out.rstrip()[:-3]
+        out = out.strip()
+        # GUARDS: accept only a real, structure-preserving expansion
+        if (_vr_words(out) > cur
+                and len(_vr_headings(out)) >= heads_before
+                and (not had_table or _vr_has_table(out))
+                and (lang == "en" or _vr_arabic_ratio(out) >= 0.6)):
+            return out
+        return None
+
+    def _repair_requirements(self, task, unmet, reqs):
+        """WIRING 3 — attempt SAFE, targeted repairs for unmet MUST requirements.
+        Only high-confidence fixes are made; anything riskier is left for the
+        honest note. Returns True if it changed anything. Never raises.
+          • cover / TOC → set the card flag the export builder reads (the model's
+            checklist caught what the keyword detectors missed).
+          • length too short → expand the draft (guarded; reverts on any doubt).
+        Structure counts, missing tables, and content/style judgements are NOT
+        auto-rewritten here — they are reported, not silently patched."""
+        card = task.task_card or {}
+        lang = card.get("language", "ar") or "ar"
+        by_id = {r.get("id"): r for r in (reqs or []) if isinstance(r, dict)}
+        fixed = False
+        for x in unmet:
+            req = by_id.get(x.get("id")) or x
+            kind = req.get("kind")
+            text = (req.get("text") or "").lower()
+            if kind == "insert":
+                if (any(k in text for k in ("غلاف", "cover", "عنوان",
+                                            "title")) and not card.get("cover")):
+                    card["cover"] = True
+                    fixed = True
+                    continue
+                if (any(k in text for k in ("فهرس", "محتويات", "toc",
+                                            "contents", "index"))
+                        and not card.get("toc")):
+                    card["toc"] = True
+                    fixed = True
+                    continue
+            if kind == "length":
+                import os
+                pt = _vr_page_target(req)
+                if pt:
+                    try:
+                        wpp = int(os.environ.get("WEAVER_WORDS_PER_PAGE",
+                                                 "300") or 300)
+                    except Exception:
+                        wpp = 300
+                    tgt = pt * wpp
+                else:
+                    tgt = req.get("target") if isinstance(
+                        req.get("target"), int) else None
+                if tgt:
+                    exp = self._expand_draft_to_length(task.draft, tgt, lang)
+                    if exp:
+                        task.draft = exp
+                        fixed = True
+        return fixed
+
     async def _layer_8(self, task: Task, mem: TaskMemory):
         """٨: الإخراج — كتابة الملف النهائي على القرص في outputs/."""
         task.status = TaskStatus.LAYER_8
@@ -5065,20 +5167,45 @@ class WeaverOrchestrator:
                 mem.add_reference(f"[تقرير التحقق]\n{verify_text}", source_key="layer_8")
         except Exception:
             pass
-        # ── STAGE (ج) WIRING 1 — VERIFY REQUIREMENTS (report only) ──
-        # Check the finished draft against the requirements checklist and record
-        # the result. It does NOT block export or repair anything yet (those are
-        # separate, explicitly-approved wiring steps). When a MUST requirement is
-        # not confirmed met, it appends ONE honest, plain-text note listing what
-        # is missing — so nothing is ever silently dropped — and always logs the
-        # summary to the status line. Fully guarded and additive.
+        # ── STAGE (ج) WIRING 3 — VERIFY → BOUNDED REPAIR → RE-VERIFY ──
+        # Verify the finished draft against the requirements checklist; when a
+        # MUST requirement isn't confirmed met, attempt SAFE targeted repairs
+        # (_repair_requirements) and re-verify, up to WEAVER_REPAIR_ROUNDS passes
+        # (default 1). Export is NEVER blocked: after the budget is spent, any
+        # still-unmet MUST requirement is reported in ONE honest plain-text note —
+        # nothing is silently dropped, and no work is discarded. Fully guarded.
         try:
             _reqs = (task.task_card or {}).get("requirements")
             if _reqs and (task.draft or "").strip():
+                import os as _os
+                try:
+                    _rounds = int(_os.environ.get("WEAVER_REPAIR_ROUNDS",
+                                                  "1") or 1)
+                except Exception:
+                    _rounds = 1
+                _rounds = max(0, min(_rounds, 3))
+                _lang = task.task_card.get("language", "ar")
                 _rep = verify_requirements(
-                    _reqs, task.draft, card=task.task_card,
-                    lang=task.task_card.get("language", "ar"),
+                    _reqs, task.draft, card=task.task_card, lang=_lang,
                     llm_fn=self.llm_fn, system=self.system_main)
+                _done = 0
+                while (_rep and not _rep.get("all_met") and _done < _rounds):
+                    _unmet = [x for x in _rep.get("results", [])
+                              if x.get("must") and x.get("status") != "met"]
+                    if not _unmet:
+                        break
+                    try:
+                        _changed = self._repair_requirements(
+                            task, _unmet, _reqs)
+                    except Exception:
+                        _changed = False
+                    if not _changed:
+                        break            # nothing safe left to fix → stop
+                    mem.set_status(8, f"إصلاح متطلّبات (جولة {_done + 1})")
+                    _rep = verify_requirements(
+                        _reqs, task.draft, card=task.task_card, lang=_lang,
+                        llm_fn=self.llm_fn, system=self.system_main)
+                    _done += 1
                 if _rep:
                     task.task_card["verification"] = _rep
                     mem.set_status(8, _rep.get("summary", "تحقّق المتطلّبات"))
@@ -5086,7 +5213,7 @@ class WeaverOrchestrator:
                         _miss = [x for x in _rep.get("results", [])
                                  if x.get("must") and x.get("status") != "met"]
                         if _miss:
-                            _en = (task.task_card.get("language") == "en")
+                            _en = (_lang == "en")
                             _hdr = ("Verification note (unconfirmed requirements):"
                                     if _en else
                                     "ملاحظة تحقّق (متطلّبات لم تتأكّد):")
@@ -5098,7 +5225,7 @@ class WeaverOrchestrator:
                             task.draft = (task.draft or "").rstrip() \
                                 + "\n\n" + "\n".join(_lines)
         except Exception as e:
-            mem.set_status(8, f"تحقّق المتطلّبات (تخطّي: {e})")
+            mem.set_status(8, f"تحقّق/إصلاح المتطلّبات (تخطّي: {e})")
         # كتابة الملف الفعلي على القرص
         try:
             task.output_path = self._export(task)
