@@ -83,7 +83,7 @@ def verify_integrity(original: str, rewritten: str) -> dict:
     }
 
 
-def humanize_text(text: str, seed: int = 42, general_rate: float = 0.25, file_type: str = "docx") -> dict:
+def humanize_text(text: str, seed: int = 42, general_rate: float = 0.0, file_type: str = "docx") -> dict:
     """
     Full Arabic humanization pass:
       1) protect citations (placeholder tokens),
