@@ -4084,6 +4084,21 @@ class WeaverOrchestrator:
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
                     system = _p.SYSTEM_PROMPT_WRITE
+                # style director: a SHORT, model-DECIDED style directive
+                # (narrative/bullet mixing by info nature, human academic voice,
+                # employed questions, non-standard closing) appended like the
+                # depth/Islamic directives below. Guarded + toggleable: any miss
+                # → no block, writing unchanged. It describes WHEN, never forces.
+                if os.environ.get("WEAVER_STYLE_DIRECTOR", "1").strip().lower() \
+                        not in ("0", "false", "off", "no"):
+                    try:
+                        _sb = self._skill_call(
+                            "style_director", "style_directives",
+                            "build_style_block", card, section_name, lang)
+                        if _sb:
+                            prompt = prompt + "\n\n" + _sb
+                    except Exception:
+                        pass
                 # adapt depth/length + temperature to the model's ceiling
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
                 if _depth:
