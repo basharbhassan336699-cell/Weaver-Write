@@ -5274,6 +5274,24 @@ def _content_to_slides(llm_fn, content, lang="ar"):
             "{\"slides\":[{\"title\":\"short\",\"bullets\":[\"point\",...]}]} — "
             "concise titles, 3-6 short bullets each, nothing outside JSON:\n\n"
         ) + (content or "")[:9000]
+        # academic_content: inject scholarly slide-structure guidance for an
+        # academic deck (problem→methods→results→discussion + slide-type rules).
+        # Same knowledge the creative deck path already uses — here it reaches the
+        # convert-to-pptx path too. Guarded: any miss → prompt unchanged.
+        try:
+            import os as _os
+            _sp = _os.path.abspath(_os.path.join(
+                _os.path.dirname(__file__), "..", "capabilities", "skills",
+                "academic_content", "scripts"))
+            import sys as _sys
+            if _sp not in _sys.path:
+                _sys.path.insert(0, _sp)
+            import academic_content as _ac
+            _g = _ac.build_guidance((content or "")[:400], lang)
+            if _g:
+                prompt = prompt + "\n" + _g
+        except Exception:
+            pass
         data = extract_json(llm_fn(prompt, temperature=0.3)) or {}
         slides = data.get("slides") or []
         out = []
