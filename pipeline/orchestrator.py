@@ -5888,6 +5888,278 @@ def extract_requirements(conversation, request, attachments=None, llm_fn=None,
         return None
 
 
+# ── STAGE (ج): VERIFY ────────────────────────────────────────────────────────
+# The verifier takes the requirements checklist from extract_requirements and the
+# PRODUCED output, and reports — requirement by requirement — what was actually
+# delivered, BEFORE export. Design: measure what can be measured EXACTLY (word/
+# page count, a table's presence, cover/TOC flags, output language) with no model
+# at all (so it behaves identically with ANY model), and let the model JUDGE only
+# what needs judgement (content, style, "the tables carry technical terms"). It
+# NEVER claims a requirement failed on a guess: when it cannot tell, it says
+# "unknown", so honest reporting is preserved and no genuine work is discarded.
+
+def _vr_words(text):
+    """Whitespace word count of the draft (a good proxy for both Arabic and
+    English length). Markdown markup counts too — a harmless over-count."""
+    import re
+    return len(re.findall(r"\S+", text or ""))
+
+
+def _vr_arabic_ratio(text):
+    """Fraction of letters that are Arabic — used to confirm output language."""
+    ar = other = 0
+    for ch in (text or ""):
+        if "؀" <= ch <= "ۿ":
+            ar += 1
+        elif ch.isalpha():
+            other += 1
+    tot = ar + other
+    return (ar / tot) if tot else 0.0
+
+
+def _vr_headings(text):
+    """Return the list of Markdown heading lines (without the leading #s)."""
+    import re
+    out = []
+    for line in (text or "").splitlines():
+        m = re.match(r"\s{0,3}(#{1,6})\s+(.*\S)\s*$", line)
+        if m:
+            out.append(m.group(2).strip())
+    return out
+
+
+def _vr_has_table(text):
+    """True when the draft contains a Markdown table (a separator row like
+    |---|---| is the reliable signal)."""
+    import re
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if s.count("|") >= 2 and re.match(r"^\|?\s*:?-{2,}", s.replace(" ", "")):
+            return True
+    # also accept a header row immediately followed by a separator
+    return bool(re.search(r"\n.*\|.*\n\s*\|?\s*:?-{2,}", "\n" + (text or "")))
+
+
+def _vr_page_target(req):
+    """If a length requirement is expressed in PAGES, return that page count,
+    else None. Reads the requirement text + target; never guesses a topic."""
+    t = (req.get("text") or "").lower()
+    is_pages = any(k in t for k in ("صفح", "page"))
+    tgt = req.get("target")
+    if is_pages and isinstance(tgt, int):
+        return tgt
+    return None
+
+
+def _verify_deterministic(req, draft, card, lang):
+    """Try to settle ONE requirement by exact measurement. Returns
+    (status, evidence) with status in {"met","unmet","unknown"}, or None when
+    this requirement isn't deterministically checkable (→ defer to the model).
+    Conservative: returns "unknown" instead of "unmet" whenever unsure, so we
+    never wrongly report a delivered requirement as missing."""
+    import os
+    kind = req.get("kind")
+    text = (req.get("text") or "").lower()
+    card = card or {}
+
+    # ── length: words or pages ──
+    if kind == "length":
+        words = _vr_words(draft)
+        pages_tgt = _vr_page_target(req)
+        if pages_tgt:
+            try:
+                wpp = int(os.environ.get("WEAVER_WORDS_PER_PAGE", "300") or 300)
+            except Exception:
+                wpp = 300
+            est_pages = words / max(1, wpp)
+            ev = f"~{est_pages:.1f} صفحة ({words} كلمة، {wpp}/صفحة) مقابل " \
+                 f"مطلوب ≥{pages_tgt}"
+            # "at least" semantics with a small tolerance
+            return (("met" if est_pages >= pages_tgt * 0.95 else "unmet"), ev)
+        tgt = req.get("target")
+        if isinstance(tgt, int):
+            ev = f"{words} كلمة مقابل مطلوب ≥{tgt}"
+            return (("met" if words >= tgt * 0.95 else "unmet"), ev)
+        return ("unknown", f"{words} كلمة (لا هدف رقمي محدّد)")
+
+    # ── language of the output ──
+    if kind == "language":
+        tgt = str(req.get("target") or "").lower()
+        want_ar = ("ar" in tgt or "عرب" in text)
+        want_en = ("en" in tgt or "انجل" in text or "إنجل" in text
+                   or "english" in text)
+        ratio = _vr_arabic_ratio(draft)
+        if want_ar:
+            return (("met" if ratio >= 0.6 else "unmet"),
+                    f"نسبة العربية {ratio:.0%}")
+        if want_en:
+            return (("met" if ratio <= 0.4 else "unmet"),
+                    f"نسبة العربية {ratio:.0%}")
+        return None
+
+    # ── inserts: cover / toc are card flags; table/references live in the draft ─
+    if kind == "insert":
+        if any(k in text for k in ("غلاف", "cover", "عنوان", "title page")):
+            v = card.get("cover")
+            if v:
+                return ("met", "علامة الغلاف مضبوطة في البطاقة")
+            return ("unknown" if "cover" not in card else "unmet",
+                    "لا علامة غلاف في البطاقة")
+        if any(k in text for k in ("فهرس", "محتويات", "toc",
+                                   "table of contents", "index")):
+            v = card.get("toc")
+            if v:
+                return ("met", "علامة الفهرس مضبوطة في البطاقة")
+            return ("unknown" if "toc" not in card else "unmet",
+                    "لا علامة فهرس في البطاقة")
+        if "جدول" in text or "table" in text:
+            # presence is deterministic; whether it holds the RIGHT content
+            # (e.g. technical terms) is a judgement → defer that part to model
+            if not _vr_has_table(draft):
+                return ("unmet", "لا جدول في المخرَج")
+            # a table exists but the requirement adds a content condition
+            if any(k in text for k in ("مصطلح", "تقني", "مقارنة", "term",
+                                       "technical", "comparison")):
+                return None            # let the model judge the table content
+            return ("met", "يوجد جدول في المخرَج")
+        if any(k in text for k in ("مراجع", "مصادر", "references",
+                                   "bibliography")):
+            heads = " ".join(_vr_headings(draft)).lower()
+            has = any(k in heads for k in ("مراجع", "مصادر", "references",
+                                           "bibliography"))
+            return (("met" if has else "unmet"),
+                    "قسم المراجع " + ("موجود" if has else "غير موجود"))
+        return None
+
+    # ── structure: count matching headings, but only for a simple "N X" ask ──
+    if kind == "structure":
+        tgt = req.get("target")
+        if isinstance(tgt, int) and "كل" not in text:   # not a per-section rule
+            # map the requirement wording (often a PLURAL like «مباحث») to the
+            # singular STEM that appears in the headings («المبحث الأول»).
+            groups = (
+                (("مبحث", "مباحث"), "مبحث"),
+                (("مطلب", "مطالب"), "مطلب"),
+                (("فصل", "فصول"), "فصل"),
+                (("باب", "أبواب", "ابواب"), "باب"),
+                (("section", "sections"), "section"),
+                (("chapter", "chapters"), "chapter"),
+            )
+            stem = None
+            for triggers, s in groups:
+                if any(k in text for k in triggers):
+                    stem = s
+                    break
+            if stem:
+                cnt = sum(1 for h in _vr_headings(draft) if stem in h.lower())
+                if cnt == 0:
+                    return None       # wording may differ from headings → model
+                return (("met" if cnt >= tgt else "unmet"),
+                        f"عدد العناوين المطابقة لـ«{stem}» = {cnt} مقابل {tgt}")
+        return None
+
+    return None
+
+
+def verify_requirements(requirements, draft, card=None, lang="ar", llm_fn=None,
+                        system=None):
+    """STAGE (ج) — verify the produced output against the requirements checklist.
+
+    `requirements`: the list from extract_requirements()["requirements"].
+    `draft`: the assembled document text (Markdown). `card`: the task card (for
+    cover/toc flags). Returns:
+      {"results":[{"id","text","kind","must","status","evidence","by"}],
+       "unmet":[ids of MUST requirements not confirmed met],
+       "all_met": bool,          # every MUST requirement is "met"
+       "summary": str}
+    status ∈ {"met","unmet","partial","unknown"}. Deterministic checks settle
+    what they can with NO model; the rest go to the model in ONE call. When the
+    model is unavailable those stay "unknown" (never a false "unmet"). Never
+    raises — returns None only when there are no requirements to check."""
+    reqs = [r for r in (requirements or []) if isinstance(r, dict)
+            and (r.get("text") or "").strip()]
+    if not reqs:
+        return None
+    draft = draft or ""
+    card = card or {}
+
+    results = []
+    to_model = []          # requirements needing the model's judgement
+    for r in reqs:
+        try:
+            det = _verify_deterministic(r, draft, card, lang)
+        except Exception:
+            det = None
+        if det is not None:
+            status, ev = det
+            results.append({"id": r.get("id"), "text": r.get("text"),
+                            "kind": r.get("kind"), "must": bool(r.get("must")),
+                            "status": status, "evidence": ev,
+                            "by": "deterministic"})
+        else:
+            to_model.append(r)
+
+    # ── model judgement for the remainder (content / style / conditional) ──
+    verdicts = {}
+    if to_model:
+        if llm_fn is None:
+            try:
+                from core.llm import get_llm_fn
+                llm_fn = get_llm_fn()
+            except Exception:
+                llm_fn = None
+        if llm_fn:
+            try:
+                import os
+                from core.llm import extract_json
+                try:
+                    _cap = int(os.environ.get("WEAVER_VERIFY_MAXCHARS",
+                                              "16000") or 16000)
+                except Exception:
+                    _cap = 16000
+                body = draft if len(draft) <= _cap else (
+                    draft[:_cap] + "\n\n[...المخرَج مقتطع للتحقّق...]")
+                items = "\n".join(
+                    f'- id={r.get("id")}: {r.get("text")}' for r in to_model)
+                prompt = (
+                    "أنت مدقّق متطلّبات. لكل متطلّبٍ في القائمة، احكم هل حقّقه "
+                    "النصُّ المُنتَج فعلاً. أعِد JSON فقط: "
+                    '{"results":[{"id":"..","status":"met|unmet|partial",'
+                    '"reason":"سببٌ قصير من النص"}]}\n'
+                    "لا تفترض؛ استند إلى ما هو موجودٌ في النص فعلاً. "
+                    "partial حين يتحقّق المتطلّب جزئياً فقط.\n\n"
+                    "المتطلّبات:\n" + items + "\n\nالنصُّ المُنتَج:\n" + body)
+                try:
+                    raw = llm_fn(prompt, system=system, temperature=0.0,
+                                 max_tokens=800, timeout=60) or ""
+                except TypeError:
+                    raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+                data = extract_json(raw) or {}
+                for it in (data.get("results") or []):
+                    if isinstance(it, dict) and it.get("id"):
+                        st = str(it.get("status", "")).lower().strip()
+                        if st not in ("met", "unmet", "partial"):
+                            st = "unknown"
+                        verdicts[str(it["id"])] = (
+                            st, str(it.get("reason", ""))[:200])
+            except Exception:
+                verdicts = {}
+    for r in to_model:
+        st, reason = verdicts.get(str(r.get("id")), ("unknown", "تعذّر الحكم"))
+        results.append({"id": r.get("id"), "text": r.get("text"),
+                        "kind": r.get("kind"), "must": bool(r.get("must")),
+                        "status": st, "evidence": reason, "by": "model"})
+
+    unmet = [x["id"] for x in results
+             if x["must"] and x["status"] != "met"]
+    all_met = not unmet
+    n_met = sum(1 for x in results if x["status"] == "met")
+    summary = (f"تحقّق {n_met}/{len(results)} من المتطلّبات؛ "
+               f"{'كل الإلزامية مُحقّقة' if all_met else str(len(unmet)) + ' إلزامي غير مؤكّد'}")
+    return {"results": results, "unmet": unmet, "all_met": all_met,
+            "summary": summary}
+
+
 def _content_to_chart(llm_fn, content, lang="ar"):
     """Ask the model to pull a small chartable series (labels + numeric values)
     from content. Returns a chart spec {"type","data":{"labels","values"},
