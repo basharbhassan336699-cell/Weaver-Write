@@ -5236,6 +5236,124 @@ class WeaverOrchestrator:
         return any(k in h for k in ("مراجع", "مصادر", "references", "works cited",
                                     "bibliography"))
 
+    # canonical source TYPES. Arabic scholarship separates these three, and the
+    # pipeline used to merge them all into one flat "قائمة المراجع":
+    #   primary   المصادر الأوّلية — original material the research works ON
+    #             (documents, manuscripts, sacred texts, laws, raw official data)
+    #   secondary المراجع — books/articles that ANALYSE the topic
+    #   study     الدراسات السابقة — prior academic studies on the same question
+    #   web       المواقع الإلكترونية — general web pages
+    _REF_TYPES = ("primary", "secondary", "study", "web")
+    _REF_GROUP_AR = {"primary": "أولاً: المصادر",
+                     "secondary": "ثانياً: المراجع",
+                     "study": "ثالثاً: الدراسات السابقة",
+                     "web": "رابعاً: المواقع الإلكترونية"}
+    _REF_GROUP_EN = {"primary": "Primary Sources", "secondary": "References",
+                     "study": "Previous Studies", "web": "Websites"}
+
+    def _classify_sources(self, sources, topic="", lang="ar"):
+        """THE MODEL labels each gathered source as a primary source, a
+        secondary reference, a prior study, or a web page — the distinction the
+        system could not make (everything landed in one «قائمة المراجع»).
+        Writes `ref_type` onto each source in place and returns True when at
+        least one label was applied. Never raises; no model → False → the flat
+        list is kept, so behaviour is unchanged."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items or not self.llm_fn:
+            return False
+        items = items[:40]
+        listing = []
+        for i, s in enumerate(items, 1):
+            bits = [str(s.get("title") or s.get("key") or "")[:120]]
+            if s.get("year"):
+                bits.append(str(s.get("year")))
+            if s.get("source"):
+                bits.append(str(s.get("source")))
+            if s.get("url"):
+                bits.append(str(s.get("url"))[:60])
+            listing.append(f"{i}. " + " | ".join(b for b in bits if b))
+        listing = "\n".join(listing)
+        if lang == "en":
+            prompt = ("Classify each item by its scholarly TYPE. Return JSON "
+                      'only: {"1":"primary|secondary|study|web", ...}\n'
+                      "primary = original material the research works on "
+                      "(documents, manuscripts, sacred texts, laws, raw official "
+                      "statistics); secondary = a book/article analysing the "
+                      "topic; study = a prior academic study (empirical paper, "
+                      "thesis) on the same question; web = a general web page or "
+                      "news site.\n\n"
+                      f"Topic: {topic}\n\n{listing}")
+        else:
+            prompt = ("صنّف كل عنصرٍ بحسب نوعه العلميّ. أعِد JSON فقط: "
+                      '{"1":"primary|secondary|study|web", ...}\n'
+                      "primary = مصدر أوّليّ يشتغل عليه البحث نفسه (وثائق، "
+                      "مخطوطات، نصوص مقدّسة، قوانين، إحصاءات رسمية خام)؛ "
+                      "secondary = مرجع (كتاب/مقال) يحلّل الموضوع؛ "
+                      "study = دراسة سابقة أكاديمية (بحث ميدانيّ، رسالة علمية) "
+                      "على السؤال نفسه؛ web = موقع إلكترونيّ عامّ أو خبريّ.\n\n"
+                      f"الموضوع: {topic}\n\n{listing}")
+        try:
+            from core.llm import extract_json
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.0, max_tokens=600,
+                                  timeout=45) or ""
+            except TypeError:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.0) or ""
+            data = extract_json(raw)
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        applied = 0
+        for i, s in enumerate(items, 1):
+            v = data.get(str(i)) or data.get(i)
+            v = str(v or "").strip().lower()
+            if v in self._REF_TYPES:
+                s["ref_type"] = v
+                applied += 1
+        return applied > 0
+
+    def _grouped_refs_body(self, sources, lang, skill, module, pq_refs, card):
+        """Build ONE bibliography body with the types separated by internal
+        sub-headings (the «قائمة المصادر والمراجع» layout of Arabic theses).
+        Kept as a single section on purpose: separate sections would collide
+        with a «الدراسات السابقة» chapter in the body and with the ref-heading
+        cleanup. Returns (heading, body) or None to fall back to the flat list."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items:
+            return None
+        if not any(s.get("ref_type") for s in items):
+            if not self._classify_sources(items, card.get("topic", ""), lang):
+                return None
+        groups = {t: [] for t in self._REF_TYPES}
+        for s in items:
+            groups.get(s.get("ref_type") or "secondary",
+                       groups["secondary"]).append(s)
+        present = [t for t in self._REF_TYPES if groups[t]]
+        if len(present) <= 1:
+            return None                  # only one kind → the flat list is right
+        names = self._REF_GROUP_EN if lang == "en" else self._REF_GROUP_AR
+        parts = []
+        for t in present:
+            try:
+                txt = self._skill_call(skill, module, "build_bibliography",
+                                       groups[t], lang, None)
+            except Exception:
+                txt = "\n".join(
+                    f"{i}. {(x.get('title') or '')} {(x.get('url') or '')}".strip()
+                    for i, x in enumerate(groups[t], 1))
+            if (txt or "").strip():
+                parts.append(f"{names[t]}\n{txt.strip()}")
+        if not parts:
+            return None
+        if pq_refs:
+            parts.append(str(pq_refs).strip())
+        head = ("قائمة المصادر والمراجع" if lang != "en"
+                else "Sources and References")
+        return head, "\n\n".join(parts)
+
     def _append_references(self, task: Task):
         """Build the full reference list from the retrieved sources via the
         citation-style skill (apa_formatter / mla_formatter) and put it as the
@@ -5262,6 +5380,25 @@ class WeaverOrchestrator:
         style = str(card.get("citation_style", "APA")).upper()
         skill = "mla_formatter" if style == "MLA" else "apa_formatter"
         module = "format_mla" if style == "MLA" else "format_apa"
+        # TYPE-AWARE list first: separate المصادر / المراجع / الدراسات السابقة /
+        # المواقع instead of merging them into one flat «قائمة المراجع». Falls
+        # back to the flat list below whenever the types can't be told apart.
+        try:
+            _grp = self._grouped_refs_body(sources, lang, skill, module,
+                                           pq_refs, card)
+        except Exception:
+            _grp = None
+        if _grp:
+            _ghead, _gbody = _grp
+            task.sections = [x for x in (task.sections or [])
+                             if not self._is_ref_heading(x.get("heading", ""))]
+            task.sections.append({"heading": _ghead, "body": _gbody,
+                                  "level": 1})
+            if task.draft:
+                task.draft = task.draft.rstrip() + "\n\n" + _ghead + "\n" \
+                    + _gbody
+            card["references_list"] = _gbody
+            return
         try:
             refs = self._skill_call(skill, module, "build_bibliography",
                                     sources, lang, pq_refs)
