@@ -3932,6 +3932,33 @@ class WeaverOrchestrator:
         return txt
 
     @staticmethod
+    def _trim_parent_bridge(body):
+        """A PARENT section (a مبحث followed by its مطالب) must be a short
+        bridge. Told that, a model still sometimes writes the whole chapter —
+        emitting its own "المطلب 3.1: …" sub-headings and their content inside
+        the bridge. The real مطالب are then written again as proper sections
+        with DIFFERENT (descriptive) titles, so every مطلب appeared twice under
+        two conflicting names.
+
+        Cut the body at the first line that reads as one of those invented
+        child headings. A genuine bridge never opens a line with
+        "المطلب 3.1:", so this cannot damage legitimate prose. Returns the body
+        unchanged when no such line exists."""
+        import re
+        if not body:
+            return body
+        lines = body.split("\n")
+        pat = re.compile(
+            r'^\s*(?:#{1,6}\s*)?(?:المبحث|المطلب|الفصل|المبحثُ|Section|'
+            r'Subsection|Chapter)\s*\d+(?:[.\-‑]\d+)*\s*[:：\-–]')
+        for i, ln in enumerate(lines):
+            if pat.match(ln.strip()):
+                kept = "\n".join(lines[:i]).strip()
+                # keep the trimmed bridge only if something real remains
+                return kept if kept else body
+        return body
+
+    @staticmethod
     def _promote_heading_from_body(title, body):
         """When an abstract structural heading ("المطلب 1.1") is followed by a
         body whose first line spells out the REAL title ("المطلب 1.1: مفهوم
@@ -4661,6 +4688,13 @@ class WeaverOrchestrator:
                 title, body = self._promote_heading_from_body(title, body)
             except Exception:
                 pass
+            # a PARENT (مبحث with مطالب under it) that wrote its own subsections
+            # inline → keep only the bridge, or every مطلب ships twice
+            if _is_parent:
+                try:
+                    body = self._trim_parent_bridge(body)
+                except Exception:
+                    pass
             body = self._clean_section_body(body, title)
             parts.append((f"{title}\n{body}").strip())
             # keep the plan's LEVEL (1=مبحث, 2=مطلب) so the exporter can
