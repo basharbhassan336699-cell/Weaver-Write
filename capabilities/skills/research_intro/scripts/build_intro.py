@@ -74,7 +74,7 @@ def build_intro(topic, references=None, length=400, lang="ar", llm_fn=None):
     per_section = max(50, length // len(sections))
 
     ref_block = "\n".join(
-        f"- ({r.get('key','?')}، ص. {r.get('page','?')}): {r.get('text','')[:120]}"
+        f"- ({r.get('key','?')}): {r.get('text','')[:120]}"
         if lang == "ar" else
         f"- ({r.get('key','?')}, p. {r.get('page','?')}): {r.get('text','')[:120]}"
         for r in references
@@ -92,7 +92,8 @@ def build_intro(topic, references=None, length=400, lang="ar", llm_fn=None):
     # LLM mode: write each section
     rules = (
         "اكتب بالعربية الأكاديمية الفصيحة. كل معلومة تحتاج استشهاداً توثّق بصيغة "
-        "(المؤلف، ص. X). لا تستخدم معلومات من خارج المراجع المعطاة. ابدأ "
+        "(المؤلف، السنة) بأسلوب APA — بالمؤلف والسنة فقط، لا بعنوان المرجع "
+        "ولا برقم صفحة. لا تستخدم معلومات من خارج المراجع المعطاة. ابدأ "
         "بالمحتوى مباشرةً ولا تُعِد كتابة عنوان القسم."
         if lang == "ar" else
         "Write in formal academic English. Every factual claim needs a citation "

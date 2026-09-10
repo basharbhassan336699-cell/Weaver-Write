@@ -402,6 +402,16 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
             _para(mb.group(1), style="List Bullet")
             i += 1
             continue
+        # NUMBERED list item ("1. …"). Without this, consecutive numbered lines
+        # were treated as Markdown soft-wrap and joined into ONE paragraph —
+        # which is what glued a whole 9-entry reference list into a single
+        # unreadable block.
+        mn = re.match(r"^\s*\d{1,3}[.)]\s+(.*)$", line)
+        if mn:
+            _flush()
+            _para(mn.group(1), style="List Number")
+            i += 1
+            continue
         # a whole table glued onto ONE line (rows joined by '||') → un-glue it
         _gt = _parse_glued_table(line)
         if _gt:

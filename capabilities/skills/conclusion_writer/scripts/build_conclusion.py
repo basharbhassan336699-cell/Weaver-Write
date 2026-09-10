@@ -50,13 +50,21 @@ def _strip_echoed_heading(text, heading):
     return t
 
 def build_conclusion(topic, main_findings=None, lang="ar", llm_fn=None,
-                     style_hint=None):
+                     style_hint=None, include=None):
     """Build a conclusion. main_findings: list[str]. llm_fn optional.
     style_hint (optional str): a closing-style directive applied to the FINAL
     sub-section only, so the conclusion ends with a non-standard touch instead
     of a formulaic close. None → behaviour unchanged (backward compatible)."""
     main_findings = main_findings or []
     sections = SECTIONS.get(lang, SECTIONS["en"])
+    # `include` (optional) selects WHICH sub-sections to write. The four were
+    # always imposed, so every document ended with recommendations and future
+    # research even when the user never asked for them. None → unchanged.
+    if include is not None:
+        _keep = {str(k).strip() for k in include}
+        _sel = [(h, g) for h, g in sections if h in _keep]
+        if _sel:
+            sections = _sel
     findings_block = "\n".join(f"- {f}" for f in main_findings) or (
         "لا نتائج مُدخلة" if lang == "ar" else "no findings provided")
 

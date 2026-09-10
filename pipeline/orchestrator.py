@@ -975,6 +975,60 @@ class WeaverOrchestrator:
             return "results"
         return None
 
+    @staticmethod
+    def _apa_key(s):
+        """An APA-style in-text key for a source: "المؤلف، 2024". Falls back to
+        a SHORT title fragment (never the full title) and finally to the year
+        alone. This is what the section writers put between brackets, so a bad
+        key turns into a citation that swallows a whole sentence."""
+        if not isinstance(s, dict):
+            return str(s)[:40]
+        year = str(s.get("year") or "").strip()
+        a = s.get("author") or s.get("authors")
+        if isinstance(a, (list, tuple)):
+            a = [str(x).strip() for x in a if str(x).strip()]
+            a = a[0] + (" وآخرون" if len(a) > 1 else "") if a else ""
+        a = (str(a).strip() if a else "")
+        if a:
+            return f"{a}، {year}" if year else a
+        t = (s.get("title") or s.get("key") or "").strip()
+        t = " ".join(t.split()[:4])            # keep it short, never a full title
+        if t:
+            return f"{t}، {year}" if year else t
+        return year or "مصدر"
+
+    @staticmethod
+    def _conclusion_parts(card, lang="ar"):
+        """Which conclusion sub-sections to write. Reads the REQUIREMENTS
+        checklist the model extracted (plus the request text) and returns the
+        headings to keep, or None to keep the default four. A summary and an
+        answer to the research question always belong in a conclusion;
+        recommendations and future-research are added ONLY when asked for."""
+        base_ar = ["ملخص النتائج", "الإجابة على سؤال البحث"]
+        base_en = ["Summary of Findings", "Answer to the Research Question"]
+        rec_ar, fut_ar = "التوصيات", "مقترحات للبحوث المستقبلية"
+        rec_en, fut_en = "Recommendations", "Future Research"
+        card = card or {}
+        blob = " ".join([
+            str(card.get("topic") or ""),
+            " ".join(str(r.get("text", "")) for r in (card.get("requirements")
+                                                      or [])
+                     if isinstance(r, dict)),
+        ]).lower()
+        if not blob.strip():
+            return None                    # no signal → unchanged behaviour
+        want_rec = any(k in blob for k in ("توصيات", "توصية",
+                                           "recommend"))
+        want_fut = any(k in blob for k in ("مقترحات", "بحوث مستقبلية",
+                                           "دراسات مستقبلية", "future research",
+                                           "further research"))
+        keep = list(base_en if lang == "en" else base_ar)
+        if want_rec:
+            keep.append(rec_en if lang == "en" else rec_ar)
+        if want_fut:
+            keep.append(fut_en if lang == "en" else fut_ar)
+        return keep
+
     def _write_section_specialized(self, title, card, lang, mode, no_ctx,
                                    prior_sections, prof):
         """Route a section to its purpose-built writer skill when the section
@@ -998,7 +1052,7 @@ class WeaverOrchestrator:
             for s in (card.get("sources") or [])[:12]:
                 if isinstance(s, dict):
                     refs.append({
-                        "key": s.get("key") or (s.get("title", "") or "")[:40],
+                        "key": self._apa_key(s),
                         "text": (s.get("content") or s.get("title", "") or "")[:160],
                         "page": s.get("page", "")})
             out = self._skill_call(
@@ -1025,9 +1079,18 @@ class WeaverOrchestrator:
                         "conclusion_directive", lang)
                 except Exception:
                     _hint = None
+            # Only write the conclusion parts the user actually asked for.
+            # All four ("ملخص النتائج"/"الإجابة"/"التوصيات"/"مقترحات") used to be
+            # imposed on every document, which is why recommendations and future
+            # research showed up unrequested (and twice).
+            _inc = None
+            try:
+                _inc = self._conclusion_parts(card, lang)
+            except Exception:
+                _inc = None
             out = self._skill_call(
                 "conclusion_writer", "build_conclusion", "build_conclusion",
-                topic, findings, lang, self.llm_fn, _hint)
+                topic, findings, lang, self.llm_fn, _hint, _inc)
             return (out or {}).get("text") or None
         if kind == "results" and mode != "none":
             out = self._skill_call(
@@ -1582,9 +1645,14 @@ class WeaverOrchestrator:
         """→ {'words': int|None, 'pages': int|None} from the request; None if
         unstated. Pages → estimated words (~500 words/academic page) when the
         word count itself isn't given. (tested)"""
-        import re
+        import os as _os, re
         if not text:
-            return {"words": None, "pages": None}
+            return {"words": None, "pages": None,
+                    "max_words": None, "max_pages": None}
+        try:
+            wpp = int(_os.environ.get("WEAVER_WORDS_PER_PAGE", "300") or 300)
+        except Exception:
+            wpp = 300
         words = pages = None
         m = re.search(r'(\d{2,6})\s*(?:كلمة|كلمات|words?|word)', text, re.I)
         if m:
@@ -1592,9 +1660,34 @@ class WeaverOrchestrator:
         m = re.search(r'(\d{1,4})\s*(?:صفحة|صفحات|pages?|page)', text, re.I)
         if m:
             pages = int(m.group(1))
+        # An explicit CEILING ("ولا يزيد عن 12 صفحة" / "at most 12 pages" /
+        # a "10-12" range) was never captured, so nothing ever stopped the
+        # expansion loop from overshooting it.
+        max_pages = max_words = None
+        mx = re.search(r'(?:لا\s*يزيد\s*(?:عن|على)|بحد\s*أقصى|حد\s*أقصى|'
+                       r'no\s*more\s*than|at\s*most|up\s*to|maximum\s*of)'
+                       r'\s*(\d{1,6})\s*(صفحة|صفحات|pages?|page|كلمة|كلمات|words?)?',
+                       text, re.I)
+        if mx:
+            n = int(mx.group(1))
+            unit = (mx.group(2) or "").lower()
+            if unit.startswith(("كلم", "word")):
+                max_words = n
+            else:
+                max_pages = n
+        if max_pages is None and max_words is None:
+            rng = re.search(r'(\d{1,4})\s*(?:-|–|إلى|الى|to)\s*(\d{1,4})\s*'
+                            r'(?:صفحة|صفحات|pages?|page)', text, re.I)
+            if rng:
+                pages = int(rng.group(1))       # the LOW end is the minimum
+                max_pages = int(rng.group(2))
+                words = None                    # recomputed from the low end
         if words is None and pages:
-            words = pages * 500
-        return {"words": words, "pages": pages}
+            words = pages * wpp
+        if max_words is None and max_pages:
+            max_words = max_pages * wpp
+        return {"words": words, "pages": pages,
+                "max_words": max_words, "max_pages": max_pages}
 
     @staticmethod
     def count_words(text):
@@ -3786,6 +3879,11 @@ class WeaverOrchestrator:
             return body
         b = body.lstrip()
         t = (title or "").strip()
+        # Strip leaked markdown heading markers FIRST. They used to be removed
+        # at the END, so a body opening with "## المطلب 2.2: …" never matched the
+        # duplicate-heading test below (it starts with "#", not with the title),
+        # and the heading survived — printing twice under its own heading.
+        b = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', b).lstrip()
         # strip a leading duplicate of the heading ONLY when it reads as a
         # heading (title then ":"/"："/line-break/end) — never when the title
         # naturally opens the first sentence (e.g. "التركيب … هو الوحدة …").
@@ -4208,8 +4306,12 @@ class WeaverOrchestrator:
                 if isinstance(s, dict):
                     _t = s.get("title") or ""
                     _c = (s.get("content") or "")[:200]
-                    _k = s.get("key") or s.get("doi") or ""
                     _u = s.get("url") or ""
+                    # Label each source with an APA-style (author، year) key.
+                    # It used to fall back to the TITLE, so the model cited
+                    # whole titles mid-sentence — "(تأثير منصات وأدوات الذكاء
+                    # الاصطناعي على التعليم المعماري، ص. )" — with an empty page.
+                    _k = self._apa_key(s)
                     _line = f"[{_k}] {_t} — {_c} ({_u})".strip()
                     if _line.strip("[] —()"):
                         _lines.append(_line)
@@ -4458,6 +4560,8 @@ class WeaverOrchestrator:
         if card.get("want_table"):
             try:
                 tbl = _content_to_table(self.llm_fn, content, lang)
+                if tbl and self._is_outline_dump(tbl):
+                    tbl = None          # a summary of the paper, not a table
                 if tbl and tbl.get("headers") and tbl.get("rows"):
                     md = self._skill_call("table_builder", "make_table",
                                           "make_table", tbl["headers"],
@@ -4551,6 +4655,12 @@ class WeaverOrchestrator:
             if tw:
                 actual = self.count_words(task.draft or "")
                 lo, hi = int(tw * 0.9), int(tw * 1.15)
+                # An explicit ceiling ("لا يزيد عن 12 صفحة") must stop the
+                # expansion loop: it only ever grew the text, so a document
+                # already past the ceiling kept growing (20.5 pages vs 12).
+                _max_w = target.get("max_words")
+                if _max_w and actual >= int(_max_w * 0.95):
+                    lo = 0
                 if actual < lo and self.llm_fn:
                     # النص أقصر من المطلوب → وسّع أضعف الأقسام (الأقصر)
                     deficit = tw - actual
@@ -5380,6 +5490,21 @@ class WeaverOrchestrator:
                 else "Sources and References")
         return head, "\n\n".join(parts)
 
+    @staticmethod
+    def _draft_from_sections(task):
+        """Rebuild the chat draft from task.sections — the single source of
+        truth the exported file is built from. Used after the reference list is
+        rewritten, so the web view and the document can never show different
+        (or duplicated) reference lists."""
+        parts = []
+        for s in (task.sections or []):
+            h = (s.get("heading") or "").strip()
+            b = (s.get("body") or "").strip()
+            if not (h or b):
+                continue
+            parts.append((f"## {h}\n\n{b}" if h and b else (h or b)))
+        return "\n\n".join(parts).strip() or (task.draft or "")
+
     def _append_references(self, task: Task):
         """Build the full reference list from the retrieved sources via the
         citation-style skill (apa_formatter / mla_formatter) and put it as the
@@ -5420,9 +5545,13 @@ class WeaverOrchestrator:
                              if not self._is_ref_heading(x.get("heading", ""))]
             task.sections.append({"heading": _ghead, "body": _gbody,
                                   "level": 1})
+            # Rebuild the chat draft FROM the sections. Appending to the old
+            # draft left the writer's own reference block in the web view (and
+            # only there), so the page showed TWO differently-formatted lists
+            # while the exported file showed one. Now both render the same
+            # sections.
             if task.draft:
-                task.draft = task.draft.rstrip() + "\n\n" + _ghead + "\n" \
-                    + _gbody
+                task.draft = self._draft_from_sections(task)
             card["references_list"] = _gbody
             return
         try:
@@ -5445,9 +5574,10 @@ class WeaverOrchestrator:
         task.sections = [s for s in (task.sections or [])
                          if not self._is_ref_heading(s.get("heading", ""))]
         task.sections.append({"heading": head, "body": refs})
-        # also reflect it at the end of the chat draft
+        # rebuild the chat draft from the sections (see note above) so the web
+        # view and the exported document never diverge.
         if task.draft:
-            task.draft = task.draft.rstrip() + "\n\n" + head + "\n" + refs
+            task.draft = self._draft_from_sections(task)
         card["references_list"] = refs
 
     @staticmethod
@@ -5518,6 +5648,24 @@ class WeaverOrchestrator:
                 and (lang == "en" or _vr_arabic_ratio(out) >= 0.6)):
             return out
         return None
+
+    @staticmethod
+    def _is_outline_dump(tbl):
+        """True when a generated "table" is really the document's own outline
+        re-tabulated (rows like «المقدمة - خلفية الموضوع» / «المبحث 1 - المطلب
+        الأول»). One run produced a 15-row «جدول توضيحي» that repeated the whole
+        research instead of presenting data, so such tables are rejected."""
+        rows = (tbl or {}).get("rows") or []
+        if len(rows) < 3:
+            return False
+        marks = ("المقدمة", "المبحث", "المطلب", "الخاتمة", "التوصيات",
+                 "Introduction", "Section", "Conclusion")
+        hits = 0
+        for r in rows:
+            first = str((r or [""])[0])
+            if any(m in first for m in marks):
+                hits += 1
+        return hits >= max(2, len(rows) // 2)
 
     def _generate_table(self, task, req, lang="ar"):
         """WIRING 3 helper — produce a REAL Markdown table for an unmet table
