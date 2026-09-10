@@ -33,11 +33,21 @@ def format_apa_book(author, year, title, publisher):
     return f"{author} ({year}). *{title}*. {publisher}."
 
 
-def format_apa_website(title, url="", year=None, site=None):
-    """APA 7th for a web page / online source."""
+def format_apa_website(title, url="", year=None, site=None, author=None):
+    """APA 7th for a web page / online source.
+
+    `author` is optional and NEW: this used to take no author at all, so a
+    source with a known author but no journal/publisher silently lost it and
+    was rendered as a bare "Title (year). URL" — which is why lists came out
+    unformatted even after the author was successfully retrieved.
+    APA 7th: Author, A. A. (Year). Title. Site. URL
+    """
+    a = (str(author).strip() if author else "")
     y = f" ({year})." if year else "."
     s = f" *{site}*." if site else ""
     u = f" {url}" if url else ""
+    if a:
+        return f"{a}{y} {title}.{s}{u}".strip()
     return f"{title}{y}{s}{u}".strip()
 
 
@@ -87,7 +97,7 @@ def build_bibliography(sources, lang="ar", extra=None):
                                            s["publisher"]))
         else:
             entries.append(format_apa_website(title, s.get("url", ""), year,
-                                              s.get("site")))
+                                              s.get("site"), author))
     # de-dup then sort
     seen, uniq = set(), []
     for e in entries:

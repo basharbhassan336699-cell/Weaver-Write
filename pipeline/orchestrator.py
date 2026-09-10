@@ -501,6 +501,100 @@ class WeaverOrchestrator:
             "find data", "gather data", "data about", "statistics about",
             "numbers about", "extract data", "data from"))
 
+    # documentation styles the pipeline can actually format. These are proper
+    # NOUNS the user types literally ("APA"), not something to be inferred, so
+    # matching them by name is exact — not the keyword-guessing we removed.
+    _CITATION_STYLES = {
+        "APA": ("apa", "أيه بي أيه", "ابا"),
+        "MLA": ("mla", "إم إل إيه"),
+        "CHICAGO": ("chicago", "شيكاغو"),
+        "HARVARD": ("harvard", "هارفارد"),
+        "IEEE": ("ieee", "آي تريبل إي"),
+        "VANCOUVER": ("vancouver", "فانكوفر"),
+    }
+
+    @classmethod
+    def _enrich_sources_for_citation(cls, sources, timeout=8, cap=10):
+        """Fill in real authors/year/journal for sources that carry a DOI, by
+        asking Crossref. Runs ONLY when the user asked for a documentation
+        style — a proper APA/MLA entry cannot be built from {title, url}, which
+        is all a web result carries. Bounded (cap + short timeout), fully
+        guarded, and it never overwrites a field that is already known.
+        Returns how many sources were enriched."""
+        import json as _json
+        done = 0
+        for s in (sources or []):
+            if done >= cap:
+                break
+            if not isinstance(s, dict) or s.get("authors") or s.get("author"):
+                continue
+            doi = str(s.get("doi") or "").strip()
+            if not doi:
+                continue
+            try:
+                raw = cls._http_get(
+                    "https://api.crossref.org/works/"
+                    + doi.replace(" ", ""),
+                    {"User-Agent": cls._ACAD_UA, "Accept": "application/json"},
+                    timeout)
+                msg = (_json.loads(raw) or {}).get("message") or {} if raw else {}
+            except Exception:
+                continue
+            if not msg:
+                continue
+            auths = []
+            for a in (msg.get("author") or [])[:6]:
+                nm = " ".join(x for x in (a.get("family"), a.get("given")) if x)
+                if nm.strip():
+                    auths.append(nm.strip())
+            if auths:
+                s["authors"] = auths
+            yr = ((msg.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+            if yr and not s.get("year"):
+                s["year"] = str(yr)
+            ct = msg.get("container-title") or []
+            if ct and not s.get("venue"):
+                s["venue"] = ct[0]
+            done += 1
+        return done
+
+    @staticmethod
+    def _enrich_source(s):
+        """Mine a gathered source for the metadata a citation style needs.
+        Deterministic and offline: pulls a DOI out of the URL (…/10.21608/…),
+        a 4-digit year out of the DOI/URL/title, and leaves everything else
+        untouched. Never raises; unknown fields are simply absent."""
+        import re
+        if not isinstance(s, dict):
+            return s
+        url = str(s.get("url") or "")
+        title = str(s.get("title") or "")
+        if not s.get("doi"):
+            m = re.search(r'(10\.\d{4,9}/[^\s"\'<>?#]+)', url)
+            if m:
+                s["doi"] = m.group(1).rstrip('.,);')
+        if not s.get("year"):
+            # a year inside the DOI path ("…/mjaf.2024.259661") or the URL/title
+            for cand in (str(s.get("doi") or ""), url, title):
+                m = re.search(r'(?<!\d)(19[5-9]\d|20[0-4]\d)(?!\d)', cand)
+                if m:
+                    s["year"] = m.group(1)
+                    break
+        return s
+
+    @classmethod
+    def _requested_citation_style(cls, text):
+        """The documentation style the user asked for by NAME, or None.
+        Nothing ever extracted this from the request: citation_style was only
+        set by the layer-3 card (when the model happened to fill it in), so the
+        writing prompt received an EMPTY "Citation style:" line and the writer
+        invented its own citation format."""
+        t = " " + (text or "").lower() + " "
+        for style, names in cls._CITATION_STYLES.items():
+            if any(n in t for n in names):
+                return style
+        return None
+
     @staticmethod
     def _wants_cover(text):
         """True when the user explicitly asks for a cover / title page."""
@@ -1988,6 +2082,15 @@ class WeaverOrchestrator:
         # honoured even if the model didn't surface it in the card.
         task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
 
+        # documentation style named in the request (APA/MLA/…) — explicit wins.
+        # Without this the writer was handed a blank "Citation style:".
+        try:
+            _cs = self._requested_citation_style(task.description)
+            if _cs:
+                task.task_card["citation_style"] = _cs
+        except Exception:
+            pass
+
         # scope that LIMITS the task: references-only / outline-only / part-only.
         _cur_req = self._current_request(task.description)
         task.task_card["scope"] = self._task_scope(_cur_req)
@@ -3393,6 +3496,18 @@ class WeaverOrchestrator:
                                 "alternative": r.get("alternative")})
         task.task_card["sources"] = kept
         task.task_card["credibility"] = {"kept": len(kept), "dropped": dropped}
+        # A documentation style needs author/year — which a web result never
+        # carries. When the user named a style, look the DOI up so the list can
+        # actually be formatted in it. Guarded and bounded; a miss changes
+        # nothing.
+        try:
+            _cs = str(task.task_card.get("citation_style", "")).upper()
+            if _cs and _cs not in ("", "UNSPECIFIED", "NONE"):
+                _n = self._enrich_sources_for_citation(kept)
+                if _n:
+                    mem.set_status(5, f"إثراء بيانات التوثيق: {_n} مصدر")
+        except Exception as e:
+            mem.set_status(5, f"إثراء التوثيق (تخطّي: {e})")
         mem.set_status(5, f"مصداقية: قُبل {len(kept)}، رُفض {len(dropped)}")
 
     def _descriptive_titles(self, topic, sections_plan, lang):
@@ -4406,7 +4521,8 @@ class WeaverOrchestrator:
                 else:
                     prompt = _p.PROMPT_LAYER_6_WRITE.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        citation_style=card.get("citation_style", ""),
+                        citation_style=(card.get("citation_style")
+                                        or "APA (author, year)"),
                         length=card.get("page_count", ""),
                         rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     # dedicated WRITING system prompt: forbids clarifying
@@ -5538,6 +5654,51 @@ class WeaverOrchestrator:
                 else "Sources and References")
         return head, "\n\n".join(parts)
 
+    @classmethod
+    def _cited_sources(cls, draft, sources):
+        """Keep only the sources the text ACTUALLY cites — the rule APA itself
+        states (a reference list lists what was cited, nothing more). The list
+        used to be built from every gathered source while the citations came
+        from whatever the writer used, so the two never matched.
+
+        A source counts as cited when its author surname, its DOI, its URL, or a
+        distinctive fragment of its title appears in the draft. SAFETY: if that
+        finds (almost) nothing — a writer that cited nothing, or an unreadable
+        style — the full list is returned unchanged, so a real bibliography is
+        never silently emptied."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        text = (draft or "")
+        if not items or not text.strip():
+            return sources
+        low = text.lower()
+
+        def _hit(s):
+            for key in ("doi", "url"):
+                v = str(s.get(key) or "").strip().lower()
+                if v and v in low:
+                    return True
+            a = s.get("authors") or s.get("author")
+            if isinstance(a, (list, tuple)):
+                a = a[0] if a else ""
+            a = str(a or "").strip()
+            if a:
+                # surname alone is enough: "الشلغصي، وليد" → "الشلغصي"
+                sur = a.replace("،", ",").split(",")[0].strip()
+                if len(sur) >= 3 and sur.lower() in low:
+                    return True
+            t = " ".join(str(s.get("title") or "").split())
+            if len(t) >= 12:
+                frag = " ".join(t.split()[:4]).lower()
+                if len(frag) >= 10 and frag in low:
+                    return True
+            return False
+
+        cited = [s for s in items if _hit(s)]
+        # never ship an empty (or near-empty) bibliography on a weak match
+        if len(cited) < max(1, len(items) // 4):
+            return sources
+        return cited
+
     @staticmethod
     def _draft_from_sections(task):
         """Rebuild the chat draft from task.sections — the single source of
@@ -5571,6 +5732,12 @@ class WeaverOrchestrator:
             _strip_fabricated_refs()
             return
         sources = card.get("sources") or []
+        # APA/MLA list ONLY what the text cites — see _cited_sources (falls back
+        # to the full list when citations can't be matched).
+        try:
+            sources = self._cited_sources(task.draft, sources)
+        except Exception:
+            pass
         pq_refs = (card.get("paperqa_result") or {}).get("references")
         if not sources and not pq_refs:
             _strip_fabricated_refs()
@@ -7207,7 +7374,15 @@ def quick_live_context_ex(msg, lang="ar", max_chars=6000):
                 # source; sources are collected in the SAME order.
                 lines.append(f"[{n}] {title} — {snip} ({url})")
                 if url:
-                    sources.append({"title": title, "url": url})
+                    # Keep the snippet and mine the URL/title for a DOI and a
+                    # year. This used to store {title, url} ONLY — throwing away
+                    # the snippet it had just read and ignoring the DOI sitting
+                    # inside the URL — which left every web source without the
+                    # author/year that APA (or any style) needs.
+                    sources.append(
+                        WeaverOrchestrator._enrich_source({
+                            "title": title, "url": url,
+                            "content": snip, "source": "web"}))
                 n += 1
             if lines:
                 _hdr = ("[نتائج بحث حيّة مرقّمة، الأحدث أولاً]" if _recency
