@@ -3414,7 +3414,15 @@ class WeaverOrchestrator:
             return sections_plan
         plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
         for k, (idx, role) in enumerate(slots):
-            plan[idx]["title"] = got[k]
+            # keep the structural label ("المبحث 1") in front of the descriptive
+            # title, the way an Arabic thesis numbers its sections — dropping it
+            # lost the numbering the user explicitly asked for.
+            _orig = (sections_plan[idx].get("title")
+                     or sections_plan[idx].get("heading") or "").strip()
+            _new = got[k]
+            plan[idx]["title"] = (f"{_orig}: {_new}"
+                                  if _orig and not _new.startswith(_orig)
+                                  else _new)
         return plan
 
     def _rich_outline_chunked(self, topic, card, lang, context=""):
@@ -4085,6 +4093,11 @@ class WeaverOrchestrator:
             sections_plan = self._counted_structure(
                 lang, self._as_int(_mc, 1) or 1, self._as_int(card.get("matlab_count"), 0) or 0)
             card["sections"] = sections_plan
+            # the counted plan REPLACED whatever the model had designed, so its
+            # titles are the abstract "المبحث 1"/"المطلب 1.1" slots again. Clear
+            # the "model" provenance, otherwise the descriptive-naming step
+            # below skips them and every مبحث ships without a real title.
+            card["structure_source"] = "counted"
             mem.set_status(6, f"بنية بالطلب: {_mc} مبحث × "
                            f"{card.get('matlab_count') or 0} مطلب")
 
@@ -4451,8 +4464,21 @@ class WeaverOrchestrator:
                                           tbl["rows"], lang=lang)
                     head = "جدول توضيحي" if lang == "ar" else "Table"
                     if md:
-                        task.sections = (task.sections or []) + [
-                            {"heading": head, "body": md}]
+                        # place it BEFORE the conclusion/references rather than
+                        # tacking it on at the very end, where it read as an
+                        # unrelated block bolted onto the document.
+                        _secs = task.sections or []
+                        _at = len(_secs)
+                        for _i, _s in enumerate(_secs):
+                            _h = (_s.get("heading") or "")
+                            if self._is_ref_heading(_h) or any(
+                                    w in _h for w in ("الخاتمة", "خاتمة",
+                                                      "Conclusion")):
+                                _at = _i
+                                break
+                        _secs.insert(_at, {"heading": head, "body": md,
+                                           "level": 1})
+                        task.sections = _secs
                         task.draft = (task.draft or "") + f"\n\n## {head}\n\n{md}"
                         mem.set_status(6, "أُدرج جدول من المحتوى")
             except Exception as e:

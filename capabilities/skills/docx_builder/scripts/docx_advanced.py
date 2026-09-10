@@ -445,6 +445,11 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     sec = doc.sections[0]
 
     # ── cover page (mandatory unless suppressed) + TOC placement ──
+    # Track what the front-matter path adds, so the LEGACY title/TOC blocks
+    # below don't add a SECOND cover and a SECOND table of contents (which is
+    # what produced a duplicated cover plus blank pages after it).
+    _fm_cover = False
+    _fm_toc = False
     try:
         import sys, os
         here = os.path.dirname(os.path.abspath(__file__))
@@ -454,6 +459,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                                       should_add_cover, resolve_toc_position)
         _card = {"no_cover": (not cover) if cover is not None else False}
         if cover and should_add_cover(_card):
+            _fm_cover = True
             cinfo = cover if isinstance(cover, dict) else {}
             add_cover_page(doc, title, lang=lang, theme_id=theme_id, font=font,
                            institution=cinfo.get("institution", ""),
@@ -466,6 +472,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                                          "toc_position": toc_position})
         if _toc_pos == "after_cover":
             add_toc_page(doc, lang=lang, theme_id=theme_id, font=font)
+            _fm_toc = True
     except Exception:
         pass
 
@@ -474,14 +481,19 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     if page_numbers:
         add_page_numbers(sec, lang, "صفحة " if rtl else "Page ")
 
-    # title
-    tp = doc.add_paragraph()
-    tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    trun = tp.add_run(title)
-    _set_run_font(trun, font, 24, load_palette(theme_id)["primary"], bold=True)
-    if rtl:
-        set_paragraph_rtl(tp)
-    if subtitle:
+    # title — skipped when a cover page already carries it (otherwise the
+    # title printed twice and read as a second cover page)
+    if _fm_cover:
+        tp = None
+    else:
+        tp = doc.add_paragraph()
+        tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        trun = tp.add_run(title)
+        _set_run_font(trun, font, 24, load_palette(theme_id)["primary"],
+                      bold=True)
+        if rtl:
+            set_paragraph_rtl(tp)
+    if subtitle and not _fm_cover:
         sp = doc.add_paragraph()
         sp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         srun = sp.add_run(subtitle)
@@ -489,7 +501,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         if rtl:
             set_paragraph_rtl(sp)
 
-    if toc:
+    if toc and not _fm_toc:
         doc.add_page_break()
         add_toc(doc, lang, font)
         doc.add_page_break()
@@ -561,6 +573,21 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                         page_break_after=False)
     except Exception:
         pass
+
+    # A Word TOC is a FIELD: it renders blank until the fields are refreshed,
+    # which is why the contents page looked like an empty page. Ask Word to
+    # update fields when the document is opened so it fills itself in.
+    if toc:
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+            _st = doc.settings.element
+            if _st.find(qn("w:updateFields")) is None:
+                _uf = OxmlElement("w:updateFields")
+                _uf.set(qn("w:val"), "true")
+                _st.append(_uf)
+        except Exception:
+            pass
 
     doc.save(output_path)
     return output_path

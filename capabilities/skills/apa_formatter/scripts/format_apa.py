@@ -58,7 +58,22 @@ def build_bibliography(sources, lang="ar", extra=None):
     for s in (sources or []):
         if not isinstance(s, dict):
             s = {"title": str(s)}
+        # The pipeline stores `authors` as a LIST (and the venue under
+        # `venue`/`journal`), while this builder only ever read a singular
+        # `author`. The mismatch meant NO source ever had an author, so every
+        # entry fell through to the bare website form ("Title (year). URL")
+        # instead of a real APA reference.
         author = s.get("author")
+        if not author:
+            _a = s.get("authors")
+            if isinstance(_a, (list, tuple)):
+                _a = [str(x).strip() for x in _a if str(x).strip()]
+                if _a:
+                    author = ", ".join(_a[:3]) + (" et al." if len(_a) > 3 else "")
+            elif isinstance(_a, str) and _a.strip():
+                author = _a.strip()
+        if not s.get("journal") and s.get("venue"):
+            s = dict(s, journal=s.get("venue"))
         year = s.get("year")
         title = (s.get("title") or s.get("key") or s.get("url") or "").strip()
         if not title:
