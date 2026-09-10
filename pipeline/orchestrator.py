@@ -5317,9 +5317,24 @@ class WeaverOrchestrator:
                 return out
             if fmt == "pdf":
                 out = os.path.join(out_dir, safe + ".pdf")
-                self._skill_call("pdf_builder", "build_pdf", "build_pdf",
-                                 sections=sections, output_path=out,
-                                 title=title, lang=lang, references=references)
+                # A PDF is actually RENDERED, so the cover, the table of
+                # contents and the page numbers are REAL here — not Word fields
+                # a viewer may refuse to compute. The builder also returns the
+                # TRUE page count, which we record so a "10-12 pages"
+                # requirement can be checked exactly instead of estimated.
+                _cov = (card.get("cover") if self._skill_call(
+                    "docx_builder", "docx_frontmatter", "should_add_cover", card)
+                    else None)
+                _res = self._skill_call(
+                    "pdf_builder", "build_pdf", "build_pdf",
+                    sections=sections, output_path=out, title=title, lang=lang,
+                    references=references, toc=bool(card.get("toc")),
+                    cover=_cov)
+                try:
+                    if isinstance(_res, dict) and _res.get("pages"):
+                        card["actual_pages"] = int(_res["pages"])
+                except Exception:
+                    pass
                 return out
             if fmt == "pptx":
                 out = os.path.join(out_dir, safe + ".pptx")
@@ -7088,6 +7103,15 @@ def _verify_deterministic(req, draft, card, lang):
                 _mx = (card or {}).get("max_pages")
             except Exception:
                 _mx = None
+            # a PDF export gives a MEASURED page count — prefer it over the
+            # words-per-page estimate, which is only ever an approximation
+            try:
+                _real = (card or {}).get("actual_pages")
+                if _real:
+                    est_pages = float(_real)
+                    wpp = "مقيس"
+            except Exception:
+                pass
             ev = f"~{est_pages:.1f} صفحة ({words} كلمة، {wpp}/صفحة) مقابل " \
                  f"مطلوب ≥{pages_tgt}" + (f" و≤{_mx}" if _mx else "")
             if _mx and est_pages > _mx * 1.05:
