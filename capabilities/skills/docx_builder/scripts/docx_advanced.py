@@ -191,11 +191,21 @@ def add_page_numbers(section, lang="ar", text=""):
         p.add_run(text + "   ")
     # PAGE field
     run = p.add_run()
-    fldBegin = OxmlElement("w:fldChar"); fldBegin.set(qn("w:fldCharType"), "begin")
+    # A well-formed field: begin → instruction → separate → result → end, with
+    # dirty="true" so Word/LibreOffice recompute it on open. The field used to
+    # be written WITHOUT the separate/result region, which leaves a viewer with
+    # nothing to fall back on — some then render a literal "1" on every page
+    # instead of the real number.
+    fldBegin = OxmlElement("w:fldChar")
+    fldBegin.set(qn("w:fldCharType"), "begin")
+    fldBegin.set(qn("w:dirty"), "true")
     instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve")
-    instr.text = "PAGE"
+    instr.text = " PAGE   \\* MERGEFORMAT "
+    fldSep = OxmlElement("w:fldChar"); fldSep.set(qn("w:fldCharType"), "separate")
+    res = OxmlElement("w:t"); res.text = "1"
     fldEnd = OxmlElement("w:fldChar"); fldEnd.set(qn("w:fldCharType"), "end")
-    run._r.append(fldBegin); run._r.append(instr); run._r.append(fldEnd)
+    for _el in (fldBegin, instr, fldSep, res, fldEnd):
+        run._r.append(_el)
     if lang == "ar":
         set_paragraph_rtl(p)
 
