@@ -3710,6 +3710,64 @@ class WeaverOrchestrator:
         return txt
 
     @staticmethod
+    def _promote_heading_from_body(title, body):
+        """When an abstract structural heading ("المطلب 1.1") is followed by a
+        body whose first line spells out the REAL title ("المطلب 1.1: مفهوم
+        الذكاء الاصطناعي ومكانته…"), promote that line to be the heading and
+        drop it from the body. This turns a bare numeric outline into a
+        descriptive one AND removes the duplicated line the reader used to see
+        under every heading. Returns (title, body) unchanged when it does not
+        clearly apply."""
+        t = (title or "").strip()
+        b = (body or "").lstrip()
+        if not t or not b:
+            return title, body
+        # only for the abstract counted labels
+        if not t.startswith(("المبحث", "المطلب", "Section", "Subsection")):
+            return title, body
+        first = b.split("\n", 1)[0].strip().lstrip("#").strip()
+        if not first.startswith(t):
+            return title, body
+        rest = first[len(t):].lstrip()
+        if rest[:1] not in (":", "："):
+            return title, body
+        desc = rest[1:].strip()
+        # a real sub-title: a few words, not a whole paragraph
+        if not (2 <= len(desc.split()) <= 20):
+            return title, body
+        new_title = f"{t}: {desc}"
+        new_body = b.split("\n", 1)[1] if "\n" in b else ""
+        return new_title, new_body.strip()
+
+    @staticmethod
+    def _strip_meta_preamble(text):
+        """Drop a leading sentence that talks ABOUT the writing task instead of
+        being content — the "إليك التوسعة المطلوبة… أضفتُ نحو 300 كلمة" /
+        "أهلاً بك. سأقوم بتوسيع الفقرة" leak that the length-expansion loop
+        used to paste straight into the document. Conservative: only a SHORT
+        leading line carrying a real meta marker is removed, so genuine prose
+        is never touched. Safe on empty input."""
+        if not text:
+            return text
+        meta = ("إليك", "أضفت", "أضفتُ", "سأقوم", "قمت بتوسيع", "قمتُ بتوسيع",
+                "التوسعة", "التوسيع المطلوب", "كما طلبت", "بناءً على طلبك",
+                "مع الحفاظ على", "here is", "here's", "i have expanded",
+                "i've expanded", "as requested", "sure,", "certainly,")
+        lines = text.split("\n")
+        out, dropped = [], 0
+        for i, ln in enumerate(lines):
+            t = ln.strip()
+            if dropped >= 2 or not t:
+                out.append(ln)
+                continue
+            if i <= 2 and len(t.split()) <= 45 and any(
+                    m in t.lower() for m in meta):
+                dropped += 1
+                continue          # a meta line about the task → drop it
+            out.append(ln)
+        return "\n".join(out).strip()
+
+    @staticmethod
     def _clean_section_body(body, title):
         """Tidy a written section body: drop a leading duplicate of its own
         heading (the "المطلب 1.3: …" leak), and strip leaked markdown heading
@@ -4340,9 +4398,23 @@ class WeaverOrchestrator:
                     except Exception:
                         pass
             # tidy leaked heading duplicates / markdown markers before shipping
+            # an abstract "المطلب 1.1" whose body opens with the real title
+            # → promote it, so headings are descriptive and the line is not
+            # repeated under the heading.
+            try:
+                title, body = self._promote_heading_from_body(title, body)
+            except Exception:
+                pass
             body = self._clean_section_body(body, title)
             parts.append((f"{title}\n{body}").strip())
-            out_sections.append({"heading": title, "body": body})
+            # keep the plan's LEVEL (1=مبحث, 2=مطلب) so the exporter can
+            # render a real hierarchy instead of flattening everything to H1.
+            try:
+                _lv = int(sec.get("level", 1) or 1)
+            except Exception:
+                _lv = 1
+            out_sections.append({"heading": title, "body": body,
+                                 "level": max(1, min(_lv, 4))})
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
         mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
@@ -4440,9 +4512,11 @@ class WeaverOrchestrator:
                                 temperature=0.5) or ""
                         except Exception:
                             body = ""
-                        if body.strip():
+                        _b = self._clean_section_body(
+                            self._strip_meta_preamble(body.strip()), title)
+                        if _b and not self._looks_conversational(_b):
                             task.sections.append({"heading": title,
-                                                  "body": body.strip()})
+                                                  "body": _b})
                     mem.set_status(66, f"تغطية: أُضيف {len(missing)} قسم ناقص")
 
             # ── (ب) تحقق الطول (كلمات) ──
@@ -4463,17 +4537,33 @@ class WeaverOrchestrator:
                             more = self.llm_fn(
                                 f"وسّع الفقرة التالية بعمق أكبر وتفصيل دقيق "
                                 f"(أضِف نحو {min(deficit, 300)} كلمة) دون تكرار "
-                                f"ودون حشو:\n\n{s.get('body', '')}",
+                                f"ودون حشو. أعِد النصّ الموسَّع وحده فقط: بلا "
+                                f"تحية، بلا مقدمة، بلا تعليق على المهمة، وبلا "
+                                f"ذكر عدد الكلمات، ولا تُعِد عنوان القسم."
+                                f"\n\n{s.get('body', '')}",
                                 system=getattr(self, "system_write", None)
                                 or getattr(self, "system_main", None),
                                 temperature=0.5) or ""
                         except Exception:
                             more = ""
                         if more.strip():
-                            added = (self.count_words(more)
-                                     - self.count_words(s.get("body", "")))
-                            s["body"] = more.strip()
-                            deficit -= max(0, added)
+                            # GUARD: the expansion reply may be a chat turn
+                            # ("أهلاً بك. سأقوم بتوسيع…"), carry a meta preamble
+                            # ("إليك التوسعة المطلوبة… 300 كلمة"), or re-insert
+                            # the "المطلب 1.1:" label — all of which used to be
+                            # pasted verbatim into the document because this
+                            # loop overwrote the ALREADY-CLEANED body. Clean it,
+                            # and reject it outright unless it is genuinely
+                            # longer real content.
+                            _m = self._strip_meta_preamble(more.strip())
+                            _m = self._clean_section_body(
+                                _m, s.get("heading", ""))
+                            _old_w = self.count_words(s.get("body", ""))
+                            if (_m and not self._looks_conversational(_m)
+                                    and self.count_words(_m) >= _old_w):
+                                added = self.count_words(_m) - _old_w
+                                s["body"] = _m
+                                deficit -= max(0, added)
                     mem.set_status(66, f"طول: وُسّع النص نحو الهدف {tw}")
 
                 # أعد بناء draft بعد أي تعديل
@@ -5160,6 +5250,45 @@ class WeaverOrchestrator:
             return out
         return None
 
+    def _generate_table(self, task, req, lang="ar"):
+        """WIRING 3 helper — produce a REAL Markdown table for an unmet table
+        requirement. The writer's soft "use a table where it fits" hint is not
+        enough for a MUST requirement: a run produced a «جدول توضيحي» heading
+        with 900 words of prose and no table at all. Here we ask for a table and
+        nothing else, and accept it ONLY when it really parses as one."""
+        if not self.llm_fn:
+            return None
+        want = (req.get("text") or "").strip()
+        topic = (task.task_card or {}).get("topic", "") or task.description
+        if lang == "en":
+            prompt = (f"Produce ONE Markdown table only — no title, no preamble, "
+                      f"no commentary, no prose before or after it.\n"
+                      f"Topic: {topic}\nThe table must satisfy: {want}\n"
+                      f"Use a header row and a |---|---| separator row, with at "
+                      f"least 5 data rows of real, specific content.")
+        else:
+            prompt = (f"أخرِج جدولاً واحداً بصيغة ماركداون فقط — بلا عنوان، وبلا "
+                      f"مقدمة، وبلا تعليق، وبلا أي نصٍّ قبله أو بعده.\n"
+                      f"الموضوع: {topic}\nيجب أن يحقّق الجدول: {want}\n"
+                      f"استعمل صفَّ رؤوسٍ ثم صفَّ فاصلٍ |---|---| ثم خمسة صفوف "
+                      f"بيانات على الأقل بمحتوى حقيقيّ محدّد لا عام.")
+        try:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.2, max_tokens=1500) or ""
+        except TypeError:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.2) or ""
+        out = (out or "").strip()
+        if out.startswith("```"):
+            out = out.split("\n", 1)[-1] if "\n" in out else ""
+            if out.rstrip().endswith("```"):
+                out = out.rstrip()[:-3]
+        out = out.strip()
+        # keep ONLY the table lines, and accept only if it truly parses
+        lines = [ln for ln in out.splitlines() if ln.strip().count("|") >= 2]
+        table = "\n".join(lines).strip()
+        return table if table and _vr_has_table(table) else None
+
     def _repair_requirements(self, task, unmet, reqs):
         """WIRING 3 — attempt SAFE, targeted repairs for unmet MUST requirements.
         Only high-confidence fixes are made; anything riskier is left for the
@@ -5189,6 +5318,31 @@ class WeaverOrchestrator:
                     card["toc"] = True
                     fixed = True
                     continue
+                if any(w in text for w in ("جدول", "جداول", "table")) \
+                        and not _vr_has_table(task.draft or ""):
+                    _tb = None
+                    try:
+                        _tb = self._generate_table(task, req, lang)
+                    except Exception:
+                        _tb = None
+                    if _tb:
+                        _head = ("جدول المصطلحات" if lang != "en"
+                                 else "Table")
+                        _secs = task.sections or []
+                        _new = {"heading": _head, "body": _tb, "level": 1}
+                        # place it BEFORE the references list, not after it
+                        _at = len(_secs)
+                        for _i in range(len(_secs) - 1, -1, -1):
+                            if self._is_ref_heading(
+                                    _secs[_i].get("heading", "")):
+                                _at = _i
+                                break
+                        _secs.insert(_at, _new)
+                        task.sections = _secs
+                        task.draft = (task.draft or "").rstrip() \
+                            + f"\n\n## {_head}\n\n{_tb}"
+                        fixed = True
+                        continue
             if kind == "length":
                 import os
                 pt = _vr_page_target(req)

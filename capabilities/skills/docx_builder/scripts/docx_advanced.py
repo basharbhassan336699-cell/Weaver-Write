@@ -250,7 +250,7 @@ def add_colored_heading(doc, text, level=1, lang="ar", theme_id="academic_navy",
     h = doc.add_heading("", level=level)
     h.alignment = WD_ALIGN_PARAGRAPH.RIGHT if lang == "ar" else WD_ALIGN_PARAGRAPH.LEFT
     run = h.add_run(text)
-    size = 18 if level == 1 else 15
+    size = {1: 18, 2: 15, 3: 13}.get(level, 12)
     _set_run_font(run, font or ("Kufyan Arabic" if lang == "ar" else "Times New Roman"),
                   size, pal["primary"], bold=True)
     if lang == "ar":
@@ -501,7 +501,16 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     # sections
     for s in sections:
         if s.get("heading"):
-            add_colored_heading(doc, s["heading"], 1, lang, theme_id, font)
+            # Honour the section's own LEVEL (1=مبحث, 2=مطلب, 3=تقسيم) so the
+            # document shows a real hierarchy. Previously every heading was
+            # forced to Heading1, which made a مطلب look identical to the
+            # مبحث above it and flattened the whole outline (and the TOC).
+            try:
+                _lv = int(s.get("level", 1) or 1)
+            except Exception:
+                _lv = 1
+            add_colored_heading(doc, s["heading"], max(1, min(_lv, 4)),
+                                lang, theme_id, font)
         if s.get("body"):
             # Render the body as real paragraphs + native tables (not one glued
             # run). This is what makes a Markdown table in the body show as a
