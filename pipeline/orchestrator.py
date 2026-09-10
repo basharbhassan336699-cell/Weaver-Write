@@ -5380,12 +5380,41 @@ class WeaverOrchestrator:
     #   study     الدراسات السابقة — prior academic studies on the same question
     #   web       المواقع الإلكترونية — general web pages
     _REF_TYPES = ("primary", "secondary", "study", "web")
-    _REF_GROUP_AR = {"primary": "أولاً: المصادر",
-                     "secondary": "ثانياً: المراجع",
-                     "study": "ثالثاً: الدراسات السابقة",
-                     "web": "رابعاً: المواقع الإلكترونية"}
+    _REF_GROUP_AR = {"primary": "المصادر", "secondary": "المراجع",
+                     "study": "الدراسات السابقة",
+                     "web": "المواقع الإلكترونية"}
+    # ordinals are applied to the groups ACTUALLY present, so a list with only
+    # two of the four reads "أولاً/ثانياً" instead of skipping to "ثانياً/رابعاً"
+    _REF_ORDINALS_AR = ("أولاً", "ثانياً", "ثالثاً", "رابعاً")
     _REF_GROUP_EN = {"primary": "Primary Sources", "secondary": "References",
                      "study": "Previous Studies", "web": "Websites"}
+
+    # scholarly databases the pipeline queries — a hit here is a real academic
+    # work, not a web page. Used as a MODEL-FREE fallback so the type grouping
+    # still engages when the model can't classify.
+    _ACAD_PROVENANCE = ("openalex", "crossref", "arxiv", "semanticscholar",
+                        "doaj", "europepmc", "paperqa", "pubmed")
+
+    @classmethod
+    def _fallback_ref_type(cls, s):
+        """A deterministic, model-free type for one source, from its provenance
+        and fields. Deliberately conservative: it only separates scholarly works
+        («المراجع») from plain web pages («المواقع الإلكترونية»), because telling
+        a prior STUDY from an analytical reference needs real judgement. Returns
+        a type from _REF_TYPES."""
+        if not isinstance(s, dict):
+            return "web"
+        prov = str(s.get("source") or "").lower()
+        if any(k in prov for k in cls._ACAD_PROVENANCE):
+            return "secondary"
+        if s.get("doi") or s.get("venue") or s.get("journal"):
+            return "secondary"
+        a = s.get("authors") or s.get("author")
+        if a and s.get("year"):
+            return "secondary"
+        if s.get("url"):
+            return "web"
+        return "secondary"
 
     def _classify_sources(self, sources, topic="", lang="ar"):
         """THE MODEL labels each gathered source as a primary source, a
@@ -5460,19 +5489,35 @@ class WeaverOrchestrator:
         items = [s for s in (sources or []) if isinstance(s, dict)]
         if not items:
             return None
+        _how = "model"
         if not any(s.get("ref_type") for s in items):
             if not self._classify_sources(items, card.get("topic", ""), lang):
-                return None
+                _how = "fallback"
+        # Fill in anything the model left unlabelled (or everything, when it
+        # could not classify at all) using the provenance-based fallback. This
+        # is what stops the type-aware list from silently collapsing back to one
+        # flat «قائمة المراجع» whenever the classification call fails.
+        for s in items:
+            if not s.get("ref_type"):
+                s["ref_type"] = self._fallback_ref_type(s)
         groups = {t: [] for t in self._REF_TYPES}
         for s in items:
             groups.get(s.get("ref_type") or "secondary",
                        groups["secondary"]).append(s)
         present = [t for t in self._REF_TYPES if groups[t]]
+        try:
+            card["refs_grouping"] = {
+                "how": _how, "types": present,
+                "grouped": len(present) > 1,
+                "reason": ("" if len(present) > 1
+                           else "كل المصادر من نوعٍ واحد")}
+        except Exception:
+            pass
         if len(present) <= 1:
             return None                  # only one kind → the flat list is right
         names = self._REF_GROUP_EN if lang == "en" else self._REF_GROUP_AR
         parts = []
-        for t in present:
+        for _n, t in enumerate(present):
             try:
                 txt = self._skill_call(skill, module, "build_bibliography",
                                        groups[t], lang, None)
@@ -5481,7 +5526,10 @@ class WeaverOrchestrator:
                     f"{i}. {(x.get('title') or '')} {(x.get('url') or '')}".strip()
                     for i, x in enumerate(groups[t], 1))
             if (txt or "").strip():
-                parts.append(f"{names[t]}\n{txt.strip()}")
+                _label = names[t]
+                if lang != "en" and _n < len(self._REF_ORDINALS_AR):
+                    _label = f"{self._REF_ORDINALS_AR[_n]}: {_label}"
+                parts.append(f"{_label}\n{txt.strip()}")
         if not parts:
             return None
         if pq_refs:
@@ -6813,6 +6861,24 @@ def _verify_deterministic(req, draft, card, lang):
     text = (req.get("text") or "").lower()
     card = card or {}
 
+    # ── COVER / TABLE OF CONTENTS — settled from the CARD, whatever the model
+    #    labelled the requirement. These are EXPORT-time features: they never
+    #    appear in the draft text, so if this check is skipped the requirement
+    #    falls through to the model, which reads only the draft and always
+    #    reports them missing — a false failure on a document that HAS them.
+    if any(k in text for k in ("غلاف", "cover page", "title page")) or (
+            "cover" in text):
+        if card.get("cover"):
+            return ("met", "الغلاف مطلوبٌ ومضبوط (يُبنى عند التصدير)")
+        return (("unmet" if "cover" in card else "unknown"),
+                "لا علامة غلاف في البطاقة")
+    if any(k in text for k in ("فهرس", "محتويات", "toc",
+                               "table of contents", "index page")):
+        if card.get("toc"):
+            return ("met", "الفهرس مطلوبٌ ومضبوط (يُبنى عند التصدير)")
+        return (("unmet" if "toc" in card else "unknown"),
+                "لا علامة فهرس في البطاقة")
+
     # ── length: words or pages ──
     if kind == "length":
         words = _vr_words(draft)
@@ -6848,21 +6914,9 @@ def _verify_deterministic(req, draft, card, lang):
                     f"نسبة العربية {ratio:.0%}")
         return None
 
-    # ── inserts: cover / toc are card flags; table/references live in the draft ─
+    # ── inserts: table/references live in the draft (cover/TOC are settled
+    #    above, for ANY kind, because they are invisible in the draft) ─
     if kind == "insert":
-        if any(k in text for k in ("غلاف", "cover", "عنوان", "title page")):
-            v = card.get("cover")
-            if v:
-                return ("met", "علامة الغلاف مضبوطة في البطاقة")
-            return ("unknown" if "cover" not in card else "unmet",
-                    "لا علامة غلاف في البطاقة")
-        if any(k in text for k in ("فهرس", "محتويات", "toc",
-                                   "table of contents", "index")):
-            v = card.get("toc")
-            if v:
-                return ("met", "علامة الفهرس مضبوطة في البطاقة")
-            return ("unknown" if "toc" not in card else "unmet",
-                    "لا علامة فهرس في البطاقة")
         if "جدول" in text or "table" in text:
             # presence is deterministic; whether it holds the RIGHT content
             # (e.g. technical terms) is a judgement → defer that part to model
