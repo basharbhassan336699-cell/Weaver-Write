@@ -39,6 +39,47 @@ def _shape_arabic(text: str):
         return text, False
 
 
+_AR_RE = re.compile(r'[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]')
+
+
+def _shape_line(text: str):
+    """Shape ONE line for RTL drawing, protecting Latin runs (URLs above all).
+
+    Running the whole line through the bidi algorithm splits a URL at its ':'
+    and '/' — which are neutral characters — and reorders the pieces, so
+    "https://doi.org/10.63496/ejhs" was drawn as "0.63496/ejhs …//:sptth".
+    Here the line is cut into Arabic and non-Arabic runs; only the Arabic runs
+    are reshaped/reordered, the Latin runs are left exactly as written, and the
+    RUN ORDER is reversed because the base direction is right-to-left.
+    """
+    if not text:
+        return text, True
+    ok = True
+    runs, cur, cur_ar = [], "", None
+    for ch in text:
+        is_ar = bool(_AR_RE.match(ch))
+        if ch.isspace():
+            cur += ch
+            continue
+        if cur_ar is None or is_ar == cur_ar:
+            cur_ar = is_ar
+            cur += ch
+        else:
+            runs.append((cur_ar, cur))
+            cur, cur_ar = ch, is_ar
+    if cur:
+        runs.append((bool(cur_ar), cur))
+    out = []
+    for is_ar, run in runs:
+        if is_ar:
+            shaped, k = _shape_arabic(run)
+            ok = ok and k
+            out.append(shaped)
+        else:
+            out.append(run)          # URLs/numbers stay exactly as written
+    return "".join(reversed(out)), ok
+
+
 def _find_font(lang):
     """Register an Arabic-capable TTF and return (regular, bold) font names."""
     from reportlab.pdfbase import pdfmetrics
@@ -82,7 +123,7 @@ def _wrap_to_width(text, font, size, max_w, rtl):
     from reportlab.pdfbase import pdfmetrics
 
     def _w(s):
-        t = _shape_arabic(s)[0] if rtl else s
+        t = _shape_line(s)[0] if rtl else s
         try:
             return pdfmetrics.stringWidth(t, font, size)
         except Exception:
@@ -154,7 +195,7 @@ def _render(c, sections, references, font, bold, lang, width, height, margin,
         if draw:
             c.setFillColorRGB(*color)
             c.setFont(fnt or font, size)
-            t = _shape_arabic(s)[0] if rtl else s
+            t = _shape_line(s)[0] if rtl else s
             if rtl:
                 c.drawRightString(width - margin, state["y"], t)
             else:
@@ -189,7 +230,7 @@ def _render(c, sections, references, font, bold, lang, width, height, margin,
                     c.setFillColorRGB(*DARK)
                 for ci in range(ncol):
                     cell = row[ci] if ci < len(row) else ""
-                    cell = _shape_arabic(cell)[0] if rtl else cell
+                    cell = _shape_line(cell)[0] if rtl else cell
                     x = (width - margin - ci * colw) if rtl else (margin + ci * colw)
                     if rtl:
                         c.drawRightString(x - 4, yy, cell[:38])
@@ -263,7 +304,7 @@ def build_pdf(sections, output_path, title="", lang="ar", references=None,
     margin = 2 * cm
 
     def _sh(s):
-        return _shape_arabic(s)[0] if rtl else s
+        return _shape_line(s)[0] if rtl else s
 
     # ── pass 1: measure where every heading lands (throw-away canvas) ──
     import io as _io
