@@ -1002,8 +1002,19 @@ class WeaverOrchestrator:
         small_kw = ("flash", "mini", "nano", "lite", "tiny", "small", "0.5b",
                     "1b", "1.5b", "2b", "3b", "4b", "7b", "8b", "9b", "haiku")
         # a small/flash/mini variant is small even inside a large family
-        # (e.g. gpt-4o-mini, gemini-flash) → check the small hints first
+        # (e.g. gpt-4o-mini, gemini-flash) → check the small hints first.
+        # BUT a "flash"/"mini" of a CURRENT generation is not a weak model:
+        # deepseek-v4-flash was being told "النموذج محدود الطاقة… الدقّة أهمّ من
+        # الطول" on every section, capping the quality of a capable model. A
+        # small hint carried by a modern version marker means "fast variant",
+        # not "weak", so it lands on medium rather than small.
         if any(k in name for k in small_kw):
+            import re as _re
+            _modern = _re.search(r'(?:^|[^0-9a-z])v?([4-9])(?:[._-]|$)', name)
+            _param = any(k in name for k in ("0.5b", "1b", "1.5b", "2b", "3b",
+                                             "4b", "7b", "8b", "9b"))
+            if _modern and not _param:
+                return "medium"
             return "small"
         if any(k in name for k in large_kw):
             return "large"
@@ -3932,6 +3943,48 @@ class WeaverOrchestrator:
         return txt
 
     @staticmethod
+    def _length_directive(card=None, n_sections=1, lang="ar"):
+        """What to put in the writer prompt's "Required length" slot.
+
+        That slot read card["page_count"] — a key NOTHING in the pipeline ever
+        sets — so the writer was handed an EMPTY length on every section and had
+        no idea how long the document should be; the length was only chased
+        afterwards by the expansion loop. The real target lives in
+        target_words / target_pages / max_words; this turns it into a per-section
+        budget the writer can act on. Returns "" when no length was requested,
+        leaving the previous behaviour untouched."""
+        card = card or {}
+        total = card.get("target_words")
+        pages = card.get("target_pages")
+        mx = card.get("max_words")
+        if not total and not pages and not mx:
+            return ""
+        n = max(1, int(n_sections or 1))
+        base = total or mx or 0
+        share = int(base / n) if base else 0
+        if lang == "en":
+            bits = []
+            if pages:
+                bits.append(f"{pages} pages")
+            if total:
+                bits.append(f"~{total} words in total")
+            if share:
+                bits.append(f"about {share} words for THIS section")
+            if mx:
+                bits.append(f"never exceeding {mx} words overall")
+            return " — ".join(bits)
+        bits = []
+        if pages:
+            bits.append(f"{pages} صفحة")
+        if total:
+            bits.append(f"نحو {total} كلمة للمستند كله")
+        if share:
+            bits.append(f"أي نحو {share} كلمة لهذا القسم")
+        if mx:
+            bits.append(f"وألّا يتجاوز المستند {mx} كلمة")
+        return " — ".join(bits)
+
+    @staticmethod
     def _bridge_policy(card=None, request=""):
         """How to treat the short bridge a مبحث carries above its مطالب.
 
@@ -4641,10 +4694,15 @@ class WeaverOrchestrator:
                         f"scientific content appropriate to this section's role")
                 else:
                     section_name = title
+                try:
+                    _len_dir = self._length_directive(
+                        card, len(sections_plan), lang)
+                except Exception:
+                    _len_dir = ""
                 if mode == "uncited":
                     prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        length=card.get("page_count", ""),
+                        length=_len_dir,
                         rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 elif mode == "none" or no_ctx:
@@ -4652,14 +4710,14 @@ class WeaverOrchestrator:
                     # none could be retrieved — write from knowledge, no refusal
                     prompt = _p.PROMPT_LAYER_6_WRITE_NO_SOURCES.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        length=card.get("page_count", ""), prior_content=_prior)
+                        length=_len_dir, prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 else:
                     prompt = _p.PROMPT_LAYER_6_WRITE.format(
                         section_name=section_name, topic=card.get("topic", ""),
                         citation_style=(card.get("citation_style")
                                         or "APA (author, year)"),
-                        length=card.get("page_count", ""),
+                        length=_len_dir,
                         rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
@@ -4712,6 +4770,16 @@ class WeaverOrchestrator:
                         "to avoid repetition.")
                 # adapt depth/length + temperature to the model's ceiling
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
+                # The depth directive carries a HARD-CODED per-section word band
+                # ("استهدف نحو 500–800 كلمة لهذا القسم"). When the user asked for
+                # a length of their own, that band contradicts it directly — a
+                # 12-page request over 14 sections is ~230 words each, not
+                # 500-800 — so drop the band and keep the depth guidance.
+                if _depth and _len_dir:
+                    import re as _re
+                    _depth = _re.sub(
+                        r'\s*[\(（][^)）]*?(?:استهدف|aim)[^)）]*[\)）]', '',
+                        _depth).strip()
                 if _depth:
                     prompt = prompt + "\n\n" + _depth
                 # A requested MAXIMUM must reach the writer. Only the expansion
