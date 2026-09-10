@@ -481,7 +481,19 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         _toc_pos = resolve_toc_position({"toc": toc,
                                          "toc_position": toc_position})
         if _toc_pos == "after_cover":
-            add_toc_page(doc, lang=lang, theme_id=theme_id, font=font)
+            # estimate where each heading lands and bake it into the field's
+            # cached result, so the contents page is readable in viewers that
+            # never compute Word fields
+            _entries = None
+            try:
+                from docx_frontmatter import estimate_toc_entries
+                _fm_pages = 1 + (1 if cover else 0)
+                _entries, _ = estimate_toc_entries(sections, lang,
+                                                   start_page=_fm_pages + 1)
+            except Exception:
+                _entries = None
+            add_toc_page(doc, lang=lang, theme_id=theme_id, font=font,
+                         entries=_entries)
             _fm_toc = True
     except Exception:
         pass
