@@ -3948,11 +3948,37 @@ class WeaverOrchestrator:
         if not body:
             return body
         lines = body.split("\n")
-        pat = re.compile(
-            r'^\s*(?:#{1,6}\s*)?(?:المبحث|المطلب|الفصل|المبحثُ|Section|'
-            r'Subsection|Chapter)\s*\d+(?:[.\-‑]\d+)*\s*[:：\-–]')
+        _kw = r'(?:المبحث|المطلب|الفصل|المحور|المبحثُ|Section|Subsection|Chapter)'
+        _ord = (r'(?:[\d\u0660-\u0669]+(?:[.\-‑][\d\u0660-\u0669]+)*|'
+                r'ال(?:أول|ثاني|ثالث|رابع|خامس|سادس|سابع|ثامن|تاسع|عاشر)\w*)')
+        _enum = (r'(?:أولا|أولاً|ثانيا|ثانياً|ثالثا|ثالثاً|رابعا|رابعاً|'
+                 r'خامسا|خامساً|سادسا|سادساً)')
+        # a heading line, in any of the shapes a model actually produces:
+        #   "المطلب 3.1: …" · "المطلب الأول: …" · "أولاً: …" · "3.1 …"
+        #   optionally wrapped in markdown (#, **, __)
+        _pre = r'^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*'
+        pat_colon = re.compile(
+            _pre + r'(?:' + _kw + r'\s*' + _ord + r'|' + _enum + r')'
+            r'\s*(?:\*\*|__)?\s*[:：\-–]')
+        # the same without a colon is a heading only when the line is SHORT —
+        # otherwise "المطلب الأول يقتضي من الباحث …" is ordinary prose
+        pat_bare = re.compile(
+            _pre + r'(?:' + _kw + r'\s*' + _ord +
+            r'|[\d\u0660-\u0669]+[.\-‑][\d\u0660-\u0669]+)'
+            r'\s*(?:\*\*|__)?\s*$|'
+            + _pre + r'(?:' + _kw + r'\s*' + _ord +
+            r'|[\d\u0660-\u0669]+[.\-‑][\d\u0660-\u0669]+)\s+\S')
+
+        def _is_heading(ln):
+            t = ln.strip()
+            if not t:
+                return False
+            if pat_colon.match(t):
+                return True
+            return bool(pat_bare.match(t)) and len(t.split()) <= 10
+
         for i, ln in enumerate(lines):
-            if pat.match(ln.strip()):
+            if _is_heading(ln):
                 kept = "\n".join(lines[:i]).strip()
                 # keep the trimmed bridge only if something real remains
                 return kept if kept else body
