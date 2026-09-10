@@ -15,6 +15,7 @@ Usage (as a module):
 """
 from __future__ import annotations
 import argparse
+import re
 import json
 
 SECTIONS = {
@@ -34,6 +35,31 @@ SECTIONS = {
     ],
 }
 
+
+
+def _strip_echoed_heading(text, heading):
+    """Drop a leading echo of the sub-heading from the model's own reply.
+    The caller already emits "## {heading}", and models routinely open their
+    answer with that same heading — which printed it twice in the document
+    ("ملخص النتائج ملخص النتائج"). Removes the echo whether it comes as a
+    markdown heading, followed by a colon, or on its own line. Conservative:
+    the heading must actually START the reply."""
+    t = (text or "").strip()
+    h = (heading or "").strip()
+    if not t or not h:
+        return t
+    # a leading "## heading" / "# heading" line
+    m = re.match(r'^\s*#{1,6}\s*(.+?)\s*$', t.split("\n", 1)[0])
+    if m and m.group(1).strip().rstrip(":：").strip() == h:
+        t = t.split("\n", 1)[1] if "\n" in t else ""
+        return t.strip()
+    if t.startswith(h):
+        rest = t[len(h):]
+        after = rest.lstrip()
+        # only when it reads as a heading: newline, a colon, or nothing after it
+        if rest[:1] == "\n" or after[:1] in (":", "：") or after == "":
+            return rest.lstrip(" :：\n\t-،.").strip()
+    return t
 
 def build_intro(topic, references=None, length=400, lang="ar", llm_fn=None):
     """
@@ -66,7 +92,8 @@ def build_intro(topic, references=None, length=400, lang="ar", llm_fn=None):
     # LLM mode: write each section
     rules = (
         "اكتب بالعربية الأكاديمية الفصيحة. كل معلومة تحتاج استشهاداً توثّق بصيغة "
-        "(المؤلف، ص. X). لا تستخدم معلومات من خارج المراجع المعطاة."
+        "(المؤلف، ص. X). لا تستخدم معلومات من خارج المراجع المعطاة. ابدأ "
+        "بالمحتوى مباشرةً ولا تُعِد كتابة عنوان القسم."
         if lang == "ar" else
         "Write in formal academic English. Every factual claim needs a citation "
         "(Author, p. X). Do not use information outside the given references."
@@ -80,7 +107,8 @@ def build_intro(topic, references=None, length=400, lang="ar", llm_fn=None):
             f"{rules}\n\nTopic: {topic}\nSection: {heading}\nGuidance: {guide}\n"
             f"Target words: {per_section}\n\nReferences:\n{ref_block}"
         )
-        parts.append(f"## {heading}\n{llm_fn(prompt).strip()}")
+        _txt = _strip_echoed_heading(llm_fn(prompt).strip(), heading)
+        parts.append(f"## {heading}\n{_txt}")
     return {"text": "\n\n".join(parts), "structured": False}
 
 
