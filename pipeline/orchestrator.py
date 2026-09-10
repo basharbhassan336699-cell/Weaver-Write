@@ -2143,6 +2143,12 @@ class WeaverOrchestrator:
                     task.task_card["target_words"] = _lt["words"]
                 if _lt.get("pages"):
                     task.task_card["target_pages"] = _lt["pages"]
+                # an explicit CEILING, so the writer can aim UNDER it instead of
+                # overshooting (nothing in the pipeline ever trims)
+                if _lt.get("max_words"):
+                    task.task_card["max_words"] = _lt["max_words"]
+                if _lt.get("max_pages"):
+                    task.task_card["max_pages"] = _lt["max_pages"]
         except Exception:
             pass
 
@@ -4576,6 +4582,25 @@ class WeaverOrchestrator:
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
                 if _depth:
                     prompt = prompt + "\n\n" + _depth
+                # A requested MAXIMUM must reach the writer. Only the expansion
+                # loop knew about it, and it can only grow text — so a document
+                # written long from the start stayed long (4514 words against a
+                # 3600 ceiling). Give each section its share of the budget.
+                try:
+                    _mx = card.get("max_words")
+                    _nsec = max(1, len(sections_plan))
+                    if _mx:
+                        _share = max(120, int(_mx / _nsec))
+                        prompt = prompt + "\n\n" + (
+                            f"حدّ أقصى صارم: لا تتجاوز نحو {_share} كلمة في هذا "
+                            f"القسم. المستند كلّه يجب ألّا يتجاوز {_mx} كلمة، "
+                            f"فأوجز دون إخلال بالمضمون."
+                            if lang != "en" else
+                            f"HARD LIMIT: keep this section to about {_share} "
+                            f"words. The whole document must not exceed {_mx} "
+                            f"words — be concise without losing substance.")
+                except Exception:
+                    pass
                 # guide Quran/Hadith marks for Islamic content
                 if card.get("islamic"):
                     prompt = prompt + "\n\n" + (self._ISLAMIC_DIRECTIVE_AR
@@ -7056,8 +7081,17 @@ def _verify_deterministic(req, draft, card, lang):
             except Exception:
                 wpp = 300
             est_pages = words / max(1, wpp)
+            # a CEILING in the same requirement ("لا يزيد عن 12 صفحة") is a
+            # failure too — the check only ever tested the floor
+            _mx = None
+            try:
+                _mx = (card or {}).get("max_pages")
+            except Exception:
+                _mx = None
             ev = f"~{est_pages:.1f} صفحة ({words} كلمة، {wpp}/صفحة) مقابل " \
-                 f"مطلوب ≥{pages_tgt}"
+                 f"مطلوب ≥{pages_tgt}" + (f" و≤{_mx}" if _mx else "")
+            if _mx and est_pages > _mx * 1.05:
+                return ("unmet", ev + " — تجاوز الحدّ الأقصى")
             # "at least" semantics with a small tolerance
             return (("met" if est_pages >= pages_tgt * 0.95 else "unmet"), ev)
         tgt = req.get("target")
@@ -7189,8 +7223,21 @@ def verify_requirements(requirements, draft, card=None, lang="ar", llm_fn=None,
                                               "16000") or 16000)
                 except Exception:
                     _cap = 16000
-                body = draft if len(draft) <= _cap else (
-                    draft[:_cap] + "\n\n[...المخرَج مقتطع للتحقّق...]")
+                if len(draft) <= _cap:
+                    body = draft
+                else:
+                    # Send the HEAD **and the TAIL**. Truncating from the front
+                    # only made everything at the END of the document invisible
+                    # to the judge — the references list, the conclusion — so it
+                    # reported them MISSING on documents that clearly had them
+                    # ("لا توجد قائمة مراجع في نهاية النص" while the file ended
+                    # with a full APA list). Same class of false failure as the
+                    # cover/TOC one: never accuse what you cannot see.
+                    _head = int(_cap * 0.6)
+                    _tail = _cap - _head
+                    body = (draft[:_head]
+                            + "\n\n[...جزءٌ من المتن حُذف للاختصار...]\n\n"
+                            + draft[-_tail:])
                 items = "\n".join(
                     f'- id={r.get("id")}: {r.get("text")}' for r in to_model)
                 prompt = (
