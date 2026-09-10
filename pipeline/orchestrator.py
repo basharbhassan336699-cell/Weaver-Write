@@ -3932,6 +3932,68 @@ class WeaverOrchestrator:
         return txt
 
     @staticmethod
+    def _bridge_policy(card=None, request=""):
+        """How to treat the short bridge a مبحث carries above its مطالب.
+
+        Returns {"mode": "auto"|"none"|"custom", "max_words": int}. The user's
+        own instruction wins — including "بلا تمهيد", which removes it entirely
+        (and saves the model call). Otherwise it is capped automatically: a
+        parent that runs long is a parent that has started writing its
+        subsections, which is how مبحث 3 ended up 371 words against مبحث 2's 180
+        and printed every مطلب twice.
+        """
+        import os as _os
+        try:
+            cap = int(_os.environ.get("WEAVER_BRIDGE_MAXWORDS", "120") or 120)
+        except Exception:
+            cap = 120
+        blob = " ".join([
+            str(request or ""),
+            " ".join(str(r.get("text", "")) for r in ((card or {}).get(
+                "requirements") or []) if isinstance(r, dict)),
+        ]).lower()
+        if not blob.strip():
+            return {"mode": "auto", "max_words": cap}
+        # explicit removal
+        _drop = ("بلا تمهيد", "بدون تمهيد", "دون تمهيد", "احذف التمهيد",
+                 "لا تمهيد", "بلا مقدمة للمبحث", "دون مقدمة للمبحث",
+                 "no bridge", "no lead-in", "without an introduction to each")
+        if any(k in blob for k in _drop):
+            return {"mode": "none", "max_words": 0}
+        # an explicit length for the bridge itself
+        import re
+        m = re.search(r'(?:تمهيد|مقدمة\s+(?:كل\s+)?مبحث|bridge|lead-?in)'
+                      r'[^.\n]{0,40}?(\d{2,4})\s*(?:كلمة|كلمات|words?)', blob)
+        if not m:
+            m = re.search(r'(\d{2,4})\s*(?:كلمة|كلمات|words?)[^.\n]{0,30}?'
+                          r'(?:تمهيد|لكل مبحث|bridge)', blob)
+        if m:
+            try:
+                n = int(m.group(1))
+                if 20 <= n <= 1000:
+                    return {"mode": "custom", "max_words": n}
+            except Exception:
+                pass
+        return {"mode": "auto", "max_words": cap}
+
+    @staticmethod
+    def _cap_bridge(body, max_words):
+        """Hard-enforce the bridge length, cutting at a sentence boundary so the
+        text never ends mid-thought. Deterministic on purpose: the writing
+        prompt already asks for 2-4 sentences and a model still overran it."""
+        if not body or not max_words:
+            return body
+        words = body.split()
+        if len(words) <= max_words:
+            return body
+        clipped = " ".join(words[:max_words])
+        # back off to the last complete sentence
+        cut = max(clipped.rfind(c) for c in (".", "؟", "!", "؛"))
+        if cut > len(clipped) * 0.4:
+            return clipped[:cut + 1].strip()
+        return clipped.rstrip(" ,،") + "."
+
+    @staticmethod
     def _trim_parent_bridge(body):
         """A PARENT section (a مبحث followed by its مطالب) must be a short
         bridge. Told that, a model still sometimes writes the whole chapter —
@@ -4500,6 +4562,13 @@ class WeaverOrchestrator:
         if mode == "cited" and no_ctx:
             card["sources_unavailable"] = True
         prof = self._strength_profile(card.get("model_strength", "medium"))
+        # how the bridge above each مبحث should behave: removed if the user
+        # said so, their length if they gave one, otherwise capped automatically
+        try:
+            _bridge = self._bridge_policy(
+                card, self._current_request(task.description))
+        except Exception:
+            _bridge = {"mode": "auto", "max_words": 120}
         parts, out_sections = [], []
         for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
@@ -4518,6 +4587,14 @@ class WeaverOrchestrator:
                     _is_parent = True
             except Exception:
                 _is_parent = False
+            # the user asked for no bridge → write nothing for the parent at
+            # all (and skip its model call entirely)
+            if _is_parent and _bridge.get("mode") == "none":
+                out_sections.append({"heading": title, "body": "",
+                                     "level": max(1, min(int(
+                                         sec.get("level", 1) or 1), 4))})
+                parts.append(f"## {title}" if title else "")
+                continue
             # ── bound specialized section writers (skills already present, wired
             #    here) — additive: on any miss the generic writer below runs
             #    unchanged, keeping full backward compatibility ──
@@ -4620,11 +4697,13 @@ class WeaverOrchestrator:
                 # PARENT section → brief bridge only (no overlap with its
                 # subsections). This removes the المبحث/المطلب 1.1 duplication.
                 if _is_parent:
+                    _bw = int(_bridge.get("max_words") or 120)
                     prompt = prompt + "\n\n" + (
-                        "هذا القسم يليه مطالب فرعية تتناول تفاصيله. اكتب تمهيداً "
-                        "موجزاً جداً (٢-٤ جُمَل) يوطّئ للمطالب ويبيّن خطّتها فقط، "
-                        "دون تعريف الموضوع من جديد ودون الدخول في تفاصيل ستُعالَج "
-                        "في المطالب — تجنّباً للتكرار."
+                        f"هذا القسم يليه مطالب فرعية تتناول تفاصيله. اكتب تمهيداً "
+                        f"موجزاً جداً (٢-٤ جُمَل، بحدٍّ أقصى {_bw} كلمة) يوطّئ "
+                        f"للمطالب ويبيّن خطّتها فقط، دون تعريف الموضوع من جديد، "
+                        f"ودون كتابة عناوين المطالب أو محتواها هنا — فهي تُكتب "
+                        f"في أقسامها. تجنّب التكرار."
                         if lang == "ar" else
                         "This section is followed by subsections that cover its "
                         "detail. Write only a very brief bridge (2-4 sentences) "
@@ -4719,6 +4798,7 @@ class WeaverOrchestrator:
             if _is_parent:
                 try:
                     body = self._trim_parent_bridge(body)
+                    body = self._cap_bridge(body, _bridge.get("max_words"))
                 except Exception:
                     pass
             body = self._clean_section_body(body, title)
