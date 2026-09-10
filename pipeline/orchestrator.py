@@ -4829,6 +4829,103 @@ class WeaverOrchestrator:
         return out
 
     @staticmethod
+    def _theme_catalog():
+        """Read the REAL theme registry (shared by Word and slides) so the
+        choice is never a hardcoded list: adding a theme to themes.json makes it
+        immediately selectable. Returns [{id,label,mood}, ...] or []."""
+        import json as _json, os as _os
+        fp = _os.path.abspath(_os.path.join(
+            _os.path.dirname(__file__), "..", "capabilities", "skills",
+            "pptx_builder", "themes", "themes.json"))
+        try:
+            with open(fp, encoding="utf-8") as f:
+                themes = (_json.load(f) or {}).get("themes") or {}
+        except Exception:
+            return []
+        out = []
+        for tid, t in themes.items():
+            if not isinstance(t, dict):
+                continue
+            out.append({"id": tid,
+                        "label": t.get("label_ar") or t.get("label_en") or tid,
+                        "mood": t.get("mood", "")})
+        return out
+
+    def _resolve_theme(self, card, lang="ar"):
+        """THE MODEL picks the document's visual theme by UNDERSTANDING the
+        request — the design counterpart of letting it decide the structure.
+        21 themes shipped in themes.json but nothing ever selected one, so every
+        document came out in the default navy. Order: an explicit WEAVER_THEME
+        override > a theme already on the card > the model's choice > None (the
+        builder's own default, i.e. unchanged behaviour). The reply is validated
+        against the REAL catalog, so an invented id can never reach the builder.
+        Toggle with WEAVER_THEME_DIRECTOR=0. Never raises."""
+        import os as _os
+        cat = self._theme_catalog()
+        ids = {t["id"] for t in cat}
+        env = (_os.environ.get("WEAVER_THEME") or "").strip()
+        if env and env in ids:
+            return env
+        cur = str(card.get("theme") or "").strip()
+        if cur in ids:
+            return cur                       # decided once, reused
+        if _os.environ.get("WEAVER_THEME_DIRECTOR", "1").strip().lower() in (
+                "0", "false", "off", "no"):
+            return None
+        if not cat or not self.llm_fn:
+            return None
+        listing = "\n".join(f"- {t['id']}: {t['label']}"
+                             + (f" — {t['mood']}" if t['mood'] else "")
+                             for t in cat)
+        topic = card.get("topic", "") or ""
+        req = ""
+        try:
+            req = self._current_request(getattr(self, "_last_desc", "")) or ""
+        except Exception:
+            req = ""
+        kind = card.get("task_type", "")
+        if lang == "en":
+            prompt = ("Pick the ONE visual theme that best fits this document. "
+                      "Reply with the theme id ONLY — no explanation.\n\n"
+                      f"Available themes:\n{listing}\n\n"
+                      f"Document type: {kind}\nTopic: {topic}\n"
+                      f"User request: {req[:600]}\n\n"
+                      "Prefer a sober academic theme for research/theses; a "
+                      "formal one for reports; an expressive one only when the "
+                      "subject or the user clearly calls for it.")
+        else:
+            prompt = ("اختر ثيماً بصرياً واحداً يناسب هذا المستند. أجب بمعرّف "
+                      "الثيم فقط، بلا أي شرح.\n\n"
+                      f"الثيمات المتاحة:\n{listing}\n\n"
+                      f"نوع المستند: {kind}\nالموضوع: {topic}\n"
+                      f"طلب المستخدم: {req[:600]}\n\n"
+                      "فضّل ثيماً أكاديمياً رصيناً للبحوث والرسائل، ورسمياً "
+                      "للتقارير، ولا تختر ثيماً تعبيرياً إلا إذا كان الموضوع أو "
+                      "طلب المستخدم يستدعيه صراحةً.")
+        try:
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.0,
+                              max_tokens=30, timeout=25) or ""
+        except TypeError:
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.0) or ""
+            except Exception:
+                return None
+        except Exception:
+            return None
+        pick = (raw or "").strip().strip('"\'`.,\n').split()[:1]
+        pick = pick[0] if pick else ""
+        if pick not in ids:                  # tolerate "id — label" replies
+            for tid in ids:
+                if tid in (raw or ""):
+                    pick = tid
+                    break
+        if pick in ids:
+            card["theme"] = pick
+            return pick
+        return None
+
+    @staticmethod
     def _resolve_font(card: dict) -> str:
         """Resolve the document font through fonts-core (engines/fonts-core).
         Keeps the requested name (Office renders it) but validates it against
@@ -4923,11 +5020,20 @@ class WeaverOrchestrator:
                 toc_pos = self._skill_call(
                     "docx_builder", "docx_frontmatter", "resolve_toc_position",
                     card) or "after_cover"
+                # THE MODEL decides the visual theme (falls back to the
+                # builder's own default when unavailable/disabled).
+                _kw = {}
+                try:
+                    _th = self._resolve_theme(card, lang)
+                    if _th:
+                        _kw["theme_id"] = _th
+                except Exception:
+                    _kw = {}
                 self._skill_call(
                     "docx_builder", "docx_advanced", "build_rich_docx",
                     title=title, sections=sections, output_path=out, lang=lang,
                     font=font, references=references, toc=bool(card.get("toc")),
-                    cover=cover, toc_position=toc_pos)
+                    cover=cover, toc_position=toc_pos, **_kw)
                 # rich Word styling for Quran/Hadith (bold verse/matn via the
                 # quran_hadith_citation skill's own _set_run). Guarded/no-op.
                 self._style_islamic_docx(out, card)
