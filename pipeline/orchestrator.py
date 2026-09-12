@@ -3791,9 +3791,16 @@ class WeaverOrchestrator:
             if wide and len(merged) + len(backup) >= cap * 2:
                 break
         if wide:
-            # hand BOTH piles on, the likelier ones first: the caller's model
-            # decides what belongs. Nothing is silently dropped, and nothing
-            # off-topic is silently kept either.
+            # hand BOTH piles on, the likelier ones first, each TAGGED with the
+            # pile it came from: the caller's model decides what belongs, and if
+            # it never answers the caller drops the `backup` tag back out. Without
+            # the tag a silent model would have PROMOTED the rejects — papers on
+            # «مراجع الحسابات» would have entered a search about phone radiation
+            # that the old code kept out. Widening must never be a one-way door.
+            for _r in merged:
+                _r["_prefilter"] = "match"
+            for _r in backup:
+                _r["_prefilter"] = "backup"
             final = merged + backup
             return final[:cap * 2] or None
         final = merged if merged else backup
@@ -3967,6 +3974,16 @@ class WeaverOrchestrator:
         if _q and _q != query:
             self._record_decision(card, "استعلام البحث", _q[:60], "model",
                                   "بحث أكاديمي")
+        elif self.llm_fn:
+            # RULE 2 — the fallback does not pass in silence. The raw request
+            # goes to the databases as a SENTENCE, and Arabic titles match on
+            # shape: «أريدك ٩ مراجع… أثر إشعاعات الهاتف على الأطفال» pulled in
+            # papers on «مراجع الحسابات» on the word «مراجع» alone. If the model
+            # did not compose the query, the reader is told why the list may
+            # wander instead of being left to wonder.
+            self._skip_note(card, "صياغة استعلام البحث",
+                            "تعذّرت صياغة الاستعلام بالنموذج، فأُرسل نصّ الطلب "
+                            "كما هو وقد تتأثّر دقّة المراجع")
         try:
             # ② the lexical filter widens the candidate pool instead of ruling
             #    on it, whenever there is a model to rule.
@@ -3989,6 +4006,18 @@ class WeaverOrchestrator:
                                   f"{len(_dropped or [])}", "model",
                                   "بحث أكاديمي")
             results = _kept
+        else:
+            # the model was NOT consulted, or said nothing usable. The widened
+            # pool was gathered FOR it; without its judgement the widening is
+            # withdrawn and the lexical pre-filter's own result stands — exactly
+            # what the old code produced. Anything else would let a silent model
+            # push MORE off-topic papers in than before.
+            _m = [r for r in (results or [])
+                  if r.get("_prefilter") != "backup"]
+            if _m:
+                results = _m
+        for _r in (results or []):
+            _r.pop("_prefilter", None)
         results = (results or [])[:limit]
         # ④ the back door is closed: an off-topic list is no longer served in
         #    place of a relevant one. Saying «لم أجد» is honest; filling the
