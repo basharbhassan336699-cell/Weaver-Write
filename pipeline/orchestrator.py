@@ -1419,42 +1419,83 @@ class WeaverOrchestrator:
 
     @staticmethod
     def _strength_profile(strength: str) -> dict:
-        """Per-strength writing profile: model temperature, target words for a
-        specialized intro, and a depth directive appended to the generic section
-        prompt. Adapts OUTPUT to the model ceiling — never fabricates capability
-        a small model lacks; it raises the reliable floor and unlocks depth on a
-        capable model. Returns a dict always usable (unknown → medium)."""
+        """Writing profile: temperature, target words for a specialized intro,
+        and a depth directive appended to the generic section prompt.
+
+        These directives describe THE WRITING THAT IS WANTED — never the model
+        that is doing it. They used to open with a verdict: "النموذج محدود
+        الطاقة" / "استغلّ طاقة النموذج الكاملة". That verdict came from matching
+        the model's NAME against a word list, it was appended to EVERY section
+        prompt, and a model told it is weak writes like a weak one — which is
+        exactly what happened to `deepseek-v4-flash`, capped on every section
+        because its name contains "flash". A depth instruction is legitimate;
+        a judgement about the model reading this prompt is not, so it is gone.
+        Returns a dict always usable (unknown → medium)."""
         s = (strength or "medium").lower()
         if s == "small":
             return {
                 "temp": 0.35,
                 "intro_words": 220,
                 "depth": (
-                    "النموذج محدود الطاقة: اكتب بجُملٍ قصيرة واضحة ومباشرة، وركّز "
-                    "على النقاط الجوهرية دون حشوٍ أو استطراد، ورتّب الأفكار في "
-                    "فقراتٍ قصيرة. الدقّة والوضوح والالتزام بالمصادر أهمّ من الطول "
+                    "اكتب بجُملٍ قصيرة واضحة ومباشرة، وركّز على النقاط الجوهرية "
+                    "دون حشوٍ أو استطراد، ورتّب الأفكار في فقراتٍ قصيرة. الدقّة "
+                    "والوضوح والالتزام بالمصادر أهمّ من الطول "
                     "(استهدف نحو 180–260 كلمة لهذا القسم)."),
                 "depth_en": (
-                    "The model has limited capacity: write short, clear, direct "
-                    "sentences; focus on the essential points with no padding; "
-                    "keep paragraphs short. Accuracy, clarity and staying on "
-                    "sources matter more than length (aim ~180–260 words)."),
+                    "Write short, clear, direct sentences; focus on the "
+                    "essential points with no padding; keep paragraphs short. "
+                    "Accuracy, clarity and staying on sources matter more than "
+                    "length (aim ~180–260 words)."),
             }
         if s == "large":
             return {
                 "temp": 0.6,
                 "intro_words": 650,
                 "depth": (
-                    "استغلّ طاقة النموذج الكاملة: حلّل بعمق، واعرض وجهات النظر "
-                    "المختلفة، واربط الأفكار ببعضها بنقدٍ علميّ وأمثلةٍ دقيقة، مع "
-                    "التزامٍ صارمٍ بالمصادر (استهدف نحو 500–800 كلمة لهذا القسم)."),
+                    "حلّل بعمق، واعرض وجهات النظر المختلفة، واربط الأفكار ببعضها "
+                    "بنقدٍ علميّ وأمثلةٍ دقيقة، مع التزامٍ صارمٍ بالمصادر "
+                    "(استهدف نحو 500–800 كلمة لهذا القسم)."),
                 "depth_en": (
-                    "Use the model's full capacity: analyze in depth, present "
-                    "differing viewpoints, and connect ideas with scholarly "
-                    "critique and precise examples, strictly grounded in the "
-                    "sources (aim ~500–800 words)."),
+                    "Analyze in depth, present differing viewpoints, and connect "
+                    "ideas with scholarly critique and precise examples, strictly "
+                    "grounded in the sources (aim ~500–800 words)."),
             }
         return {"temp": 0.5, "intro_words": 400, "depth": "", "depth_en": ""}
+
+    @staticmethod
+    def _measured_strength(bodies, current):
+        """Replace the NAME guess with a MEASUREMENT of what the model actually
+        wrote, once enough sections exist to measure.
+
+        The name guess ("flash" → weak, "opus" → strong) decides the per-section
+        word band, the temperature and the depth directive for the WHOLE
+        document, from before the first word is written. A model that writes
+        450-word sections is not small whatever its name says, and one that
+        writes 90-word sections is not large.
+
+        Read-only and additive by design: it returns a strength label for the
+        directive given to the NEXT sections. It never edits, shortens or
+        rewrites a section that was already produced, so a wrong measurement can
+        only change future guidance — never damage existing text. Returns
+        `current` unchanged when there is not enough evidence. Never raises."""
+        try:
+            lens = [len((b or "").split()) for b in (bodies or [])]
+            lens = [n for n in lens if n >= 40]      # ignore stubs/bridges
+            if len(lens) < 3:
+                return current, None
+            lens.sort()
+            med = lens[len(lens) // 2]
+            if med >= 380:
+                out = "large"
+            elif med <= 170:
+                out = "small"
+            else:
+                out = "medium"
+            if out == current:
+                return current, None
+            return out, f"{med} كلمة (وسيط {len(lens)} أقسام)"
+        except Exception:
+            return current, None
 
     @staticmethod
     def _section_kind(title: str):
@@ -1565,9 +1606,21 @@ class WeaverOrchestrator:
                         "key": self._apa_key(s),
                         "text": (s.get("content") or s.get("title", "") or "")[:160],
                         "page": s.get("page", "")})
+            # the USER'S length wins over the name guess: an introduction's share
+            # of a requested total is a fact, `intro_words` is only an estimate
+            _iw = int(prof.get("intro_words", 400))
+            try:
+                _tw = card.get("target_words")
+                _ns = len(card.get("sections") or []) or 0
+                if _tw and _ns:
+                    _share = int(int(_tw) / max(1, _ns))
+                    # an intro is denser than an average section, not double it
+                    _iw = max(120, min(int(_share * 1.4), 900))
+            except Exception:
+                pass
             out = self._skill_call(
                 "research_intro", "build_intro", "build_intro",
-                topic, refs, int(prof.get("intro_words", 400)), lang, self.llm_fn)
+                topic, refs, _iw, lang, self.llm_fn)
             return (out or {}).get("text") or None
         if kind == "conclusion" and mode != "none":
             findings = []
@@ -5279,6 +5332,8 @@ class WeaverOrchestrator:
         if mode == "cited" and no_ctx:
             card["sources_unavailable"] = True
         prof = self._strength_profile(card.get("model_strength", "medium"))
+        # evidence for the measurement that replaces the NAME guess (below)
+        _written_bodies, _strength_now = [], card.get("model_strength", "medium")
         # how the bridge above each مبحث should behave: removed if the user
         # said so, their length if they gave one, otherwise capped automatically
         try:
@@ -5566,6 +5621,28 @@ class WeaverOrchestrator:
                 except Exception:
                     pass
             body = self._clean_section_body(body, title)
+            # ── measurement replaces the name guess, for the NEXT sections ──
+            # Strictly forward-looking: what is already written is never touched.
+            # A wrong reading can only change the guidance the remaining
+            # sections receive; it can never shorten or rewrite existing text.
+            # Off with WEAVER_MEASURE_STRENGTH=0.
+            try:
+                import os as _os2
+                if _os2.environ.get("WEAVER_MEASURE_STRENGTH", "1") != "0":
+                    _written_bodies.append(body)
+                    _st, _ev = self._measured_strength(_written_bodies,
+                                                       _strength_now)
+                    if _ev:
+                        _strength_now = _st
+                        card["model_strength"] = _st
+                        card["model_strength_source"] = "measured"
+                        prof = self._strength_profile(_st)
+                        mem.set_status(6, f"قوّة النموذج بالقياس: {_st} — {_ev}")
+                        self._emit("detail", "",
+                                   f"قوّة النموذج بالقياس: {_st} ({_ev}) — "
+                                   "تضبط الأقسام التالية فقط")
+            except Exception:
+                pass
             # spend the budget on what was ACTUALLY written, not on what was
             # asked for — a section told to consider a table may well write
             # prose, and that must not cost it anything.
