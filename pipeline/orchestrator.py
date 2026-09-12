@@ -687,7 +687,12 @@ class WeaverOrchestrator:
                 contents.append(t)
             elif k == "insert" and any(w in t.lower() for w in (
                     "جدول", "جداول", "table")):   # match the plural «جداول» too
-                want_table = True
+                # keep the requirement's OWN wording: it says what the table must
+                # CONTAIN. Only the flag used to survive, and the writer then got
+                # a generic "a comparison or a set of terms" line — so a request
+                # for «جداول تحتوي المصطلحات التقنية وشرحها» came back as
+                # classification tables, exactly as that generic line asked.
+                want_table = t
         if not (styles or contents or want_table):
             return ""
         if lang == "en":
@@ -700,9 +705,15 @@ class WeaverOrchestrator:
                 lines.append("- Make sure to cover, where relevant: "
                              + "؛ ".join(contents) + ".")
             if want_table:
-                lines.append("- Where this section's content is a comparison or "
-                             "a set of terms/values, present it as a Markdown "
-                             "table (| … | … |) instead of prose.")
+                lines.append(
+                    "- Tables were requested as: “" + str(want_table) + "”. "
+                    "Where this section's content fits THAT description, present "
+                    "it as a Markdown table (| … | … |) whose columns match what "
+                    "was asked for, instead of prose."
+                    if isinstance(want_table, str) else
+                    "- Where this section's content is a comparison or a set of "
+                    "terms/values, present it as a Markdown table (| … | … |) "
+                    "instead of prose.")
             return "\n".join(lines)
         lines = ["متطلّبات الطلب التي تُراعى في هذا القسم (طبّقها حيث تناسب، "
                  "دون إقحام):"]
@@ -712,9 +723,14 @@ class WeaverOrchestrator:
             lines.append("- احرص على تغطية ما يناسب هذا القسم مِن: "
                          + "؛ ".join(contents) + ".")
         if want_table:
-            lines.append("- حين يكون محتوى هذا القسم مقارنةً أو مجموعةَ مصطلحاتٍ/"
-                         "قيَم، اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل "
-                         "السرد.")
+            lines.append(
+                "- الجداول مطلوبةٌ بنصّ المستخدم: «" + str(want_table) + "». "
+                "فحيث يناسب محتوى هذا القسم هذا الوصف بالتحديد، اعرضه في جدولٍ "
+                "بصيغة ماركداون (| … | … |) تكون أعمدته مطابقةً لما طُلب "
+                "(لا جدول تصنيفٍ أو مقارنةٍ عامّاً بدلاً منه)."
+                if isinstance(want_table, str) else
+                "- حين يكون محتوى هذا القسم مقارنةً أو مجموعةَ مصطلحاتٍ/قيَم، "
+                "اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل السرد.")
         return "\n".join(lines)
 
     def _intent_router(self, request):
@@ -1135,12 +1151,20 @@ class WeaverOrchestrator:
             return str(s)[:40]
         year = str(s.get("year") or "").strip()
         a = s.get("author") or s.get("authors")
+        _many = False
         if isinstance(a, (list, tuple)):
             a = [str(x).strip() for x in a if str(x).strip()]
-            a = a[0] + (" وآخرون" if len(a) > 1 else "") if a else ""
+            _many = len(a) > 1
+            a = a[0] if a else ""
         a = (str(a).strip() if a else "")
         if a:
-            return f"{a}، {year}" if year else a
+            # APA cites the SURNAME only. Sources store "اللقب، الاسم الأول",
+            # so passing the whole field produced "(المطيري، علياء زيد، 2022)" —
+            # three commas and a given name inside an in-text citation.
+            _sur = a.replace("،", ",").split(",")[0].strip() or a
+            if _many:
+                _sur += " وآخرون"
+            return f"{_sur}، {year}" if year else _sur
         t = (s.get("title") or s.get("key") or "").strip()
         t = " ".join(t.split()[:4])            # keep it short, never a full title
         if t:
@@ -4736,6 +4760,38 @@ class WeaverOrchestrator:
                     _lines.append(str(s))
             if _lines:
                 rag_ctx = "\n".join(_lines)
+        # ── ALLOWED CITATION KEYS ──
+        # The APA keys were only ever attached in the no-RAG fallback above, so
+        # on the normal path the writer saw raw retrieved text with no key to
+        # cite by — and improvised: some citations came out as «(المطيري، 2022)»
+        # and others as a bare TITLE, which is the inconsistency the verifier
+        # flagged. This appends the exact, closed list of keys built from the
+        # gathered sources, so there is a right answer to copy instead of one to
+        # invent. Additive: rag_ctx itself (layer 2's output) is untouched.
+        try:
+            _keys, _seen = [], set()
+            for s in (card.get("sources") or [])[:24]:
+                if not isinstance(s, dict):
+                    continue
+                _k = (self._apa_key(s) or "").strip()
+                if not _k or _k in _seen:
+                    continue
+                _seen.add(_k)
+                _ti = " ".join(str(s.get("title") or "").split())[:70]
+                _keys.append(f"({_k})" + (f" — {_ti}" if _ti else ""))
+            if _keys and rag_ctx.strip():
+                card["citation_keys"] = [k.split(" — ")[0] for k in _keys]
+                rag_ctx = (
+                    rag_ctx + "\n\n"
+                    + ("مفاتيح الاستشهاد المسموحة (استشهد بهذه الصيغة حرفياً "
+                       "داخل المتن، ولا تستشهد بعنوان مرجعٍ ولا بمفتاحٍ غير "
+                       "مذكور هنا):\n" if lang == "ar" else
+                       "Allowed citation keys (cite in EXACTLY this form; never "
+                       "cite a reference by its title, and never invent a key "
+                       "that is not listed here):\n")
+                    + "\n".join("- " + k for k in _keys))
+        except Exception:
+            pass
         no_ctx = (not rag_ctx) or rag_ctx.strip() in ("", "(none)")
         mode = card.get("sourcing_mode", "cited")
         # In "cited" mode with NO retrieved context, don't refuse — write from
@@ -7370,6 +7426,41 @@ def _vr_headings(text):
     return out
 
 
+_VR_AR_NUM = {
+    "واحد": 1, "واحدة": 1, "اثنان": 2, "اثنين": 2, "اثنتان": 2, "اثنتين": 2,
+    "ثلاثة": 3, "ثلاث": 3, "أربعة": 4, "اربعة": 4, "أربع": 4, "اربع": 4,
+    "خمسة": 5, "خمس": 5, "ستة": 6, "ست": 6, "سبعة": 7, "سبع": 7,
+    "ثمانية": 8, "ثماني": 8, "تسعة": 9, "تسع": 9, "عشرة": 10, "عشر": 10,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _vr_numbers(text):
+    """Read the counts stated in a requirement, IN ORDER, from digits or from
+    number WORDS ("ثلاثة مباحث، كل مبحث فيه أربعة مطالب" → [3, 4]). Needed so a
+    two-level structure rule is checked against the numbers the user actually
+    said instead of assuming the same number twice. Never raises."""
+    import re as _re
+    out = []
+    try:
+        for tok in _re.findall(r"[0-9٠-٩]+|[^\W\d_]+",
+                               (text or ""), _re.UNICODE):
+            if tok[0].isdigit() or "٠" <= tok[0] <= "٩":
+                t = tok.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+                try:
+                    out.append(int(t))
+                except ValueError:
+                    pass
+            else:
+                n = _VR_AR_NUM.get(tok.strip("ًٌٍَُِّْ").lower())
+                if n:
+                    out.append(n)
+    except Exception:
+        return out
+    return out
+
+
 def _vr_has_table(text):
     """True when the draft contains a Markdown table (a separator row like
     |---|---| is the reliable signal)."""
@@ -7497,10 +7588,10 @@ def _verify_deterministic(req, draft, card, lang):
                     "قسم المراجع " + ("موجود" if has else "غير موجود"))
         return None
 
-    # ── structure: count matching headings, but only for a simple "N X" ask ──
+    # ── structure: count matching headings ──
     if kind == "structure":
         tgt = req.get("target")
-        if isinstance(tgt, int) and "كل" not in text:   # not a per-section rule
+        if isinstance(tgt, int):
             # map the requirement wording (often a PLURAL like «مباحث») to the
             # singular STEM that appears in the headings («المبحث الأول»).
             groups = (
@@ -7511,17 +7602,42 @@ def _verify_deterministic(req, draft, card, lang):
                 (("section", "sections"), "section"),
                 (("chapter", "chapters"), "chapter"),
             )
-            stem = None
-            for triggers, s in groups:
-                if any(k in text for k in triggers):
-                    stem = s
-                    break
-            if stem:
-                cnt = sum(1 for h in _vr_headings(draft) if stem in h.lower())
-                if cnt == 0:
+            # A requirement may name TWO levels at once — «ثلاثة مباحث، كل مبحث
+            # فيه ثلاثة مطالب». That whole case used to be handed to the model
+            # (`"كل" not in text`), which then judged a TRUNCATED draft and
+            # reported a مبحث missing that was demonstrably present. Counting
+            # both stems settles it exactly, with no model and no truncation.
+            stems = [s for triggers, s in groups
+                     if any(k in text for k in triggers)]
+            if stems:
+                heads = [h.lower() for h in _vr_headings(draft)]
+                counts = [(s, sum(1 for h in heads if s in h)) for s in stems]
+                if all(c == 0 for _s, c in counts):
                     return None       # wording may differ from headings → model
+                # "N X, each X has M Y": the outer count is `target`; the inner
+                # one is target×target when the rule repeats the same number,
+                # which is the only per-section form a single int can express.
+                if len(counts) >= 2 and ("كل" in text or " each " in text):
+                    (s1, c1), (s2, c2) = counts[0], counts[1]
+                    # the INNER number is read from the requirement text, so
+                    # "ثلاثة مباحث، كل مبحث فيه أربعة مطالب" needs 3×4, not 3×3
+                    _nums = _vr_numbers(text)
+                    _inner = _nums[1] if len(_nums) >= 2 else None
+                    if _inner:
+                        need2 = tgt * _inner
+                        ok = (c1 >= tgt and c2 >= need2)
+                        return (("met" if ok else "unmet"),
+                                f"«{s1}» = {c1} مقابل {tgt} · "
+                                f"«{s2}» = {c2} مقابل {need2}")
+                    # inner number unreadable → judge the outer level only and
+                    # report the inner count rather than guess at it
+                    return (("met" if c1 >= tgt else "unmet"),
+                            f"«{s1}» = {c1} مقابل {tgt} · «{s2}» = {c2}")
+                s, cnt = counts[0]
+                if cnt == 0:
+                    return None
                 return (("met" if cnt >= tgt else "unmet"),
-                        f"عدد العناوين المطابقة لـ«{stem}» = {cnt} مقابل {tgt}")
+                        f"عدد العناوين المطابقة لـ«{s}» = {cnt} مقابل {tgt}")
         return None
 
     return None
