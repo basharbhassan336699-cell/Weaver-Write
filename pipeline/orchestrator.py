@@ -810,23 +810,232 @@ class WeaverOrchestrator:
         except Exception:
             return default
 
+    def _deepen_structure(self, sections_plan, request, topic, unit, lang="ar"):
+        """Let the MODEL add a third level under each level-2 section, deciding
+        per section how many (possibly none) — which is exactly what «وكل مطلب
+        تقسيمات حسب ما يلزم» asks for. A fixed count cannot express «as needed»,
+        so this is the only honest way to honour it.
+
+        Returns a NEW plan with level-3 entries inserted, or the original plan
+        unchanged on any miss. Never raises, never removes a section."""
+        if not self.llm_fn or not sections_plan:
+            return sections_plan
+        try:
+            import os, json
+            from core.llm import extract_json
+            parents = [s for s in sections_plan
+                       if int(s.get("level", 1) or 1) == 2]
+            if not parents:
+                return sections_plan
+            titles = [str(s.get("title") or s.get("heading") or "")
+                      for s in parents]
+            listing = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
+            if lang == "en":
+                prompt = (
+                    "For each subsection below, propose the sub-subsections it "
+                    "genuinely needs — AS NEEDED: give an empty list for a "
+                    "subsection that reads better undivided. Return JSON only:\n"
+                    '{"subs":[{"index":1,"titles":["…","…"]}]}\n'
+                    f"Topic: {topic}\nRequest: {(request or '')[:500]}\n"
+                    f"Subsections:\n{listing}\n"
+                    "At most 4 per subsection; specific topical titles, never "
+                    "empty labels; no numbering in the titles.")
+            else:
+                prompt = (
+                    f"لكل قسمٍ فرعيّ أدناه، اقترح «{unit}» التي يحتاجها فعلاً — "
+                    "حسب ما يلزم: أعطِ قائمةً فارغة للقسم الذي يُقرأ أفضل بلا "
+                    "تقسيم. أعِد JSON فقط:\n"
+                    '{"subs":[{"index":1,"titles":["…","…"]}]}\n'
+                    f"الموضوع: {topic}\nالطلب: {(request or '')[:500]}\n"
+                    f"الأقسام الفرعية:\n{listing}\n"
+                    "بحدٍّ أقصى ٤ لكل قسم؛ عناوين موضوعية محدّدة لا تسميات "
+                    "فارغة؛ وبلا ترقيمٍ في العنوان.")
+            try:
+                _to = int(os.environ.get("WEAVER_STRUCT_TIMEOUT", "60") or 60)
+            except Exception:
+                _to = 60
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.3,
+                              max_tokens=1400, timeout=_to) or ""
+            data = extract_json(raw)
+            subs = (data or {}).get("subs") if isinstance(data, dict) else None
+            if not isinstance(subs, list) or not subs:
+                return sections_plan
+            by_idx = {}
+            for e in subs:
+                if not isinstance(e, dict):
+                    continue
+                try:
+                    i = int(e.get("index"))
+                except (TypeError, ValueError):
+                    continue
+                ts = [str(x).strip()[:200] for x in (e.get("titles") or [])
+                      if str(x).strip()]
+                if 1 <= i <= len(parents) and ts:
+                    by_idx[i] = ts[:4]
+            if not by_idx:
+                return sections_plan
+            out, seen_parent = [], 0
+            for s in sections_plan:
+                out.append(s)
+                if int(s.get("level", 1) or 1) == 2:
+                    seen_parent += 1
+                    for t in by_idx.get(seen_parent, []):
+                        out.append({"key": "body", "title": t, "level": 3})
+            return out
+        except Exception:
+            return sections_plan
+
     @staticmethod
-    def _counted_structure(lang, n_mabhath, m_matlab):
-        """Build a plan of EXACTLY n مباحث, each with m مطالب, plus intro /
-        conclusion / references. Abstract labels here get descriptive names
-        later by _descriptive_titles. Honors an explicit "N مباحث × M مطالب"."""
+    def _skip_note(card, step, reason):
+        """RULE 2 — NO step cancels itself in silence.
+
+        Eleven enrichment steps used to `return` the moment an input was
+        missing: statistics with no data file, the table/chart enricher with no
+        model, the web and academic searches with no query, the reference
+        appender with no references… The user then received a document missing
+        what they asked for, with nothing anywhere saying why. Asking for
+        «إحصائيات» without attaching a spreadsheet produced no analysis AND no
+        explanation.
+
+        Every such step now records itself HERE, in one list on the card, which
+        the honest note reads at the end. One mechanism covers all of them — and
+        any step added later — instead of a message written by hand at each
+        site. Never raises; a failure to record must never break the step."""
+        try:
+            if not isinstance(card, dict):
+                return
+            lst = card.setdefault("skipped_steps", [])
+            entry = {"step": str(step)[:80], "reason": str(reason)[:200]}
+            if entry not in lst:
+                lst.append(entry)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _structure_units(text, lang="ar"):
+        """Read the STRUCTURAL UNITS the user named, in the order they named
+        them, from patterns of «<count> <unit>» in their own words — e.g.
+        «خمسة فصول، كل فصل ثلاثة مباحث، وكل مبحث مطلبين» →
+        [("الفصل", 5), ("المبحث", 3), ("المطلب", 2)].
+
+        RULE 1 — the system used to carry only two fields, `mabhath_count` and
+        `matlab_count`, so any other unit the user named (فصل، باب، جزء،
+        chapter) was either lost or renamed «المبحث». This reads whatever word
+        FOLLOWS a count instead of looking words up in a list, so a term nobody
+        anticipated still works. Returns [] when nothing matches. Never raises."""
+        import re as _re
+        try:
+            t = " " + " ".join(str(text or "").split()) + " "
+            nums = {}
+            for w, n in _VR_AR_NUM.items():
+                nums[w] = n
+            # «<number word|digits> <unit word>» — the unit is simply the token
+            # that follows the count; no vocabulary is assumed.
+            pat = _re.compile(
+                r"(?:^|\s)((?:[0-9]{1,3})|(?:[٠-٩]{1,3})|"
+                + "|".join(_re.escape(k) for k in sorted(nums, key=len,
+                                                         reverse=True))
+                + r")\s+([^\W\d_]{3,20})", _re.UNICODE)
+            out, seen = [], set()
+            for m in pat.finditer(t):
+                raw, unit = m.group(1), m.group(2)
+                if raw[0].isdigit() or "٠" <= raw[0] <= "٩":
+                    n = int(raw.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩",
+                                                        "0123456789")))
+                else:
+                    n = nums.get(raw)
+                if not n or not 1 <= n <= 60:
+                    continue
+                u = unit.strip("ًٌٍَُِّْ")
+                # skip units that are plainly not structural (pages, words,
+                # references…) — measured by what they are, via the singular the
+                # caller already understands; keep everything else.
+                if any(k in u for k in ("صفح", "كلم", "مرجع", "مراجع", "مصدر",
+                                        "مصادر", "دراس", "جدول", "جداول",
+                                        "شريح", "page", "word", "ref",
+                                        "source", "slide", "table")):
+                    continue
+                key = WeaverOrchestrator._unit_singular(u)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((key, n))
+            # «وكل مطلب تقسيمات حسب ما يلزم» — a DEEPER unit named with NO
+            # count. It used to be invisible, so «تقسيمات» never happened. The
+            # shape «كل <a unit already counted> <another noun>» identifies it,
+            # and its count is None, meaning: the MODEL decides how many, per
+            # section, and may decide none — which is what «حسب ما يلزم» says.
+            if out:
+                _known = "|".join(_re.escape(k) for k, _ in out)
+                for m in _re.finditer(
+                        r"كل\s+(?:" + _known + r")\w{0,3}\s+([^\W\d_]{3,20})",
+                        t, _re.UNICODE):
+                    _w = m.group(1).strip("ًٌٍَُِّْ")
+                    if _w in nums:        # «كل فصل ثلاثة مباحث» — a COUNT, not
+                        continue          # a unit; the count form is handled above
+                    cand = WeaverOrchestrator._unit_singular(_w)
+                    if (cand and cand not in seen and cand not in nums
+                            and not any(k in cand for k in
+                                        ("في", "فيه", "من", "على", "حسب",
+                                         "يلزم", "يحتاج", "عن", "الى", "إلى"))):
+                        seen.add(cand)
+                        out.append((cand, None))
+                        break
+            return out[:3]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _unit_singular(word):
+        """Best-effort singular of an Arabic structural unit so «مباحث» and
+        «مبحث» are one unit. Pattern-based (broken-plural shapes), not a lookup
+        table, with the input returned unchanged when nothing applies."""
+        w = str(word or "").strip()
+        for pre, post in (("مبا", "مبحث"), ("مطا", "مطلب"), ("فصو", "فصل"),
+                          ("أبو", "باب"), ("ابو", "باب"), ("أجز", "جزء"),
+                          ("اجز", "جزء"), ("أقس", "قسم"), ("اقس", "قسم"),
+                          ("فرو", "فرع"), ("تقس", "تقسيم")):
+            if w.startswith(pre):
+                return post
+        if w.endswith("ات") and len(w) > 4:
+            return w[:-2]
+        if w.endswith("ون") or w.endswith("ين"):
+            return w[:-2]
+        return w
+
+    @staticmethod
+    def _counted_structure(lang, n_mabhath, m_matlab, units=None, n_sub=0):
+        """Build a plan of EXACTLY n top sections, each with m sub-sections (and
+        optionally n_sub sub-sub-sections), plus intro / conclusion / references.
+        Abstract labels here get descriptive names later by _descriptive_titles.
+
+        RULE 1 — the UNIT NAMES come from the user. «المبحث»/«المطلب» used to be
+        hardcoded here, so «خمسة فصول» came out as «المبحث 1..5»: the user's own
+        word was discarded and replaced. `units` is an ordered list of the terms
+        the user actually used, e.g. ["الفصل", "المبحث", "المطلب"]; missing
+        entries fall back to the previous defaults, so old callers are
+        unchanged."""
         n_mabhath = max(1, min(WeaverOrchestrator._as_int(n_mabhath, 1) or 1, 30))
         m_matlab = max(0, min(WeaverOrchestrator._as_int(m_matlab, 0) or 0, 20))
-        mab = "المبحث" if lang == "ar" else "Section"
-        mat = "المطلب" if lang == "ar" else "Subsection"
+        n_sub = max(0, min(WeaverOrchestrator._as_int(n_sub, 0) or 0, 20))
+        _d = (["المبحث", "المطلب", "الفرع"] if lang == "ar"
+              else ["Section", "Subsection", "Sub-subsection"])
+        u = list(units or [])
+        u = [(str(u[i]).strip() if i < len(u) and str(u[i] or "").strip()
+              else _d[i]) for i in range(3)]
+        if lang == "ar":      # «فصل 1» reads wrong; «الفصل 1» is the usual form
+            u = [(x if x.startswith("ال") else "ال" + x) for x in u]
         secs = [{"key": "intro",
                  "title": "المقدمة" if lang == "ar" else "Introduction",
                  "level": 1}]
         for i in range(1, n_mabhath + 1):
-            secs.append({"key": "body", "title": f"{mab} {i}", "level": 1})
+            secs.append({"key": "body", "title": f"{u[0]} {i}", "level": 1})
             for j in range(1, m_matlab + 1):
-                secs.append({"key": "body", "title": f"{mat} {i}.{j}",
+                secs.append({"key": "body", "title": f"{u[1]} {i}.{j}",
                              "level": 2})
+                for k in range(1, n_sub + 1):
+                    secs.append({"key": "body",
+                                 "title": f"{u[2]} {i}.{j}.{k}", "level": 3})
         secs.append({"key": "conclusion",
                      "title": "الخاتمة" if lang == "ar" else "Conclusion",
                      "level": 1})
@@ -1420,6 +1629,12 @@ class WeaverOrchestrator:
         Additive and fully guarded."""
         files = self._data_files(task)
         if not files:
+            # RULE 2 — say so instead of vanishing: a request for statistics
+            # with no spreadsheet attached used to produce neither analysis
+            # nor any explanation.
+            if card.get("want_data") or card.get("needs_statistics"):
+                self._skip_note(card, "التحليل الإحصائي",
+                                "لم يُرفَق ملف بيانات (csv/xlsx) لتحليله")
             return
         path = files[0]
         try:
@@ -3340,6 +3555,7 @@ class WeaverOrchestrator:
         card = task.task_card
         query = (card.get("topic") or task.description or "").strip()
         if not query:
+            self._skip_note(card, "البحث الأكاديمي", "لا موضوع للبحث عنه")
             return
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
         limit = self._as_int(card.get("reference_count"), 8) or 8
@@ -4358,9 +4574,18 @@ class WeaverOrchestrator:
             prompt = (
                 "أنت مصمّم بنية مستندات خبير. صمّم البنية المناسبة تماماً لهذا "
                 "الطلب — دون فرض قالبٍ جاهز. أعِد JSON فقط:\n"
-                '{"sections":[{"title":"عنوان القسم الموضوعي","level":1أو2}],'
+                '{"sections":[{"title":"عنوان القسم الموضوعي",'
+                '"level":1|2|3|4}],'
                 '"needs_references":true|false}\n'
                 "قواعد حاسمة:\n"
+                "- العمق حرٌّ حتى أربعة مستويات، وأنت تقرّره بحسب الطلب: "
+                "1 للقسم الرئيسي (مبحث/فصل/باب…)، 2 لفرعه (مطلب…)، 3 لتقسيمات "
+                "الفرع، 4 لما أعمق. استخدم المستوى الثالث حين يطلب المستخدم "
+                "تقسيماتٍ داخل الأقسام الفرعية أو حين يقتضيه الموضوع فعلاً — "
+                "ولا تُعمّقه بلا حاجة.\n"
+                "- استعمل مصطلحات المستخدم نفسها في العناوين: إن قال «فصول» "
+                "فالعناوين فصول، وإن قال «مباحث» فمباحث، وإن قال «أبواب» "
+                "فأبواب. لا تستبدل مصطلحه بمصطلحٍ آخر.\n"
                 "- لاءم البنية مع الطلب فعلاً: طلبٌ بسيط (جدول مقارنة، تعريف، "
                 "شرح، فقرة، إجابة قصيرة) = بنية صغيرة (قسم أو أقسام قليلة قصيرة) "
                 "بلا مقدمة/خاتمة/توصيات/مراجع إن لم تلزم. بحث أو تقرير أكاديمي = "
@@ -4393,7 +4618,16 @@ class WeaverOrchestrator:
                     lvl = int(s.get("level", 1))
                 except (TypeError, ValueError):
                     lvl = 1
-                plan.append({"title": t[:200], "level": 1 if lvl < 2 else 2})
+                # RULE 1 — do not cap a decision the exporter can carry out.
+                # This line used to force `1 if lvl < 2 else 2`, so a model that
+                # correctly designed a third level (تقسيمات under a مطلب, a
+                # 1.1.1 sub-heading, a sub-section of a chapter) had its answer
+                # silently crushed to 2 — while the section assembler already
+                # allowed 4 (see out_sections below), Word's heading builder
+                # already sized levels 1-3, and the TOC already indented 3. The
+                # ONLY thing blocking a third level was this clamp.
+                plan.append({"title": t[:200],
+                             "level": max(1, min(lvl, 4))})
             if not plan:
                 return None
             card["needs_references"] = bool(data.get("needs_references"))
@@ -4627,18 +4861,62 @@ class WeaverOrchestrator:
 
         # explicit counts ("3 مباحث كل منها 3 مطالب", understood by the intent
         # router) → build the structure to EXACTLY that shape before naming it.
+        # RULE 1 — read the units and counts from the user's OWN words first.
+        # This path used to know only `mabhath_count`/`matlab_count`, so
+        # «خمسة فصول، كل فصل ثلاثة مباحث» was rebuilt as «المبحث 1..5» and a
+        # third level was impossible. `_structure_units` returns whatever the
+        # user named, in order, with its count — and `mabhath_count` stays as
+        # the fallback so nothing that worked before changes.
+        _units = []
+        try:
+            _units = self._structure_units(
+                self._current_request(task.description), lang)
+        except Exception:
+            _units = []
         _mc = card.get("mabhath_count")
-        if _mc and not (scope == "plan" or "plan" in scopes):
-            sections_plan = self._counted_structure(
-                lang, self._as_int(_mc, 1) or 1, self._as_int(card.get("matlab_count"), 0) or 0)
+        if (_units or _mc) and not (scope == "plan" or "plan" in scopes):
+            if _units:
+                _names = [u for u, _n in _units]
+                _n1 = _units[0][1] or 1
+                _n2 = (_units[1][1] if len(_units) > 1 else None) or (
+                    self._as_int(card.get("matlab_count"), 0) or 0)
+                # a deeper unit named with NO count («تقسيمات حسب ما يلزم») is
+                # not a number — the model decides it per section, below
+                _n3 = (_units[2][1] or 0) if len(_units) > 2 else 0
+                _deep_unit = (_units[2][0] if len(_units) > 2
+                              and _units[2][1] is None else None)
+            else:
+                _names = None
+                _n1 = self._as_int(_mc, 1) or 1
+                _n2 = self._as_int(card.get("matlab_count"), 0) or 0
+                _n3 = 0
+                _deep_unit = None
+            sections_plan = self._counted_structure(lang, _n1, _n2,
+                                                    units=_names, n_sub=_n3)
+            # «حسب ما يلزم» cannot be a fixed number — the model decides how
+            # many subdivisions each subsection needs, and may decide none.
+            if _deep_unit:
+                _before = len(sections_plan)
+                sections_plan = self._deepen_structure(
+                    sections_plan, self._current_request(task.description),
+                    card.get("topic", "") or task.description,
+                    _deep_unit, lang)
+                _added = len(sections_plan) - _before
+                mem.set_status(6, f"تقسيمات ({_deep_unit}) بقرار النموذج: "
+                                  f"أُضيف {_added}")
+                if not _added:
+                    self._skip_note(card, f"تقسيمات «{_deep_unit}»",
+                                    "لم يُضِف النموذج تقسيماتٍ (أو تعذّر النداء)")
             card["sections"] = sections_plan
+            card["structure_units"] = _units or None
             # the counted plan REPLACED whatever the model had designed, so its
             # titles are the abstract "المبحث 1"/"المطلب 1.1" slots again. Clear
             # the "model" provenance, otherwise the descriptive-naming step
             # below skips them and every مبحث ships without a real title.
             card["structure_source"] = "counted"
-            mem.set_status(6, f"بنية بالطلب: {_mc} مبحث × "
-                           f"{card.get('matlab_count') or 0} مطلب")
+            _shape = " × ".join(f"{n} {u}" for u, n in (_units or []))
+            mem.set_status(6, "بنية بالطلب: " + (_shape or
+                           f"{_n1} مبحث × {_n2} مطلب"))
 
         # give the abstract "المبحث/المطلب" slots DESCRIPTIVE, topic-specific
         # titles so each section chunk has a real sub-topic to write about (the
@@ -5114,11 +5392,18 @@ class WeaverOrchestrator:
         chart spec is stored on the card so _maybe_chart renders it at export.
         Never fabricates numbers (the model is told to return empty otherwise).
         Additive and fully guarded — a miss changes nothing."""
+        _asked = card.get("want_table") or card.get("want_chart")
         if not self.llm_fn:
+            if _asked:
+                self._skip_note(card, "جدول/رسم بياني من المحتوى",
+                                "النموذج غير متاح")
             return
         content = task.draft or "\n".join(
             (s.get("body", "") or "") for s in (task.sections or []))
         if not content.strip():
+            if _asked:
+                self._skip_note(card, "جدول/رسم بياني من المحتوى",
+                                "لا محتوى مكتوب لاشتقاقه منه")
             return
         if card.get("want_table"):
             try:
@@ -6383,6 +6668,8 @@ class WeaverOrchestrator:
             if pq_refs:
                 refs = (refs + "\n" + str(pq_refs)).strip()
         if not (refs or "").strip():
+            self._skip_note(card, "قائمة المراجع",
+                            "لم تُبنَ قائمةٌ من المصادر المُجمَّعة")
             return
         head = "قائمة المراجع" if lang == "ar" else "References"
         # drop any earlier placeholder references section, then append the real one
@@ -6716,6 +7003,29 @@ class WeaverOrchestrator:
                                 + "\n\n" + "\n".join(_lines)
         except Exception as e:
             mem.set_status(8, f"تحقّق/إصلاح المتطلّبات (تخطّي: {e})")
+
+        # ── RULE 2 — surface every step that cancelled itself ──
+        # Deliberately INDEPENDENT of the verification block above: that one
+        # only runs when a requirements checklist exists and something is
+        # unmet, so a skipped step (statistics with no data file, a table the
+        # enricher could not derive) would still have vanished without a word
+        # whenever the checklist was absent. This always reports.
+        try:
+            _sk = (task.task_card or {}).get("skipped_steps") or []
+            if _sk:
+                _en = (task.task_card.get("language", "ar") == "en")
+                _h = ("Not done, and why:" if _en else "لم يُنفَّذ، والسبب:")
+                _ls = [_h] + [f"• {x.get('step','')} — {x.get('reason','')}"
+                              for x in _sk if isinstance(x, dict)]
+                task.draft = (task.draft or "").rstrip() + "\n\n" \
+                    + "\n".join(_ls)
+                mem.set_status(8, f"خطوات لم تُنفَّذ: {len(_sk)}")
+                self._emit("detail", "",
+                           "لم يُنفَّذ: " + "، ".join(
+                               str(x.get("step", "")) for x in _sk[:4]))
+        except Exception as e:
+            mem.set_status(8, f"تقرير الخطوات (تخطّي: {e})")
+
         # كتابة الملف الفعلي على القرص
         try:
             task.output_path = self._export(task)
@@ -7777,6 +8087,47 @@ def _verify_deterministic(req, draft, card, lang):
             return (("met" if ratio <= 0.4 else "unmet"),
                     f"نسبة العربية {ratio:.0%}")
         return None
+
+    # ── sources: COUNT them exactly; leave the citation STYLE to judgement ──
+    # RULE 3 — «مع 9 مراجع … موثقة بأسلوب APA» went entirely to the model, which
+    # then reported a mix of a countable fact and a stylistic opinion in one
+    # breath. The count is countable: numbered entries under a references
+    # heading. Only the style part needs a judgement, so only that is deferred.
+    if kind == "structure" or kind == "source":
+        _txt = text
+        if kind == "source" or any(k in _txt for k in (
+                "مرجع", "مراجع", "مصدر", "مصادر", "دراس", "reference",
+                "source", "stud")):
+            _want = req.get("target")
+            if not isinstance(_want, int) or isinstance(_want, bool):
+                _ns = [n for n in _vr_numbers(req.get("text") or "")
+                       if 1 <= n <= 500]
+                _want = _ns[0] if _ns else None
+            if _want:
+                import re as _re
+                _in_refs, _cnt = False, 0
+                for _ln in (draft or "").splitlines():
+                    _s = _ln.strip()
+                    if _s.startswith("#"):
+                        _low = _s.lstrip("# ").lower()
+                        _in_refs = any(k in _low for k in (
+                            "مراجع", "مصادر", "دراسات", "المواقع",
+                            "references", "bibliography"))
+                        continue
+                    if _in_refs and _re.match(r"^\d{1,3}[.)]\s+\S", _s):
+                        _cnt += 1
+                if _cnt:
+                    _ev = f"عدد المدخلات المرقّمة في قائمة المراجع = {_cnt} " \
+                          f"مقابل {_want}"
+                    if _cnt < _want:
+                        return ("unmet", _ev)
+                    # count is satisfied; the STYLE (APA) is a judgement
+                    if any(k in _txt for k in ("apa", "mla", "chicago",
+                                               "توثيق", "أسلوب")):
+                        return None
+                    return ("met", _ev)
+        if kind == "source":
+            return None
 
     # ── inserts: table/references live in the draft (cover/TOC are settled
     #    above, for ANY kind, because they are invisible in the draft) ─
