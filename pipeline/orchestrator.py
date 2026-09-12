@@ -3725,11 +3725,18 @@ class WeaverOrchestrator:
         return out or None
 
     @classmethod
-    def _scholarly_search(cls, query, lang, limit, timeout=14):
+    def _scholarly_search(cls, query, lang, limit, timeout=14, wide=False):
         """Query all free scholarly sources IN PARALLEL (OpenAlex, Crossref,
         arXiv, Semantic Scholar, DOAJ, Europe PMC) and merge/dedupe by DOI/URL/
         title. Total time ≈ the slowest source. Each degrades safely. Returns a
-        merged list or None."""
+        merged list or None.
+
+        `wide` (default False → behaviour unchanged) returns the papers the
+        lexical filter rejected as CANDIDATES too, so a caller that has a model
+        can judge topical relevance itself. The lexical test here accepts a
+        paper when ANY ONE query token appears in it — which let a paper about
+        divorce into a search about phone radiation on the word «الأطفال»
+        alone. That is a pre-filter, never a judgement."""
         import concurrent.futures as _cf
         import itertools
         engines = [
@@ -3779,8 +3786,16 @@ class WeaverOrchestrator:
                 merged.append(r)
             else:
                 backup.append(r)          # off-topic → only if nothing relevant
-            if len(merged) >= cap:
+            if len(merged) >= (cap * 2 if wide else cap):
                 break
+            if wide and len(merged) + len(backup) >= cap * 2:
+                break
+        if wide:
+            # hand BOTH piles on, the likelier ones first: the caller's model
+            # decides what belongs. Nothing is silently dropped, and nothing
+            # off-topic is silently kept either.
+            final = merged + backup
+            return final[:cap * 2] or None
         final = merged if merged else backup
         return final[:cap] or None
 
@@ -3801,6 +3816,140 @@ class WeaverOrchestrator:
                 out.add(tok)
         return out
 
+    def _search_query(self, topic, request, lang="ar"):
+        """Let the MODEL compose the scholarly search query.
+
+        The request used to be handed to the databases VERBATIM. Arabic titles
+        share stock shapes — «أثر … على …» — so a literal «أثر إشعاعات الهاتف
+        على الأطفال» matched, on shape alone, papers about divorce and about
+        mobile-phone marketing. The databases match characters; only the model
+        knows what the research is ABOUT. No keyword list, no topic table: the
+        model reads the request and names the search terms, so this behaves the
+        same with any model from any platform.
+
+        Returns a query string — the topic unchanged on any miss. Never raises.
+        """
+        base = (topic or "").strip()
+        if not self.llm_fn or not base:
+            return base
+        import os
+        if (os.environ.get("WEAVER_MODEL_QUERY", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return base
+        try:
+            from core.llm import extract_json
+            if lang == "en":
+                prompt = (
+                    "Compose ONE search query for academic databases (OpenAlex, "
+                    "Crossref, Semantic Scholar) for the research below. Keep "
+                    "the terms that define the subject; drop wrapper words that "
+                    "only describe the writing task. Return JSON only:\n"
+                    '{"query":"…"}\n'
+                    f"Research topic: {base}\n"
+                    f"Request: {(request or '')[:400]}")
+            else:
+                prompt = (
+                    "صُغ استعلامَ بحثٍ واحداً لقواعد البيانات الأكاديمية "
+                    "(OpenAlex، Crossref، Semantic Scholar) للبحث أدناه. أبقِ "
+                    "المصطلحات التي تُعرّف الموضوع، واحذف كلماتِ الصياغة التي "
+                    "تصف مهمّة الكتابة لا الموضوع. أعِد JSON فقط:\n"
+                    '{"query":"…"}\n'
+                    f"موضوع البحث: {base}\n"
+                    f"الطلب: {(request or '')[:400]}")
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.2,
+                              max_tokens=200, timeout=30) or ""
+            data = extract_json(raw)
+            q = ""
+            if isinstance(data, dict):
+                q = str(data.get("query") or "").strip()
+            if not q:
+                return base
+            q = " ".join(q.split())[:200]
+            # a query the model empties or turns into a single stop-word is not
+            # an improvement — fall back rather than search for nothing.
+            return q if len(q) >= 3 else base
+        except Exception:
+            return base
+
+    def _judge_relevance(self, results, topic, request, lang="ar"):
+        """ONE batched call: the model reads the fetched TITLES and says which
+        belong to this research.
+
+        This is the step that did not exist. The chain was: send the sentence
+        literally → accept a paper on one shared token → if nothing survives,
+        take everything anyway → check the PUBLISHER's reputation. Nowhere was
+        anything asked «does this reference belong to my topic?». A paper on
+        divorce published in a refereed journal passed every gate.
+
+        Returns (kept, dropped) as lists, or (None, None) when the model was
+        not consulted or its answer was unusable — the caller then keeps what
+        it had, so a model failure never empties the references. Never raises.
+        """
+        items = [r for r in (results or []) if isinstance(r, dict)]
+        if not self.llm_fn or not items:
+            return None, None
+        import os
+        if (os.environ.get("WEAVER_REF_JUDGE", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return None, None
+        try:
+            from core.llm import extract_json
+            lines = []
+            for i, r in enumerate(items, 1):
+                t = " ".join(str(r.get("title") or "").split())[:220]
+                y = str(r.get("year") or "").strip()
+                lines.append(f"{i}. {t}" + (f" ({y})" if y else ""))
+            listing = "\n".join(lines)
+            if lang == "en":
+                prompt = (
+                    "Below are titles returned by academic databases for the "
+                    "research described. Decide which ones genuinely belong to "
+                    "THIS research and which only share a word or a phrasing "
+                    "pattern with it. Judge the subject, not the wording. "
+                    "Return JSON only, every number appearing exactly once:\n"
+                    '{"keep":[1,3],"drop":[2,4]}\n'
+                    f"Research topic: {topic}\n"
+                    f"Request: {(request or '')[:400]}\n"
+                    f"Titles:\n{listing}")
+            else:
+                prompt = (
+                    "أدناه عناوينُ أعادتها قواعدُ البيانات الأكاديمية للبحث "
+                    "الموصوف. قرّر أيُّها يخصّ هذا البحث فعلاً، وأيُّها يشترك "
+                    "معه في كلمةٍ أو في صيغةِ العنوان فقط. احكم على الموضوع لا "
+                    "على اللفظ. أعِد JSON فقط، وليَرِد كلُّ رقمٍ مرّةً واحدة:\n"
+                    '{"keep":[1,3],"drop":[2,4]}\n'
+                    f"موضوع البحث: {topic}\n"
+                    f"الطلب: {(request or '')[:400]}\n"
+                    f"العناوين:\n{listing}")
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.1,
+                              max_tokens=600, timeout=45) or ""
+            data = extract_json(raw)
+            if not isinstance(data, dict):
+                return None, None
+
+            def _idx(name):
+                out = []
+                for x in (data.get(name) or []):
+                    try:
+                        n = int(x)
+                    except (TypeError, ValueError):
+                        continue
+                    if 1 <= n <= len(items) and n not in out:
+                        out.append(n)
+                return out
+            keep_i, drop_i = _idx("keep"), _idx("drop")
+            if not keep_i and not drop_i:
+                return None, None       # unusable answer → caller keeps its own
+            drop_set = set(drop_i) - set(keep_i)
+            kept = [items[n - 1] for n in range(1, len(items) + 1)
+                    if n not in drop_set]
+            # the model was consulted and named some; anything it mentioned in
+            # neither list stays — silence is not a rejection.
+            dropped = [items[n - 1] for n in sorted(drop_set)]
+            return kept, dropped
+        except Exception:
+            return None, None
+
     async def _academic_search(self, task: Task, mem: TaskMemory):
         """Layer 4 academic path: gather peer-reviewed / open-access sources
         from the free scholarly APIs and add them to the task's sources + RAG
@@ -3812,12 +3961,43 @@ class WeaverOrchestrator:
             return
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
         limit = self._as_int(card.get("reference_count"), 8) or 8
+        # ① the MODEL composes the query — the request is no longer sent to the
+        #    databases as a literal sentence.
+        _q = self._search_query(query, task.description, lang)
+        if _q and _q != query:
+            self._record_decision(card, "استعلام البحث", _q[:60], "model",
+                                  "بحث أكاديمي")
         try:
-            results = self._scholarly_search(query, lang, limit)
+            # ② the lexical filter widens the candidate pool instead of ruling
+            #    on it, whenever there is a model to rule.
+            results = self._scholarly_search(_q or query, lang, limit,
+                                             wide=bool(self.llm_fn))
         except Exception:
             results = None
         if not results:
+            self._skip_note(card, "البحث الأكاديمي",
+                            "لم تُعِد قواعد البيانات الأكاديمية أي نتيجة")
             mem.set_status(4, "بحث أكاديمي: لا نتائج (تدهور آمن)")
+            return
+        # ③ the MODEL judges topical relevance on the fetched titles, in ONE
+        #    call. This is the question nobody used to ask.
+        _kept, _dropped = self._judge_relevance(results, query,
+                                                task.description, lang)
+        if _kept is not None:
+            self._record_decision(card, "فرز المراجع",
+                                  f"أُبقي {len(_kept)}، استُبعد "
+                                  f"{len(_dropped or [])}", "model",
+                                  "بحث أكاديمي")
+            results = _kept
+        results = (results or [])[:limit]
+        # ④ the back door is closed: an off-topic list is no longer served in
+        #    place of a relevant one. Saying «لم أجد» is honest; filling the
+        #    bibliography with papers about another subject is not.
+        if not results:
+            self._skip_note(
+                card, "المراجع الأكاديمية",
+                "لم يجد النموذج بين نتائج قواعد البيانات مرجعاً يخصّ الموضوع")
+            mem.set_status(4, "بحث أكاديمي: لا مرجع مطابق للموضوع")
             return
         srcs = card.setdefault("sources", [])
         for r in results:
