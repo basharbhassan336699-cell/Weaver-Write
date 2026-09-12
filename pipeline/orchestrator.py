@@ -660,13 +660,22 @@ class WeaverOrchestrator:
 
     @staticmethod
     def _requirements_directive(card=None, section_name: str = "",
-                                lang: str = "ar") -> str:
+                                lang: str = "ar", tables_left=None) -> str:
         """STAGE (ب) — turn the requirements checklist (from extract_requirements)
         into a SHORT directive appended to a section's writing prompt, so every
         section is written with the user's whole plan in view. Like the style
         director, it is guidance the model APPLIES WHERE IT FITS — never forced,
         and never imposed on a references list. Returns "" when there is no
-        checklist or nothing writing-relevant. Pure logic; never raises."""
+        checklist or nothing writing-relevant. Pure logic; never raises.
+
+        `tables_left` (optional) is how many tables the WHOLE document still has
+        room for. The table line used to be handed to every section
+        independently — with 43 sections that is 43 separate invitations, and a
+        run came back with 31 tables for one request for «جداول». The writer
+        cannot see the other sections, so "as needed" has to be told to it as a
+        document-level budget: how many remain, and to add one only when this
+        section's content is genuinely tabular. At 0 the invitation is dropped
+        entirely. None keeps the old unbounded wording (old callers unchanged)."""
         reqs = (card or {}).get("requirements") or []
         if not isinstance(reqs, list) or not reqs:
             return ""
@@ -693,6 +702,9 @@ class WeaverOrchestrator:
                 # for «جداول تحتوي المصطلحات التقنية وشرحها» came back as
                 # classification tables, exactly as that generic line asked.
                 want_table = t
+        # the document's table budget is spent → stop inviting tables at all
+        if want_table and isinstance(tables_left, int) and tables_left <= 0:
+            want_table = False
         if not (styles or contents or want_table):
             return ""
         if lang == "en":
@@ -705,15 +717,20 @@ class WeaverOrchestrator:
                 lines.append("- Make sure to cover, where relevant: "
                              + "؛ ".join(contents) + ".")
             if want_table:
+                _budget = ("" if not isinstance(tables_left, int) else
+                           f" The document has room for about {tables_left} "
+                           "more table(s) IN TOTAL — most sections need none, so "
+                           "add one here only if this section's content is "
+                           "genuinely tabular; otherwise write prose.")
                 lines.append(
                     "- Tables were requested as: “" + str(want_table) + "”. "
                     "Where this section's content fits THAT description, present "
                     "it as a Markdown table (| … | … |) whose columns match what "
-                    "was asked for, instead of prose."
+                    "was asked for, instead of prose." + _budget
                     if isinstance(want_table, str) else
                     "- Where this section's content is a comparison or a set of "
                     "terms/values, present it as a Markdown table (| … | … |) "
-                    "instead of prose.")
+                    "instead of prose." + _budget)
             return "\n".join(lines)
         lines = ["متطلّبات الطلب التي تُراعى في هذا القسم (طبّقها حيث تناسب، "
                  "دون إقحام):"]
@@ -723,14 +740,19 @@ class WeaverOrchestrator:
             lines.append("- احرص على تغطية ما يناسب هذا القسم مِن: "
                          + "؛ ".join(contents) + ".")
         if want_table:
+            _budget = ("" if not isinstance(tables_left, int) else
+                       f" وللمستند كله متّسعٌ لنحو {tables_left} جدولٍ إضافيّ "
+                       "فقط — ومعظم الأقسام لا تحتاج جدولاً أصلاً، فلا تضع "
+                       "جدولاً هنا إلا إذا كان محتوى هذا القسم جدوليّاً بطبعه؛ "
+                       "وإلا فاكتب نصّاً.")
             lines.append(
                 "- الجداول مطلوبةٌ بنصّ المستخدم: «" + str(want_table) + "». "
                 "فحيث يناسب محتوى هذا القسم هذا الوصف بالتحديد، اعرضه في جدولٍ "
                 "بصيغة ماركداون (| … | … |) تكون أعمدته مطابقةً لما طُلب "
-                "(لا جدول تصنيفٍ أو مقارنةٍ عامّاً بدلاً منه)."
+                "(لا جدول تصنيفٍ أو مقارنةٍ عامّاً بدلاً منه)." + _budget
                 if isinstance(want_table, str) else
                 "- حين يكون محتوى هذا القسم مقارنةً أو مجموعةَ مصطلحاتٍ/قيَم، "
-                "اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل السرد.")
+                "اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل السرد." + _budget)
         return "\n".join(lines)
 
     def _intent_router(self, request):
@@ -5084,6 +5106,36 @@ class WeaverOrchestrator:
                 card, self._current_request(task.description))
         except Exception:
             _bridge = {"mode": "auto", "max_words": 120}
+        # ── TABLE BUDGET for the whole document ──
+        # The "put a table where it fits" hint is given to each section on its
+        # own, and a section cannot see the others. With 43 sections that became
+        # 43 independent invitations and produced 31 tables for one request for
+        # «جداول». "حسب الحاجة" therefore has to be expressed as a DOCUMENT-level
+        # budget the writer is told about: roughly one per top-level section
+        # (never per subsection), at least 2 so a plural ask is honoured, and
+        # capped. The model still decides where — and may use fewer — but it can
+        # no longer put one everywhere. None (no table asked for) = unchanged.
+        _tbl_budget = _tbl_used = None
+        try:
+            if card.get("want_table") or any(
+                    isinstance(r, dict) and r.get("kind") == "insert"
+                    and any(w in str(r.get("text", "")).lower()
+                            for w in ("جدول", "جداول", "table"))
+                    for r in (card.get("requirements") or [])):
+                _tops = sum(1 for s in sections_plan
+                            if int(s.get("level", 1) or 1) == 1
+                            and not self._is_ref_heading(
+                                s.get("title") or s.get("heading") or "")
+                            and not any(w in (s.get("title") or "")
+                                        for w in ("المقدمة", "الخاتمة",
+                                                  "Introduction", "Conclusion")))
+                _tbl_budget = max(2, min(_tops or 3, 6))
+                _tbl_used = 0
+                card["table_budget"] = _tbl_budget
+                mem.set_status(6, f"ميزانية الجداول: {_tbl_budget} للمستند كله")
+        except Exception:
+            _tbl_budget = _tbl_used = None
+
         parts, out_sections = [], []
         for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
@@ -5208,8 +5260,10 @@ class WeaverOrchestrator:
                 if os.environ.get("WEAVER_PLAN_WRITER", "1").strip().lower() \
                         not in ("0", "false", "off", "no"):
                     try:
-                        _rb = self._requirements_directive(card, section_name,
-                                                           lang)
+                        _rb = self._requirements_directive(
+                            card, section_name, lang,
+                            tables_left=(None if _tbl_budget is None
+                                         else max(0, _tbl_budget - _tbl_used)))
                         if _rb:
                             prompt = prompt + "\n\n" + _rb
                     except Exception:
@@ -5332,6 +5386,16 @@ class WeaverOrchestrator:
                 except Exception:
                     pass
             body = self._clean_section_body(body, title)
+            # spend the budget on what was ACTUALLY written, not on what was
+            # asked for — a section told to consider a table may well write
+            # prose, and that must not cost it anything.
+            if _tbl_budget is not None:
+                try:
+                    import re as _re
+                    _tbl_used += len(_re.findall(
+                        r"(?m)^\s*\|[^\n]*\|\s*$\n\s*\|[\s:\-|]+\|\s*$", body))
+                except Exception:
+                    pass
             parts.append((f"{title}\n{body}").strip())
             # keep the plan's LEVEL (1=مبحث, 2=مطلب) so the exporter can
             # render a real hierarchy instead of flattening everything to H1.
