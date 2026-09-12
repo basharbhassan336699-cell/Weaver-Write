@@ -4605,7 +4605,7 @@ class WeaverOrchestrator:
         return txt
 
     @staticmethod
-    def _length_directive(card=None, n_sections=1, lang="ar"):
+    def _length_directive(card=None, n_sections=1, lang="ar", share=None):
         """What to put in the writer prompt's "Required length" slot.
 
         That slot read card["page_count"] — a key NOTHING in the pipeline ever
@@ -4623,7 +4623,15 @@ class WeaverOrchestrator:
             return ""
         n = max(1, int(n_sections or 1))
         base = total or mx or 0
-        share = int(base / n) if base else 0
+        # `share` comes from _section_budgets when the caller computed one per
+        # ROLE; the flat division is only the fallback for callers that did not
+        if share is None:
+            share = int(base / n) if base else 0
+        else:
+            try:
+                share = max(0, int(share))
+            except Exception:
+                share = int(base / n) if base else 0
         if lang == "en":
             bits = []
             if pages:
@@ -4645,6 +4653,67 @@ class WeaverOrchestrator:
         if mx:
             bits.append(f"وألّا يتجاوز المستند {mx} كلمة")
         return " — ".join(bits)
+
+    @classmethod
+    def _section_budgets(cls, sections_plan, card=None, bridge_cap=120):
+        """Split the requested word budget over the sections BY ROLE.
+
+        `_length_directive` divides the total by the section COUNT, so a 3-level
+        structure (3 مباحث + 9 مطالب + 26 تقسيمات + front/back matter = 42) told
+        every section "about 71 words" — including the twelve parents that only
+        write a short bridge and the references list that is generated, not
+        written. 71 is not a believable size for a section, so the writer ignored
+        it and produced ~150 each: 6,300 words against a 3,000 target.
+
+        Roles:
+          • a PARENT (a section immediately followed by deeper ones) writes only
+            a bridge, and the bridges are paid for out of the same budget —
+            capped at 15% of the total between them, so twelve bridges cannot
+            eat half the document.
+          • the REFERENCES section is generated and gets nothing.
+          • every remaining LEAF shares what is left.
+
+        Returns {index: words}. Empty dict when no length was requested, so the
+        caller keeps its current behaviour. Never raises."""
+        try:
+            card = card or {}
+            total = card.get("target_words") or card.get("max_words")
+            if not total:
+                return {}
+            total = int(total)
+            secs = [s for s in (sections_plan or []) if isinstance(s, dict)]
+            if not secs:
+                return {}
+            lv = []
+            for s in secs:
+                try:
+                    lv.append(int(s.get("level", 1) or 1))
+                except Exception:
+                    lv.append(1)
+            parents, refs, leaves = [], [], []
+            for i, s in enumerate(secs):
+                title = s.get("title") or s.get("heading") or ""
+                if cls._is_ref_heading(title):
+                    refs.append(i)
+                elif i + 1 < len(secs) and lv[i + 1] > lv[i]:
+                    parents.append(i)
+                else:
+                    leaves.append(i)
+            if not leaves:
+                leaves, parents = list(range(len(secs))), []
+            out = {i: 0 for i in refs}
+            b_pool = int(total * 0.15)
+            b_each = min(int(bridge_cap or 120),
+                         max(30, b_pool // max(1, len(parents)))) if parents else 0
+            for i in parents:
+                out[i] = b_each
+            rest = max(0, total - b_each * len(parents))
+            l_each = max(60, rest // max(1, len(leaves)))
+            for i in leaves:
+                out[i] = l_each
+            return out
+        except Exception:
+            return {}
 
     @staticmethod
     def _bridge_policy(card=None, request=""):
@@ -5486,6 +5555,16 @@ class WeaverOrchestrator:
         except Exception:
             _dec_on = False
         _sec_decisions = {}
+        # per-section word budget by ROLE (bridge / leaf / references)
+        try:
+            _budgets = self._section_budgets(
+                sections_plan, card, _bridge.get("max_words", 120))
+            if _budgets:
+                _lf = [v for k, v in _budgets.items() if v]
+                mem.set_status(6, f"ميزانية الطول: {min(_lf)}–{max(_lf)} كلمة "
+                                  f"لكل قسم حسب دوره")
+        except Exception:
+            _budgets = {}
         # who decided the big things, recorded once so nothing is anonymous
         try:
             if card.get("target_words") or card.get("target_pages"):
@@ -5577,8 +5656,12 @@ class WeaverOrchestrator:
                 else:
                     section_name = title
                 try:
+                    # this section's OWN share, by its role in the structure —
+                    # a parent writing a bridge is not given a full section's
+                    # budget, and the references list is not given one at all
+                    _my = _budgets.get(_si)
                     _len_dir = self._length_directive(
-                        card, len(sections_plan), lang)
+                        card, len(sections_plan), lang, share=_my)
                 except Exception:
                     _len_dir = ""
                 if mode == "uncited":
@@ -6022,6 +6105,92 @@ class WeaverOrchestrator:
                                                   "body": _b})
                     mem.set_status(66, f"تغطية: أُضيف {len(missing)} قسم ناقص")
 
+            # ── OVER the requested maximum → CONDENSE, never cut ──
+            # This stage only ever grew a short document; a long one stayed
+            # long (6,323 words against a 3,600 ceiling) because nothing
+            # shortened it. Automatic trimming would delete sentences
+            # blindly, so the model REWRITES the longest sections more
+            # tightly instead — and each rewrite is accepted only if it is
+            # genuinely shorter, still substantial, keeps its citations, and
+            # is not a chat turn. A rejected rewrite leaves the original
+            # untouched. Off with WEAVER_CONDENSE=0.
+            try:
+                import os as _osc
+                lang = card.get("language", "ar")   # not bound in 6.6
+                _mx = card.get("max_words")
+                _cur = self.count_words(task.draft)
+                if (_mx and self.llm_fn and _cur > int(_mx) * 1.05
+                        and _osc.environ.get("WEAVER_CONDENSE", "1") != "0"):
+                    _over = _cur - int(_mx)
+                    _cand = sorted(
+                        [s for s in (task.sections or [])
+                         if not self._is_ref_heading(s.get("heading", ""))
+                         and self.count_words(s.get("body", "")) >= 120],
+                        key=lambda s: -self.count_words(s.get("body", "")))
+                    _saved = 0
+                    for s in _cand:
+                        if _saved >= _over:
+                            break
+                        _w = self.count_words(s.get("body", ""))
+                        _goal = max(80, int(_w * 0.65))
+                        _p = (f"أعِد كتابة هذا القسم بإيجازٍ أشدّ في نحو "
+                              f"{_goal} كلمة بدل {_w}، مع الحفاظ على كل "
+                              f"الأفكار الجوهرية وكل الاستشهادات كما هي "
+                              f"(المؤلف، السنة) وعلى أيّ جدول. احذف الحشو "
+                              f"والتكرار والاستطراد فقط. أعِد النصّ وحده بلا "
+                              f"مقدمةٍ ولا تعليق ولا إعادة لعنوان القسم.\n\n"
+                              f"العنوان: {s.get('heading','')}\n\n"
+                              f"{s.get('body','')}"
+                              if lang != "en" else
+                              f"Rewrite this section more tightly in about "
+                              f"{_goal} words instead of {_w}, keeping every "
+                              f"substantive idea, every citation exactly as "
+                              f"it is, and any table. Cut only padding, "
+                              f"repetition and digression. Return the text "
+                              f"alone — no preamble, no commentary, no "
+                              f"repeat of the heading.\n\n"
+                              f"Heading: {s.get('heading','')}\n\n"
+                              f"{s.get('body','')}")
+                        try:
+                            _new = self.llm_fn(_p, system=self.system_main,
+                                               temperature=0.3) or ""
+                        except Exception:
+                            continue
+                        _new, _ = self._split_decisions(_new)
+                        _new = self._clean_section_body(
+                            self._strip_meta_preamble(_new.strip()),
+                            s.get("heading", ""))
+                        _nw = self.count_words(_new)
+                        # A rewrite may not lose a SOURCE. Counting instances is
+                        # wrong — condensing legitimately repeats a citation
+                        # fewer times — so the distinct citations are compared
+                        # instead: every source cited before must still be cited.
+                        import re as _rec
+                        _cit_re = _rec.compile(r"\([^()]{3,60}[،,]\s*\d{4}\)")
+                        _cits_old = set(_cit_re.findall(s.get("body", "")))
+                        _cits_new = set(_cit_re.findall(_new))
+                        if (_new and _nw >= 60 and _nw < _w
+                                and not self._looks_conversational(_new)
+                                and _cits_old <= _cits_new):
+                            _saved += (_w - _nw)
+                            s["body"] = _new
+                    if _saved:
+                        task.draft = "\n\n".join(
+                            (f"{s.get('heading','')}\n{s.get('body','')}").strip()
+                            for s in task.sections
+                            if (s.get("heading") or s.get("body")))
+                        mem.set_status(66, f"طول: أُعيدت صياغة أقسامٍ "
+                                           f"وفُّرت {_saved} كلمة")
+                        self._record_decision(card, "condensed", _saved,
+                                              "model", "تجاوز الحدّ الأقصى")
+                    else:
+                        self._skip_note(
+                            card, "تقليص الطول",
+                            f"المستند {_cur} كلمة والحدّ {_mx} — "
+                            "لم تُقبل أيّ إعادة صياغة")
+            except Exception as e:
+                mem.set_status(66, f"تقليص (تخطّي: {e})")
+
             # ── (ب) تحقق الطول (كلمات) ──
             target = self.extract_length_target(task.description)
             tw = target.get("words")
@@ -6074,6 +6243,7 @@ class WeaverOrchestrator:
                                 s["body"] = _m
                                 deficit -= max(0, added)
                     mem.set_status(66, f"طول: وُسّع النص نحو الهدف {tw}")
+
 
                 # أعد بناء draft بعد أي تعديل
                 task.draft = "\n\n".join(
