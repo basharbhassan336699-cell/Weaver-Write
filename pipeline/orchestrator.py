@@ -427,7 +427,7 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
-    def _deliverable_contradicted(requirements):
+    def _deliverable_contradicted(requirements, deliverable=None):
         """Is a LIMITING deliverable (outline/references/plan/part) contradicted
         by the model's own requirements checklist? Returns a short Arabic reason
         or None.
@@ -440,6 +440,24 @@ class WeaverOrchestrator:
         the very checklist that accompanies it. Used in ONE safe direction only:
         toward the fuller deliverable. Never raises."""
         try:
+            _dv = str(deliverable or "").lower()
+            # A SOURCE COUNT CONTRADICTS AN OUTLINE, NOT A REFERENCE LIST.
+            # «أوجد ٩ مراجع لموضوع كذا» carries kind=source target=9 — which is
+            # the request itself, not evidence against it. Counting it as a
+            # contradiction turned a nine-line bibliography into a fifteen-
+            # section document: work the user never asked for, paid for by the
+            # token. The same reading also tends to echo that 9 back as a length
+            # target, so for a reference list a length equal to the source count
+            # is the same number read twice, not a second independent signal.
+            _refs = (_dv == "references")
+            _src_targets = set()
+            if _refs:
+                for r in (requirements or []):
+                    if isinstance(r, dict) and str(r.get("kind") or "").lower() \
+                            == "source":
+                        _t = r.get("target")
+                        if isinstance(_t, int) and not isinstance(_t, bool):
+                            _src_targets.add(_t)
             hits = []
             for r in (requirements or []):
                 if not isinstance(r, dict) or not r.get("must", True):
@@ -450,9 +468,14 @@ class WeaverOrchestrator:
                     else None
                 # a length ask (pages/words) is impossible for a bare outline
                 if kind == "length" and (num or 0) >= 3:
+                    if _refs and num in _src_targets:
+                        continue          # the source count read twice
                     hits.append(f"طول مطلوب: {num}")
-                # several sources to document belong to a written document
+                # several sources to document belong to a written document —
+                # unless the deliverable IS the source list
                 elif kind == "source" and (num or 0) >= 3:
+                    if _refs:
+                        continue
                     hits.append(f"مصادر مطلوبة: {num}")
                 # depth of structure: sub-sections under sections (e.g. مطالب
                 # inside مباحث) describe a document's body, not a heading list
@@ -2817,7 +2840,7 @@ class WeaverOrchestrator:
                         # toward the FULLER deliverable, never the narrower one.
                         if _dv in ("outline", "references", "plan", "part"):
                             _why = self._deliverable_contradicted(
-                                _req.get("requirements"))
+                                _req.get("requirements"), _dv)
                             if _why:
                                 mem.set_status(
                                     3, f"حكم النموذج «{_dv}» يخالف متطلّباته "

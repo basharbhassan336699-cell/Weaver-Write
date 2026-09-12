@@ -88,11 +88,113 @@ def reasoning_payload(provider, base, model):
     return dict(fam["on"] if on else fam["off"])
 
 
+# ── OFFLINE TEST MODEL (costs nothing, needs no key, makes no request) ──────
+# Testing a fix used to mean a PAID live run: every round of diagnosis spent
+# real credit, and a round that only proved "the call came back empty" spent it
+# for nothing. With WEAVER_LLM=offline the whole pipeline runs end to end — the
+# model-judgement paths included — against a deterministic stand-in.
+#
+# It answers JSON prompts in the SHAPE THE PROMPT ITSELF ASKS FOR: the caller
+# always shows a template like {"keep":[1],"drop":[2]}, so the stand-in parses
+# that template out of the prompt and fills it. No per-caller rules to keep in
+# sync, so a new model call added later is covered the day it is written.
+#
+# It is a TEST DOUBLE: the text it writes is filler. It proves the wiring — who
+# is asked, what comes back, which branch runs, what the document ends up
+# containing — never the quality of the prose.
+_OFFLINE_FILLER = (
+    "هذه فقرةٌ من النموذج البديل لغرض الاختبار دون تكلفة. تشرح الفكرة "
+    "المطروحة في القسم وتربطها بما قبلها، ثم تمهّد لما بعدها. "
+)
+
+
+def _offline_json_template(prompt):
+    """Pull the JSON template the prompt is asking for and fill it in. Returns a
+    JSON string, or None when the prompt is not asking for JSON."""
+    txt = prompt or ""
+    if "JSON" not in txt and "json" not in txt:
+        return None
+    best = None
+    for i, ch in enumerate(txt):
+        if ch != "{":
+            continue
+        depth = 0
+        for j in range(i, len(txt)):
+            if txt[j] == "{":
+                depth += 1
+            elif txt[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    cand = txt[i:j + 1]
+                    try:
+                        obj = json.loads(cand.replace("…", "").replace("...", ""))
+                    except Exception:
+                        break
+                    if isinstance(obj, dict) and (best is None
+                                                  or len(cand) > best[0]):
+                        best = (len(cand), obj)
+                    break
+    if best is None:
+        return None
+
+    counter = [0]
+
+    def fill(v, key=""):
+        if isinstance(v, dict):
+            return {k: fill(x, k) for k, x in v.items()}
+        if isinstance(v, list):
+            # keep the ELEMENT TYPE the template showed: a list of titles must
+            # come back as strings, not as the integer placeholder.
+            proto = v[0] if v else 1
+            if isinstance(proto, str) and not proto.strip():
+                proto = "نصّ"
+            return [fill(proto, key)]
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            # sibling numeric slots get DISTINCT values, so a template like
+            # {"keep":[1],"drop":[2]} does not answer with the same index twice.
+            counter[0] += 1
+            return counter[0]
+        return f"قيمة اختبارية ({key})" if key else "قيمة اختبارية"
+    return json.dumps(fill(best[1]), ensure_ascii=False)
+
+
+def offline_llm_fn(prompt, system=None, temperature=0.7, max_tokens=None,
+                   timeout=None, on_delta=None):
+    """Deterministic stand-in for a real model. Never touches the network."""
+    j = _offline_json_template(prompt)
+    if j is not None:
+        if on_delta:
+            try:
+                on_delta(j)
+            except Exception:
+                pass
+        return j
+    # prose: roughly one filler paragraph per 120 requested tokens, bounded
+    try:
+        n = max(1, min(int((max_tokens or 600) // 120), 12))
+    except Exception:
+        n = 4
+    out = "\n\n".join(_OFFLINE_FILLER * 2 for _ in range(n))
+    if on_delta:
+        try:
+            on_delta(out)
+        except Exception:
+            pass
+    return out
+
+
 def get_llm_fn():
     """Return llm_fn(prompt, system=None, temperature=0.7, max_tokens=None)->str
     built from config/.env. Returns None if no key is configured (callers must
     handle that by staying in placeholder mode)."""
     keysync.load_env()
+    # WEAVER_LLM=offline → the free stand-in above. Checked BEFORE the key so a
+    # test run can never reach the network or spend credit by accident.
+    if os.environ.get("WEAVER_LLM", "").strip().lower() in ("offline", "mock",
+                                                           "fake", "test"):
+        return offline_llm_fn
     key = os.environ.get("WEAVER_API_KEY", "").strip()
     if not key:
         return None
