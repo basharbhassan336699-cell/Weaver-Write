@@ -908,6 +908,111 @@ class WeaverOrchestrator:
             return sections_plan
 
     @staticmethod
+    def _counts_match(plan, units, mabhath_count, card=None):
+        """Does a structure the MODEL designed already satisfy the counts the
+        user asked for? Returns (bool, evidence).
+
+        Counting is all the code needs to do here. The model reads «أربعة أبواب،
+        كل باب ثلاثة أجزاء» perfectly well; taking its design away and rebuilding
+        empty slots was what produced «الباب 1» with no title. Intro / conclusion
+        / references are not body sections and are not counted. A level named
+        with NO count («تقسيمات حسب ما يلزم») is the model's to decide, so it is
+        satisfied by ANY amount, including none."""
+        try:
+            secs = [s for s in (plan or []) if isinstance(s, dict)]
+            if not secs:
+                return False, "لا بنية"
+
+            def _skip(t):
+                t = str(t or "")
+                return (WeaverOrchestrator._is_ref_heading(t)
+                        or any(w in t for w in ("المقدمة", "الخاتمة",
+                                                "Introduction", "Conclusion")))
+            tops = [s for s in secs if int(s.get("level", 1) or 1) == 1
+                    and not _skip(s.get("title") or s.get("heading"))]
+            subs = [s for s in secs if int(s.get("level", 1) or 1) == 2]
+            want = list(units or [])
+            if not want and mabhath_count:
+                want = [("مبحث", WeaverOrchestrator._as_int(mabhath_count, 0)),
+                        ("مطلب", WeaverOrchestrator._as_int(
+                            (card or {}).get("matlab_count"), 0))]
+                want = [(u, n) for u, n in want if n]
+            if not want:
+                return True, "بلا عددٍ مطلوب"
+            ev = f"{len(tops)} رئيسي · {len(subs)} فرعي"
+            if want[0][1] and len(tops) != want[0][1]:
+                return False, ev
+            if len(want) > 1 and want[1][1]:
+                if len(subs) != want[0][1] * want[1][1]:
+                    return False, ev
+            return True, ev
+        except Exception as e:
+            return False, f"{type(e).__name__}"
+
+    def _restructure_to_counts(self, request, topic, units, mabhath_count,
+                               card, lang="ar"):
+        """Hand the count mismatch BACK to the model and let it redesign, with
+        real topical titles. Only when this also fails does the code build a
+        skeleton. Returns a plan or None. Never raises."""
+        if not self.llm_fn:
+            return None
+        try:
+            import os
+            from core.llm import extract_json
+            shape = "، ".join(
+                f"{n} {u}" + ("" if n else " (بالعدد الذي تراه مناسباً)")
+                for u, n in (units or []) if u)
+            if not shape and mabhath_count:
+                shape = f"{mabhath_count} مبحث"
+            if lang == "en":
+                prompt = (
+                    "Redesign the document structure so it matches the counts "
+                    "the request states EXACTLY, keeping real topical titles "
+                    "(never empty labels like \"Chapter 1\"). Return JSON only:\n"
+                    '{"sections":[{"title":"…","level":1|2|3|4}]}\n'
+                    f"Required shape: {shape}\n"
+                    f"Topic: {topic}\nRequest: {(request or '')[:700]}\n"
+                    "Use the request's OWN unit words in the titles, add an "
+                    "introduction, a conclusion and a references section, and "
+                    "give every section a title that states its actual subject.")
+            else:
+                prompt = (
+                    "أعِد تصميم بنية المستند بحيث تطابق الأعداد المذكورة في "
+                    "الطلب بالضبط، مع عناوين موضوعية حقيقية (لا تسميات فارغة "
+                    "مثل «الباب 1»). أعِد JSON فقط:\n"
+                    '{"sections":[{"title":"…","level":1|2|3|4}]}\n'
+                    f"الشكل المطلوب: {shape}\n"
+                    f"الموضوع: {topic}\nالطلب: {(request or '')[:700]}\n"
+                    "استعمل مصطلحات الطلب نفسها في العناوين (الباب/الجزء/"
+                    "المبحث… كما قالها المستخدم)، وأضِف مقدمةً وخاتمةً وقائمة "
+                    "مراجع، واجعل لكل قسمٍ عنواناً يذكر موضوعه الفعليّ.")
+            try:
+                _to = int(os.environ.get("WEAVER_STRUCT_TIMEOUT", "60") or 60)
+            except Exception:
+                _to = 60
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.2,
+                              max_tokens=1600, timeout=_to) or ""
+            data = extract_json(raw)
+            secs = (data or {}).get("sections") if isinstance(data, dict) else None
+            if not isinstance(secs, list) or not secs:
+                return None
+            out = []
+            for s in secs:
+                if not isinstance(s, dict):
+                    continue
+                t = str(s.get("title", "")).strip()
+                if not t:
+                    continue
+                try:
+                    lv = int(s.get("level", 1))
+                except (TypeError, ValueError):
+                    lv = 1
+                out.append({"title": t[:200], "level": max(1, min(lv, 4))})
+            return out or None
+        except Exception:
+            return None
+
+    @staticmethod
     def _skip_note(card, step, reason):
         """RULE 2 — NO step cancels itself in silence.
 
@@ -3932,30 +4037,69 @@ class WeaverOrchestrator:
         if not self.llm_fn or not sections_plan:
             return sections_plan
         import re
+        # A slot is "abstract" by its SHAPE, not by its word. This used to be a
+        # list of four words (المبحث/المطلب/Section/Subsection), so a structure
+        # built from the user's own terms — «الباب 1», «الجزء 1.1» — matched
+        # nothing and shipped with no topical titles at all. The real test is
+        # simply: a label followed by a number and NOTHING else. Any unit word,
+        # in any language, is covered.
         abstract_re = re.compile(
-            r'^\s*(?:المبحث|المطلب|Section|Subsection)\b', re.I)
+            r'^\s*[^\W\d_]{2,20}(?:\s+[^\W\d_]{2,20})?'      # one or two words
+            r'[\s:،.\-]*([0-9٠-٩]+(?:[.\-][0-9٠-٩]+)*)[\s:،.\-]*$',
+            re.UNICODE)
+
+        def _is_slot(title, lvl, main_no):
+            """Shape AND position: a placeholder's number IS its index. Shape
+            alone would have swallowed real titles like «كوفيد 19» or
+            «رؤية 2030» — a year is not a section index. «الباب 4» is a
+            placeholder only when it is in fact the 4th main section."""
+            m = abstract_re.match(title or "")
+            if not m:
+                return False
+            nums = re.split(r'[.\-]', m.group(1).translate(
+                str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")))
+            try:
+                nums = [int(x) for x in nums if x != ""]
+            except ValueError:
+                return False
+            if not nums or any(not 1 <= n <= 99 for n in nums):
+                return False
+            if lvl <= 1:
+                return len(nums) == 1 and nums[0] == main_no + 1
+            return len(nums) >= 2 and nums[0] == main_no
         # collect the abstract body slots IN ORDER, each with a role label
         slots, main_no = [], 0        # slots: list of (plan_index, role_text)
         for i, s in enumerate(sections_plan):
             title = (s.get("title") or s.get("heading") or "").strip()
-            if not abstract_re.match(title):
-                continue
             lvl = int(s.get("level", 1) or 1)
+            if not _is_slot(title, lvl, main_no):
+                continue
+            # name the role with the USER'S OWN unit word, taken from the slot
+            # itself («الباب 1» → «الباب»), so the model is asked for a title
+            # for a الباب — not told the document is made of مباحث when it isn't
+            _unit = re.sub(r'[\s:،.\-]*[0-9٠-٩][\s\S]*$', '', title).strip() \
+                or ("قسم" if lang == "ar" else "section")
             if lvl <= 1:
                 main_no += 1
-                role = (f"مبحث رئيسي رقم {main_no}" if lang == "ar"
-                        else f"main section #{main_no}")
+                role = (f"{_unit} رئيسي رقم {main_no}" if lang == "ar"
+                        else f"{_unit} #{main_no} (main)")
+                _main_unit = _unit
             else:
-                role = (f"مطلب فرعي تحت المبحث {main_no}" if lang == "ar"
-                        else f"subsection under section {main_no}")
+                _parent = locals().get("_main_unit") or (
+                    "القسم" if lang == "ar" else "section")
+                role = (f"{_unit} فرعي تحت {_parent} {main_no}" if lang == "ar"
+                        else f"{_unit} under {_parent} {main_no}")
             slots.append((i, role))
         if not slots:
             return sections_plan          # nothing abstract to rename
 
         def _clean(t):
             t = (t or "").strip().strip('"“”«»').strip()
-            t = re.sub(r'^(?:المبحث|المطلب|Section|Subsection)\b[\s:،.\d]*', '',
-                       t, flags=re.I).strip()
+            # strip a leading "<unit> <number>:" echo of ANY unit word, not just
+            # the four that used to be listed here
+            t = re.sub(r'^[^\W\d_]{2,20}(?:\s+[^\W\d_]{2,20})?'
+                       r'[\s:،.\-]*[0-9٠-٩]+(?:[.\-][0-9٠-٩]+)*[\s:،.\-]+', '',
+                       t, flags=re.UNICODE).strip()
             return t
 
         def _valid(ct):
@@ -3972,7 +4116,8 @@ class WeaverOrchestrator:
                     f"أريد عناوين وصفية دقيقة لبحث علمي عن: «{topic}».\n"
                     f"لكل بندٍ في القائمة التالية اكتب عنواناً وصفياً واحداً يخصّ "
                     f"الموضوع فعلاً، ومختلفاً عن البقية (لا تعريفات عامة مكرّرة)، "
-                    f"بلا كلمتَي «مبحث»/«مطلب»:\n{block}\n\n"
+                    f"واكتب الموضوع وحده بلا إعادة اسم الوحدة ولا رقمها:"
+                    f"\n{block}\n\n"
                     f"أعِد {len(roles)} سطراً فقط، سطراً واحداً لكل عنوان وبنفس "
                     f"الترتيب، كلٌّ يبدأ برقمه هكذا: «1. العنوان».")
             else:
@@ -3980,8 +4125,9 @@ class WeaverOrchestrator:
                     f"I need precise descriptive titles for research on: "
                     f"\"{topic}\".\nFor each item below, write ONE descriptive, "
                     f"topic-specific title, distinct from the others (no repeated "
-                    f"general definitions), without the words 'Section'/"
-                    f"'Subsection':\n{block}\n\nReturn exactly {len(roles)} lines, "
+                    f"general definitions); write the SUBJECT only, without "
+                    f"repeating the unit word or its number:"
+                    f"\n{block}\n\nReturn exactly {len(roles)} lines, "
                     f"one title per line in the same order, each starting with its "
                     f"number: \"1. Title\".")
             try:
@@ -4896,6 +5042,40 @@ class WeaverOrchestrator:
         except Exception:
             _units = []
         _mc = card.get("mabhath_count")
+        # ── THE MODEL'S DESIGN IS NOT OVERWRITTEN ──
+        # This block used to REPLACE whatever the model designed the moment a
+        # count appeared in the request, substituting empty slots («الباب 1»,
+        # «الجزء 1.1») that a second model call then had to name — and that
+        # naming step only recognised four hardcoded words, so «الباب»/«الجزء»
+        # shipped with no topical titles at all. The model reads the counts in
+        # the request perfectly well; the code's job is to CHECK them, not to
+        # take the design away. So: when the model produced a structure, count
+        # it — and only fall back to building a skeleton if the counts are
+        # actually wrong and the model cannot correct them.
+        if (_units or _mc) and card.get("structure_source") == "model" \
+                and sections_plan:
+            _ok, _why = self._counts_match(sections_plan, _units, _mc, card)
+            if _ok:
+                mem.set_status(6, f"بنية النموذج مطابقة للطلب ({_why})")
+                card["structure_units"] = _units or None
+                _units, _mc = [], None      # nothing to rebuild
+            else:
+                _fixed = self._restructure_to_counts(
+                    self._current_request(task.description),
+                    card.get("topic", "") or task.description,
+                    _units, _mc, card, lang)
+                if _fixed:
+                    _ok2, _why2 = self._counts_match(_fixed, _units, _mc, card)
+                    if _ok2:
+                        sections_plan = _fixed
+                        card["sections"] = sections_plan
+                        card["structure_units"] = _units or None
+                        mem.set_status(
+                            6, f"صحّح النموذج بنيته بعد العدّ ({_why2})")
+                        _units, _mc = [], None
+                if _units or _mc:
+                    mem.set_status(6, f"عدد أقسام النموذج لا يطابق الطلب "
+                                      f"({_why}) → يُبنى الهيكل بالعدد")
         if (_units or _mc) and not (scope == "plan" or "plan" in scopes):
             if _units:
                 _names = [u for u, _n in _units]
