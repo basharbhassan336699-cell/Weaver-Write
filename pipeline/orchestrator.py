@@ -3823,6 +3823,60 @@ class WeaverOrchestrator:
                 out.add(tok)
         return out
 
+    def _ask_json(self, prompt, max_tokens=1400, timeout=None, retry=True):
+        """Ask the model for JSON and SAY WHY when it does not arrive.
+
+        Two things made my earlier reference calls fail silently on a live
+        phone. First, they were given max_tokens=200/600 and timeout=30/45 —
+        outliers against every other call in this file (1400 / 60). A REASONING
+        model (deepseek-v4-flash, qwq…) spends its whole budget on hidden
+        thinking and returns an EMPTY `content`, which this very file documents;
+        at 200 tokens nothing is left for the answer. Second, the failure was
+        reported as «تعذّر» with no reason, so the next test could only guess.
+
+        So: a house-standard budget, ONE retry that strips the long system
+        prompt and demands bare JSON, and a reason string the caller can show.
+        Returns (data|None, reason) — reason is "" on success. Never raises.
+        """
+        import os
+        try:
+            _to = int(timeout or os.environ.get("WEAVER_JSON_TIMEOUT", "90") or 90)
+        except Exception:
+            _to = 90
+        if not self.llm_fn:
+            return None, "لا نموذج متاح"
+        try:
+            from core.llm import extract_json
+        except Exception as e:
+            return None, f"تعذّر تحميل محلّل JSON: {type(e).__name__}"
+        attempts = [(self.system_main, 0.2, int(max_tokens), prompt)]
+        if retry:
+            attempts.append(
+                (None, 0.0, int(max_tokens) * 2,
+                 prompt + "\n\nأعِد كائن JSON وحده، بلا شرحٍ ولا تمهيد."))
+        last = "سببٌ غير معروف"
+        for _sys, _temp, _mt, _pr in attempts:
+            try:
+                raw = self.llm_fn(_pr, system=_sys, temperature=_temp,
+                                  max_tokens=_mt, timeout=_to) or ""
+            except Exception as e:
+                last = f"فشل النداء: {type(e).__name__}: {str(e)[:80]}"
+                continue
+            if not str(raw).strip():
+                last = (f"ردٌّ فارغ من النموذج عند max_tokens={_mt} — نموذج "
+                        "التفكير يستهلك الميزانية كلّها")
+                continue
+            try:
+                data = extract_json(raw)
+            except Exception:
+                last = ("ردٌّ بلا JSON صالح: "
+                        + " ".join(str(raw).split())[:80])
+                continue
+            if isinstance(data, dict):
+                return data, ""
+            last = "JSON ليس كائناً"
+        return None, last
+
     def _search_query(self, topic, request, lang="ar"):
         """Let the MODEL compose the scholarly search query.
 
@@ -3837,6 +3891,7 @@ class WeaverOrchestrator:
         Returns a query string — the topic unchanged on any miss. Never raises.
         """
         base = (topic or "").strip()
+        self._last_query_reason = ""
         if not self.llm_fn or not base:
             return base
         import os
@@ -3844,7 +3899,6 @@ class WeaverOrchestrator:
                 "0", "false", "no"):
             return base
         try:
-            from core.llm import extract_json
             if lang == "en":
                 prompt = (
                     "Compose ONE search query for academic databases (OpenAlex, "
@@ -3863,19 +3917,20 @@ class WeaverOrchestrator:
                     '{"query":"…"}\n'
                     f"موضوع البحث: {base}\n"
                     f"الطلب: {(request or '')[:400]}")
-            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.2,
-                              max_tokens=200, timeout=30) or ""
-            data = extract_json(raw)
+            data, _why = self._ask_json(prompt, max_tokens=900)
+            self._last_query_reason = _why
             q = ""
             if isinstance(data, dict):
                 q = str(data.get("query") or "").strip()
             if not q:
+                self._last_query_reason = _why or "لم يُعِد النموذج استعلاماً"
                 return base
             q = " ".join(q.split())[:200]
             # a query the model empties or turns into a single stop-word is not
             # an improvement — fall back rather than search for nothing.
             return q if len(q) >= 3 else base
-        except Exception:
+        except Exception as e:
+            self._last_query_reason = f"{type(e).__name__}: {str(e)[:60]}"
             return base
 
     def _judge_relevance(self, results, topic, request, lang="ar"):
@@ -3893,6 +3948,7 @@ class WeaverOrchestrator:
         it had, so a model failure never empties the references. Never raises.
         """
         items = [r for r in (results or []) if isinstance(r, dict)]
+        self._last_judge_reason = ""
         if not self.llm_fn or not items:
             return None, None
         import os
@@ -3900,7 +3956,6 @@ class WeaverOrchestrator:
                 "0", "false", "no"):
             return None, None
         try:
-            from core.llm import extract_json
             lines = []
             for i, r in enumerate(items, 1):
                 t = " ".join(str(r.get("title") or "").split())[:220]
@@ -3928,9 +3983,8 @@ class WeaverOrchestrator:
                     f"موضوع البحث: {topic}\n"
                     f"الطلب: {(request or '')[:400]}\n"
                     f"العناوين:\n{listing}")
-            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.1,
-                              max_tokens=600, timeout=45) or ""
-            data = extract_json(raw)
+            data, _why = self._ask_json(prompt, max_tokens=1400)
+            self._last_judge_reason = _why
             if not isinstance(data, dict):
                 return None, None
 
@@ -3946,6 +4000,7 @@ class WeaverOrchestrator:
                 return out
             keep_i, drop_i = _idx("keep"), _idx("drop")
             if not keep_i and not drop_i:
+                self._last_judge_reason = "لم يُسمِّ النموذج أي رقم"
                 return None, None       # unusable answer → caller keeps its own
             drop_set = set(drop_i) - set(keep_i)
             kept = [items[n - 1] for n in range(1, len(items) + 1)
@@ -3954,7 +4009,8 @@ class WeaverOrchestrator:
             # neither list stays — silence is not a rejection.
             dropped = [items[n - 1] for n in sorted(drop_set)]
             return kept, dropped
-        except Exception:
+        except Exception as e:
+            self._last_judge_reason = f"{type(e).__name__}: {str(e)[:60]}"
             return None, None
 
     async def _academic_search(self, task: Task, mem: TaskMemory):
@@ -3982,8 +4038,10 @@ class WeaverOrchestrator:
             # did not compose the query, the reader is told why the list may
             # wander instead of being left to wonder.
             self._skip_note(card, "صياغة استعلام البحث",
-                            "تعذّرت صياغة الاستعلام بالنموذج، فأُرسل نصّ الطلب "
-                            "كما هو وقد تتأثّر دقّة المراجع")
+                            "لم يصغ النموذج الاستعلام ("
+                            + (getattr(self, "_last_query_reason", "")
+                               or "بلا سبب معلوم")
+                            + ")، فأُرسل نصّ الطلب كما هو وقد تتأثّر دقّة المراجع")
         try:
             # ② the lexical filter widens the candidate pool instead of ruling
             #    on it, whenever there is a model to rule.
@@ -4016,6 +4074,16 @@ class WeaverOrchestrator:
                   if r.get("_prefilter") != "backup"]
             if _m:
                 results = _m
+            if self.llm_fn:
+                # RULE 2 again: the judge is the step that decides relevance.
+                # When it does not answer, the list is only lexically filtered —
+                # say so, and say WHY, instead of presenting it as judged.
+                self._skip_note(
+                    card, "فرز المراجع بالنموذج",
+                    "لم يحكم النموذج على صلة المراجع ("
+                    + (getattr(self, "_last_judge_reason", "")
+                       or "بلا سبب معلوم")
+                    + ")، فبقي الفرز اللفظيّ وحده")
         for _r in (results or []):
             _r.pop("_prefilter", None)
         results = (results or [])[:limit]
