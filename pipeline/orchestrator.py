@@ -5066,6 +5066,35 @@ class WeaverOrchestrator:
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
         mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
+
+        # ── the one document-wide duplicate pass (the last net) ──
+        # The per-seam guards above have already run; this catches repetition
+        # between ANY two paragraphs of the finished document, at any level.
+        # Placed BEFORE the length/coverage check so the word count that stage
+        # sees is the post-trim one and it can expand if the document is short.
+        # Disable with WEAVER_DEDUPE=0.
+        try:
+            import os as _os
+            if _os.environ.get("WEAVER_DEDUPE", "1") != "0" and task.sections:
+                _new, _rep = self._dedupe_sections(task.sections, lang)
+                if _rep.get("skipped"):
+                    mem.set_status(6, f"كشف التكرار: {_rep['skipped']}")
+                    card["dedupe_note"] = _rep["skipped"]
+                    self._emit("detail", "", "كشف التكرار: " + _rep["skipped"])
+                elif _rep.get("dropped"):
+                    task.sections = _new
+                    task.draft = self._draft_from_sections(task)
+                    _where = "، ".join(
+                        f"«{a}» كرّر «{b}»" for a, b in _rep["pairs"][:3])
+                    mem.set_status(
+                        6, f"كشف التكرار: حُذفت {_rep['dropped']} فقرة "
+                           f"({_rep['words']} كلمة)")
+                    self._emit("detail", "",
+                               f"كشف التكرار: {_rep['dropped']} فقرة مكرّرة "
+                               f"حُذفت — {_where}")
+                    card["dedupe_report"] = _rep
+        except Exception as e:
+            mem.set_status(6, f"كشف التكرار (تخطّي: {e})")
         # run matched enrichment skills (task.skills) that have a write-stage
         # handler — turns skill routing into real execution. Additive/guarded.
         self._dispatch_skills(task, card, lang, mem)
@@ -5919,6 +5948,141 @@ class WeaverOrchestrator:
         h = (h or "").strip().lower()
         return any(k in h for k in ("مراجع", "مصادر", "references", "works cited",
                                     "bibliography"))
+
+    # ── ONE document-wide duplicate pass ────────────────────────────────────
+    # Before this, every anti-repetition guard defended ONE seam: the bridge
+    # above a مبحث, a heading echoed inside its own body, two conclusion
+    # sub-sections. Eight guards in total — and repetition kept reappearing at
+    # the next seam, because the number of section PAIRS that can repeat grows
+    # with the square of the section count (15 sections = 105 pairs).
+    #
+    # This is the last net: after all sections are assembled, every paragraph is
+    # compared with every paragraph BEFORE it, anywhere in the document and at
+    # any level (مبحث / مطلب / تقسيم / فصل / مقدمة / خاتمة). Similarity is
+    # difflib on the paragraph opening — arithmetic, not a keyword list and not
+    # a model call, so it behaves identically with any model.
+    @staticmethod
+    def _dedupe_sections(sections, lang="ar", threshold=0.80,
+                         max_removed_ratio=0.40, min_words=12):
+        """Drop paragraphs that repeat an earlier paragraph of the SAME document.
+
+        Returns (new_sections, report) where report is
+        {"dropped": n, "words": n, "pairs": [(later_heading, earlier_heading)],
+         "skipped": reason_or_None}. `sections` is never mutated.
+
+        WHICH COPY SURVIVES: the first occurrence in reading order — EXCEPT when
+        the pair is a parent section and one of its own children (a مبحث and its
+        مطالب). There the child keeps the text and the parent's copy is dropped,
+        because a parent must not pre-empt what its subsections will say.
+
+        PROTECTED (never touched): a references/bibliography section (repeating
+        author names is correct there), any table row, and short paragraphs — a
+        one-line transition is not a repeat.
+
+        SAFETY: if the pass would remove more than `max_removed_ratio` of the
+        document's words it is ABANDONED whole and reported instead, so a
+        mis-measure can never gut a real research paper. Never raises."""
+        import difflib
+
+        def _norm(s):
+            t = " ".join(str(s or "").split())
+            for ch in "ًٌٍَُِّْـ":
+                t = t.replace(ch, "")
+            return (t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+                     .replace("ى", "ي").replace("ة", "ه").lower())
+
+        try:
+            secs = [s for s in (sections or []) if isinstance(s, dict)]
+            if len(secs) < 2:
+                return sections, {"dropped": 0, "words": 0, "pairs": [],
+                                  "skipped": None}
+            lv = []
+            for s in secs:
+                try:
+                    lv.append(int(s.get("level", 1) or 1))
+                except Exception:
+                    lv.append(1)
+            # children of i = the following sections with a deeper level, until
+            # a level back at or above i's own
+            kids = []
+            for i in range(len(secs)):
+                acc = set()
+                for j in range(i + 1, len(secs)):
+                    if lv[j] <= lv[i]:
+                        break
+                    acc.add(j)
+                kids.append(acc)
+
+            protected = [WeaverOrchestrator._is_ref_heading(
+                s.get("heading", "")) for s in secs]
+            # flatten to (section_index, paragraph_index, text)
+            blocks = []
+            for i, s in enumerate(secs):
+                for k, para in enumerate((s.get("body") or "").split("\n\n")):
+                    blocks.append((i, k, para))
+
+            total_words = sum(len((p or "").split()) for _i, _k, p in blocks)
+            drop = set()          # (section_index, paragraph_index)
+            pairs = []
+
+            def _eligible(i, para):
+                p = (para or "").strip()
+                if protected[i] or len(p.split()) < min_words:
+                    return False
+                return "|" not in p          # leave tables alone
+
+            for a in range(len(blocks)):
+                ia, ka, pa = blocks[a]
+                if not _eligible(ia, pa) or (ia, ka) in drop:
+                    continue
+                ha = _norm(pa)[:180]
+                for b in range(a + 1, len(blocks)):
+                    ib, kb, pb = blocks[b]
+                    if ia == ib or not _eligible(ib, pb) or (ib, kb) in drop:
+                        continue
+                    if difflib.SequenceMatcher(
+                            None, ha, _norm(pb)[:180]).ratio() < threshold:
+                        continue
+                    # parent/child pair → the CHILD keeps it, the parent loses
+                    if ib in kids[ia]:
+                        drop.add((ia, ka))
+                        pairs.append((secs[ia].get("heading", ""),
+                                      secs[ib].get("heading", "")))
+                        break
+                    drop.add((ib, kb))
+                    pairs.append((secs[ib].get("heading", ""),
+                                  secs[ia].get("heading", "")))
+
+            if not drop:
+                return sections, {"dropped": 0, "words": 0, "pairs": [],
+                                  "skipped": None}
+            removed_words = sum(len((p or "").split())
+                                for i, k, p in blocks if (i, k) in drop)
+            if total_words and removed_words > total_words * max_removed_ratio:
+                return sections, {
+                    "dropped": len(drop), "words": removed_words, "pairs": pairs,
+                    "skipped": f"القصّ كان سيحذف {removed_words} كلمة من "
+                               f"{total_words} (فوق الحدّ) فلم يُطبَّق"}
+            out, emptied = [], []
+            for i, s in enumerate(secs):
+                paras = (s.get("body") or "").split("\n\n")
+                keep = [p for k, p in enumerate(paras) if (i, k) not in drop]
+                # A section whose EVERY paragraph was a copy (a conclusion that
+                # re-printed the body wholesale) would become a bare heading.
+                # Keep its first paragraph and name it in the report, so the
+                # reader is told rather than handed an empty section.
+                if not [x for x in keep if x.strip()] and paras:
+                    keep = [next((p for k, p in enumerate(paras)
+                                  if (i, k) in drop), paras[0])]
+                    emptied.append(s.get("heading", ""))
+                new = dict(s)
+                new["body"] = "\n\n".join(x for x in keep if x.strip()).strip()
+                out.append(new)
+            return out, {"dropped": len(drop), "words": removed_words,
+                         "pairs": pairs, "skipped": None, "emptied": emptied}
+        except Exception as e:
+            return sections, {"dropped": 0, "words": 0, "pairs": [],
+                              "skipped": f"{type(e).__name__}: {e}"}
 
     # canonical source TYPES. Arabic scholarship separates these three, and the
     # pipeline used to merge them all into one flat "قائمة المراجع":
