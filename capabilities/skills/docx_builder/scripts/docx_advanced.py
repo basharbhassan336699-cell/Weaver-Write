@@ -191,11 +191,21 @@ def add_page_numbers(section, lang="ar", text=""):
         p.add_run(text + "   ")
     # PAGE field
     run = p.add_run()
-    fldBegin = OxmlElement("w:fldChar"); fldBegin.set(qn("w:fldCharType"), "begin")
+    # A well-formed field: begin → instruction → separate → result → end, with
+    # dirty="true" so Word/LibreOffice recompute it on open. The field used to
+    # be written WITHOUT the separate/result region, which leaves a viewer with
+    # nothing to fall back on — some then render a literal "1" on every page
+    # instead of the real number.
+    fldBegin = OxmlElement("w:fldChar")
+    fldBegin.set(qn("w:fldCharType"), "begin")
+    fldBegin.set(qn("w:dirty"), "true")
     instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve")
-    instr.text = "PAGE"
+    instr.text = " PAGE   \\* MERGEFORMAT "
+    fldSep = OxmlElement("w:fldChar"); fldSep.set(qn("w:fldCharType"), "separate")
+    res = OxmlElement("w:t"); res.text = "1"
     fldEnd = OxmlElement("w:fldChar"); fldEnd.set(qn("w:fldCharType"), "end")
-    run._r.append(fldBegin); run._r.append(instr); run._r.append(fldEnd)
+    for _el in (fldBegin, instr, fldSep, res, fldEnd):
+        run._r.append(_el)
     if lang == "ar":
         set_paragraph_rtl(p)
 
@@ -250,7 +260,7 @@ def add_colored_heading(doc, text, level=1, lang="ar", theme_id="academic_navy",
     h = doc.add_heading("", level=level)
     h.alignment = WD_ALIGN_PARAGRAPH.RIGHT if lang == "ar" else WD_ALIGN_PARAGRAPH.LEFT
     run = h.add_run(text)
-    size = 18 if level == 1 else 15
+    size = {1: 18, 2: 15, 3: 13}.get(level, 12)
     _set_run_font(run, font or ("Kufyan Arabic" if lang == "ar" else "Times New Roman"),
                   size, pal["primary"], bold=True)
     if lang == "ar":
@@ -370,6 +380,15 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         if "|" in line and i + 1 < n and _md_table_sep(lines[i + 1]):
             _flush()
             headers = _md_cells(line)
+            # A writer that starts the table on the SAME line as the prose above
+            # it turns that prose into the first header cell: a مبحث's 60-word
+            # bridge shipped as a table heading beside «المصطلح التقني», and the
+            # bridge vanished from the body. A header cell is a label — measured
+            # across a real run, genuine ones ran 2–4 words — so a leading cell
+            # carrying a sentence is prose that belongs above the table, and is
+            # emitted as its own paragraph instead of being swallowed.
+            while len(headers) > 1 and len(headers[0].split()) >= 12:
+                _para(headers.pop(0))
             ncol = len(headers)
             i += 2
             rows = []
@@ -400,6 +419,16 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         if mb:
             _flush()
             _para(mb.group(1), style="List Bullet")
+            i += 1
+            continue
+        # NUMBERED list item ("1. …"). Without this, consecutive numbered lines
+        # were treated as Markdown soft-wrap and joined into ONE paragraph —
+        # which is what glued a whole 9-entry reference list into a single
+        # unreadable block.
+        mn = re.match(r"^\s*\d{1,3}[.)]\s+(.*)$", line)
+        if mn:
+            _flush()
+            _para(mn.group(1), style="List Number")
             i += 1
             continue
         # a whole table glued onto ONE line (rows joined by '||') → un-glue it
@@ -445,6 +474,11 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     sec = doc.sections[0]
 
     # ── cover page (mandatory unless suppressed) + TOC placement ──
+    # Track what the front-matter path adds, so the LEGACY title/TOC blocks
+    # below don't add a SECOND cover and a SECOND table of contents (which is
+    # what produced a duplicated cover plus blank pages after it).
+    _fm_cover = False
+    _fm_toc = False
     try:
         import sys, os
         here = os.path.dirname(os.path.abspath(__file__))
@@ -454,6 +488,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                                       should_add_cover, resolve_toc_position)
         _card = {"no_cover": (not cover) if cover is not None else False}
         if cover and should_add_cover(_card):
+            _fm_cover = True
             cinfo = cover if isinstance(cover, dict) else {}
             add_cover_page(doc, title, lang=lang, theme_id=theme_id, font=font,
                            institution=cinfo.get("institution", ""),
@@ -465,7 +500,20 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         _toc_pos = resolve_toc_position({"toc": toc,
                                          "toc_position": toc_position})
         if _toc_pos == "after_cover":
-            add_toc_page(doc, lang=lang, theme_id=theme_id, font=font)
+            # estimate where each heading lands and bake it into the field's
+            # cached result, so the contents page is readable in viewers that
+            # never compute Word fields
+            _entries = None
+            try:
+                from docx_frontmatter import estimate_toc_entries
+                _fm_pages = 1 + (1 if cover else 0)
+                _entries, _ = estimate_toc_entries(sections, lang,
+                                                   start_page=_fm_pages + 1)
+            except Exception:
+                _entries = None
+            add_toc_page(doc, lang=lang, theme_id=theme_id, font=font,
+                         entries=_entries)
+            _fm_toc = True
     except Exception:
         pass
 
@@ -474,14 +522,19 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     if page_numbers:
         add_page_numbers(sec, lang, "صفحة " if rtl else "Page ")
 
-    # title
-    tp = doc.add_paragraph()
-    tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    trun = tp.add_run(title)
-    _set_run_font(trun, font, 24, load_palette(theme_id)["primary"], bold=True)
-    if rtl:
-        set_paragraph_rtl(tp)
-    if subtitle:
+    # title — skipped when a cover page already carries it (otherwise the
+    # title printed twice and read as a second cover page)
+    if _fm_cover:
+        tp = None
+    else:
+        tp = doc.add_paragraph()
+        tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        trun = tp.add_run(title)
+        _set_run_font(trun, font, 24, load_palette(theme_id)["primary"],
+                      bold=True)
+        if rtl:
+            set_paragraph_rtl(tp)
+    if subtitle and not _fm_cover:
         sp = doc.add_paragraph()
         sp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         srun = sp.add_run(subtitle)
@@ -489,7 +542,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         if rtl:
             set_paragraph_rtl(sp)
 
-    if toc:
+    if toc and not _fm_toc:
         doc.add_page_break()
         add_toc(doc, lang, font)
         doc.add_page_break()
@@ -501,7 +554,16 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     # sections
     for s in sections:
         if s.get("heading"):
-            add_colored_heading(doc, s["heading"], 1, lang, theme_id, font)
+            # Honour the section's own LEVEL (1=مبحث, 2=مطلب, 3=تقسيم) so the
+            # document shows a real hierarchy. Previously every heading was
+            # forced to Heading1, which made a مطلب look identical to the
+            # مبحث above it and flattened the whole outline (and the TOC).
+            try:
+                _lv = int(s.get("level", 1) or 1)
+            except Exception:
+                _lv = 1
+            add_colored_heading(doc, s["heading"], max(1, min(_lv, 4)),
+                                lang, theme_id, font)
         if s.get("body"):
             # Render the body as real paragraphs + native tables (not one glued
             # run). This is what makes a Markdown table in the body show as a
@@ -552,6 +614,21 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                         page_break_after=False)
     except Exception:
         pass
+
+    # A Word TOC is a FIELD: it renders blank until the fields are refreshed,
+    # which is why the contents page looked like an empty page. Ask Word to
+    # update fields when the document is opened so it fills itself in.
+    if toc:
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+            _st = doc.settings.element
+            if _st.find(qn("w:updateFields")) is None:
+                _uf = OxmlElement("w:updateFields")
+                _uf.set(qn("w:val"), "true")
+                _st.append(_uf)
+        except Exception:
+            pass
 
     doc.save(output_path)
     return output_path
