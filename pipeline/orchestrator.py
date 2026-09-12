@@ -1480,9 +1480,12 @@ class WeaverOrchestrator:
         `current` unchanged when there is not enough evidence. Never raises."""
         try:
             lens = [len((b or "").split()) for b in (bodies or [])]
-            lens = [n for n in lens if n >= 40]      # ignore stubs/bridges
-            if len(lens) < 3:
+            lens = [n for n in lens if n >= 60]      # ignore stubs/bridges
+            if not lens:
                 return current, None
+            # The FIRST unbiased section is already evidence — waiting for three
+            # means three sections written on a guess. The median is re-taken on
+            # every section, so one odd opening self-corrects immediately.
             lens.sort()
             med = lens[len(lens) // 2]
             if med >= 380:
@@ -5331,9 +5334,26 @@ class WeaverOrchestrator:
         # the model's knowledge and flag it so a clear note is added later.
         if mode == "cited" and no_ctx:
             card["sources_unavailable"] = True
-        prof = self._strength_profile(card.get("model_strength", "medium"))
-        # evidence for the measurement that replaces the NAME guess (below)
-        _written_bodies, _strength_now = [], card.get("model_strength", "medium")
+        # ── THE PROBE IS NEUTRAL ──
+        # Writing NEVER starts from the name guess. `_model_strength` reads the
+        # model's NAME; starting the document from it makes the first section a
+        # biased sample, and measuring that section afterwards measures OUR bias,
+        # not the model: a name containing "opus" got temperature 0.6 and "حلّل
+        # بعمق", wrote 520 words, and was then "measured" as strong. So every
+        # document starts on the neutral middle profile — no extreme length, no
+        # extreme temperature, no depth directive — and the FIRST real section is
+        # the unbiased probe. The name guess keeps no say over writing at all.
+        prof = self._strength_profile("medium")
+        _strength_now = "medium"
+        card["model_strength_source"] = "neutral"
+        _written_bodies = []
+        # A length the USER stated is a fact; measuring is only ever a way to
+        # guess one. When the fact exists the probe is pointless — skip it
+        # entirely and let the number rule.
+        _measure_on = not (card.get("target_words") or card.get("target_pages")
+                           or card.get("max_words"))
+        if not _measure_on:
+            mem.set_status(6, "الطول من طلب المستخدم — لا قياس ولا تخمين")
         # how the bridge above each مبحث should behave: removed if the user
         # said so, their length if they gave one, otherwise capped automatically
         try:
@@ -5519,7 +5539,10 @@ class WeaverOrchestrator:
                         "that sets up the subsections, without re-defining the "
                         "topic or covering detail the subsections will handle — "
                         "to avoid repetition.")
-                # adapt depth/length + temperature to the model's ceiling
+                # depth guidance comes from the NEUTRAL profile until a real
+                # measurement replaces it — never from the model's name. When the
+                # user stated a length it rules outright and no depth band is
+                # allowed to compete with it (stripped a few lines below).
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
                 # The depth directive carries a HARD-CODED per-section word band
                 # ("استهدف نحو 500–800 كلمة لهذا القسم"). When the user asked for
@@ -5628,7 +5651,12 @@ class WeaverOrchestrator:
             # Off with WEAVER_MEASURE_STRENGTH=0.
             try:
                 import os as _os2
-                if _os2.environ.get("WEAVER_MEASURE_STRENGTH", "1") != "0":
+                if _measure_on and not _spec \
+                        and _os2.environ.get("WEAVER_MEASURE_STRENGTH", "1") != "0":
+                    # `_spec` bodies come from the specialized writers, which are
+                    # given a word target WE computed — measuring those measures
+                    # our own instruction, not the model. Only sections the model
+                    # wrote at its own natural length are evidence.
                     _written_bodies.append(body)
                     _st, _ev = self._measured_strength(_written_bodies,
                                                        _strength_now)
