@@ -427,6 +427,51 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
+    def _deliverable_contradicted(requirements):
+        """Is a LIMITING deliverable (outline/references/plan/part) contradicted
+        by the model's own requirements checklist? Returns a short Arabic reason
+        or None.
+
+        This is not keyword matching: it reads the TYPED fields the model itself
+        produced (`kind` + numeric `target`) and asks whether they can coexist
+        with a headings-only / sources-only deliverable. A real outline request
+        carries no page target, no word target and no source count — so when any
+        of those is present as a MUST, the limiting judgement is inconsistent with
+        the very checklist that accompanies it. Used in ONE safe direction only:
+        toward the fuller deliverable. Never raises."""
+        try:
+            hits = []
+            for r in (requirements or []):
+                if not isinstance(r, dict) or not r.get("must", True):
+                    continue
+                kind = str(r.get("kind") or "").lower()
+                tgt = r.get("target")
+                num = tgt if isinstance(tgt, int) and not isinstance(tgt, bool) \
+                    else None
+                # a length ask (pages/words) is impossible for a bare outline
+                if kind == "length" and (num or 0) >= 3:
+                    hits.append(f"طول مطلوب: {num}")
+                # several sources to document belong to a written document
+                elif kind == "source" and (num or 0) >= 3:
+                    hits.append(f"مصادر مطلوبة: {num}")
+                # depth of structure: sub-sections under sections (e.g. مطالب
+                # inside مباحث) describe a document's body, not a heading list
+                elif kind == "structure" and (num or 0) >= 2:
+                    hits.append(f"بنية مفصّلة: {num}")
+            # one signal alone can be a coincidence; two independent ones cannot
+            uniq = {h.split(":")[0] for h in hits}
+            if len(uniq) >= 2:
+                return "، ".join(hits[:3])
+            # a length ask on its own is already decisive: an outline has no
+            # page count, so this single signal settles it
+            for h in hits:
+                if h.startswith("طول مطلوب"):
+                    return h
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
     def _task_action(text):
         """Detect an ACTION performed on EXISTING/PREVIOUS content rather than a
         fresh research: 'rewrite' | 'summarize' | 'translate' | 'convert' |
@@ -2259,6 +2304,7 @@ class WeaverOrchestrator:
             if isinstance(task.task_card, dict) and self.llm_fn:
                 _of = task.task_card.get("output_format") or []
                 if list(_of) != ["INLINE"]:
+                    _kw_scope = task.task_card.get("scope")
                     _req = extract_requirements(
                         self._conversation_context(task.description), _cur_req,
                         llm_fn=self.llm_fn, system=self.system_main)
@@ -2269,11 +2315,34 @@ class WeaverOrchestrator:
                         _dv = _req.get("deliverable")
                         mem.set_status(3, f"متطلّبات: {_n} بند"
                                        + (f" — {_dv}" if _dv else ""))
-                        # WIRING 2: correct a limiting keyword scope toward a full
-                        # document when the model judged it full_document.
+                        # ── the model's OWN checklist, checked against itself ──
+                        # A limiting deliverable that the model contradicts in its
+                        # own typed requirements (a page/word length, a count of
+                        # sources) is self-inconsistent: nobody asks for a
+                        # headings-only outline AND "10–12 pages" AND "9 APA
+                        # references". This reads the model's structured fields —
+                        # kind/target — not words in prose, and it only ever moves
+                        # toward the FULLER deliverable, never the narrower one.
+                        if _dv in ("outline", "references", "plan", "part"):
+                            _why = self._deliverable_contradicted(
+                                _req.get("requirements"))
+                            if _why:
+                                mem.set_status(
+                                    3, f"حكم النموذج «{_dv}» يخالف متطلّباته "
+                                       f"({_why}) → مستند كامل")
+                                _dv = "full_document"
+                                task.task_card["deliverable"] = _dv
+                                task.task_card["deliverable_reason"] = _why
+                        # ── WIRING 2 (v2): the MODEL RULES the scope ──
+                        # When the model returned a judgement it now decides in
+                        # BOTH directions, with no veto from the keyword guess:
+                        # full_document clears a limiting scope, and a limiting
+                        # deliverable sets one. The keyword lists survive only as
+                        # the fallback for when there is no model judgement at all
+                        # (offline / failed call) — a backstop, not the ruler.
+                        _lim = {"outline", "references", "plan", "part"}
+                        _cur_scopes = set(task.task_card.get("scopes") or [])
                         if _dv == "full_document":
-                            _lim = {"outline", "references", "plan", "part"}
-                            _cur_scopes = set(task.task_card.get("scopes") or [])
                             if (task.task_card.get("scope") in _lim
                                     or (_cur_scopes & _lim)):
                                 task.task_card["scope"] = None
@@ -2281,8 +2350,67 @@ class WeaverOrchestrator:
                                 task.task_card["deliverable_override"] = True
                                 mem.set_status(
                                     3, "تصحيح النطاق: مستند كامل (بحسب معنى الطلب)")
+                        elif _dv in _lim and task.task_card.get("scope") != _dv:
+                            task.task_card["scope"] = _dv
+                            task.task_card["scopes"] = sorted(
+                                (_cur_scopes & _lim) | {_dv})
+                            task.task_card["deliverable_override"] = True
+                            mem.set_status(3, f"تصحيح النطاق: {_dv} (حكم النموذج)")
+                    else:
+                        task.task_card["deliverable_reason"] = "نداء المتطلّبات لم يُرجع حكماً"
+                    # SHOW the judgement. It used to live only in the internal
+                    # status, so a wrong route looked like a mystery from outside;
+                    # on screen it is checkable in one test run.
+                    self._emit(
+                        "detail", "",
+                        "حكم المخرَج: "
+                        + (str((_req or {}).get("deliverable") or "—"))
+                        + f" · تخمين الكلمات: {_kw_scope or 'مستند كامل'}"
+                        + f" · النطاق النهائي: "
+                        + (task.task_card.get("scope") or "مستند كامل"))
         except Exception as e:
+            task.task_card["deliverable_reason"] = f"{type(e).__name__}: {e}"
             mem.set_status(3, f"استخراج المتطلّبات (تخطّي: {e})")
+            self._emit("detail", "", f"حكم المخرَج: تعذّر ({type(e).__name__})"
+                       f" · النطاق: {task.task_card.get('scope') or 'مستند كامل'}")
+
+        # ── LAST-RESORT BACKSTOP (no model judgement at all) ──
+        # With the model unreachable there is no judgement to rule, so the keyword
+        # guess is all that remains — and that guess is exactly what produced a
+        # 78-word outline for a request asking for 10–12 pages. This checks the
+        # card's OWN already-extracted NUMBERS against the limiting scope: a
+        # headings-only outline has no page count and no word count. Arithmetic on
+        # extracted values, not word matching, and one safe direction only.
+        # Disable with WEAVER_SCOPE_BACKSTOP=0.
+        try:
+            import os as _os
+            if (_os.environ.get("WEAVER_SCOPE_BACKSTOP", "1") != "0"
+                    and isinstance(task.task_card, dict)
+                    and not task.task_card.get("deliverable")):
+                _lim = {"outline", "references", "plan", "part"}
+                _sc = task.task_card.get("scope")
+                _scs = set(task.task_card.get("scopes") or [])
+                if _sc in _lim or (_scs & _lim):
+                    _pg = task.task_card.get("target_pages")
+                    _wd = task.task_card.get("target_words")
+                    _pg = _pg if isinstance(_pg, int) else 0
+                    _wd = _wd if isinstance(_wd, int) else 0
+                    if _pg >= 3 or _wd >= 600:
+                        task.task_card["scope"] = None
+                        task.task_card["scopes"] = []
+                        task.task_card["deliverable_override"] = True
+                        task.task_card["deliverable_reason"] = (
+                            f"بلا حكم نموذج، وطولٌ مطلوب "
+                            f"({_pg or '—'} صفحة / {_wd or '—'} كلمة) "
+                            f"لا يتّفق مع «{_sc}»")
+                        mem.set_status(3, "تصحيح النطاق (احتياط): مستند كامل — "
+                                          "الطول المطلوب يخالف نطاقاً مُقيَّداً")
+                        self._emit("detail", "",
+                                   "احتياط النطاق: الطول المطلوب "
+                                   f"({_pg or '—'} صفحة) يخالف «{_sc}» "
+                                   "→ مستند كامل")
+        except Exception as e:
+            mem.set_status(3, f"احتياط النطاق (تخطّي: {e})")
 
         # Phase 3: route tools & skills once
         self._route(task)
