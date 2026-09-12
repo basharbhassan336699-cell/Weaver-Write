@@ -5153,18 +5153,13 @@ class WeaverOrchestrator:
                                                     units=_names, n_sub=_n3)
             # «حسب ما يلزم» cannot be a fixed number — the model decides how
             # many subdivisions each subsection needs, and may decide none.
-            if _deep_unit:
-                _before = len(sections_plan)
-                sections_plan = self._deepen_structure(
-                    sections_plan, self._current_request(task.description),
-                    card.get("topic", "") or task.description,
-                    _deep_unit, lang)
-                _added = len(sections_plan) - _before
-                mem.set_status(6, f"تقسيمات ({_deep_unit}) بقرار النموذج: "
-                                  f"أُضيف {_added}")
-                if not _added:
-                    self._skip_note(card, f"تقسيمات «{_deep_unit}»",
-                                    "لم يُضِف النموذج تقسيماتٍ (أو تعذّر النداء)")
+            # It runs AFTER the naming step below, not here: asked to subdivide
+            # «المطلب 1.1» — a label with no subject — the model invented
+            # subdivisions for the topic at large, and the مطالب were then given
+            # their real titles independently, so «المطلب 2.1: النظرية البنائية»
+            # ended up carrying «مفهوم التعليم المدمج». Deferred so it sees the
+            # actual subjects it is dividing.
+            _deep_pending = _deep_unit
             card["sections"] = sections_plan
             card["structure_units"] = _units or None
             # the counted plan REPLACED whatever the model had designed, so its
@@ -5191,6 +5186,28 @@ class WeaverOrchestrator:
                 card["sections"] = sections_plan
         except Exception as e:
             mem.set_status(6, f"عناوين وصفية (تخطّي: {e})")
+
+        # ── NOW the subdivisions — with the real subjects in view ──
+        # «وكل مطلب تقسيمات حسب ما يلزم». This must come after the naming step
+        # above: a model asked to divide «المطلب 1.1» has nothing to divide.
+        try:
+            if locals().get("_deep_pending") and scope != "outline":
+                _before = len(sections_plan)
+                sections_plan = self._deepen_structure(
+                    sections_plan, self._current_request(task.description),
+                    card.get("topic", "") or task.description,
+                    _deep_pending, lang)
+                _added = len(sections_plan) - _before
+                card["sections"] = sections_plan
+                mem.set_status(6, f"تقسيمات ({_deep_pending}) بقرار النموذج: "
+                                  f"أُضيف {_added}")
+                self._emit("detail", "",
+                           f"تقسيمات «{_deep_pending}»: {_added} بقرار النموذج")
+                if not _added:
+                    self._skip_note(card, f"تقسيمات «{_deep_pending}»",
+                                    "لم يُضِف النموذج تقسيماتٍ (أو تعذّر النداء)")
+        except Exception as e:
+            mem.set_status(6, f"تقسيمات (تخطّي: {e})")
 
         # outline-only → a COMPLETE, richly-detailed outline authored by the model
         # itself (title, structured intro, annotated sub-points, suggested refs) —

@@ -380,6 +380,15 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         if "|" in line and i + 1 < n and _md_table_sep(lines[i + 1]):
             _flush()
             headers = _md_cells(line)
+            # A writer that starts the table on the SAME line as the prose above
+            # it turns that prose into the first header cell: a مبحث's 60-word
+            # bridge shipped as a table heading beside «المصطلح التقني», and the
+            # bridge vanished from the body. A header cell is a label — measured
+            # across a real run, genuine ones ran 2–4 words — so a leading cell
+            # carrying a sentence is prose that belongs above the table, and is
+            # emitted as its own paragraph instead of being swallowed.
+            while len(headers) > 1 and len(headers[0].split()) >= 12:
+                _para(headers.pop(0))
             ncol = len(headers)
             i += 2
             rows = []
