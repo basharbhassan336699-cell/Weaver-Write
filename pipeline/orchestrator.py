@@ -3915,7 +3915,14 @@ class WeaverOrchestrator:
         """
         base = (topic or "").strip()
         self._last_query_reason = ""
+        # Whether the MODEL actually produced a usable query. Comparing the
+        # result to the topic cannot answer that: a model may compose a query
+        # and land on the same words, and reporting «لم يصغ النموذج الاستعلام»
+        # for that is a false alarm printed in the user's document.
+        self._query_composed = False
         if not self.llm_fn or not base:
+            self._last_query_reason = ("لا نموذج متاح" if not self.llm_fn
+                                       else "لا موضوع")
             return base
         import os
         if (os.environ.get("WEAVER_MODEL_QUERY", "1") or "1").strip() in (
@@ -3951,7 +3958,11 @@ class WeaverOrchestrator:
             q = " ".join(q.split())[:200]
             # a query the model empties or turns into a single stop-word is not
             # an improvement — fall back rather than search for nothing.
-            return q if len(q) >= 3 else base
+            if len(q) < 3:
+                self._last_query_reason = f"استعلامٌ أقصر من أن يُبحث به: «{q}»"
+                return base
+            self._query_composed = True
+            return q
         except Exception as e:
             self._last_query_reason = f"{type(e).__name__}: {str(e)[:60]}"
             return base
@@ -4050,7 +4061,7 @@ class WeaverOrchestrator:
         # ① the MODEL composes the query — the request is no longer sent to the
         #    databases as a literal sentence.
         _q = self._search_query(query, task.description, lang)
-        if _q and _q != query:
+        if getattr(self, "_query_composed", False):
             self._record_decision(card, "استعلام البحث", _q[:60], "model",
                                   "بحث أكاديمي")
         elif self.llm_fn:
@@ -4114,9 +4125,14 @@ class WeaverOrchestrator:
         #    place of a relevant one. Saying «لم أجد» is honest; filling the
         #    bibliography with papers about another subject is not.
         if not results:
+            _seen = len(_dropped or []) or len(_kept or [])
             self._skip_note(
                 card, "المراجع الأكاديمية",
-                "لم يجد النموذج بين نتائج قواعد البيانات مرجعاً يخصّ الموضوع")
+                (f"فُحص {_seen} مرجعاً من قواعد البيانات ولم يخصّ الموضوعَ "
+                 "منها شيء" if _seen else
+                 "لم يجد النموذج بين نتائج قواعد البيانات مرجعاً يخصّ الموضوع")
+                + (" — والمتاح أكاديمياً في هذا الموضوع أغلبه بلغةٍ أخرى"
+                   if lang == "ar" else ""))
             mem.set_status(4, "بحث أكاديمي: لا مرجع مطابق للموضوع")
             return
         srcs = card.setdefault("sources", [])
