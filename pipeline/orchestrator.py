@@ -5067,6 +5067,18 @@ class WeaverOrchestrator:
         task.sections = out_sections
         mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
 
+        # run matched enrichment skills (task.skills) that have a write-stage
+        # handler — turns skill routing into real execution. Additive/guarded.
+        self._dispatch_skills(task, card, lang, mem)
+        # when a data file (csv/xlsx) is attached, run REAL statistics on it and
+        # inject the computed results (never invented). Additive/guarded.
+        self._inject_statistics(task, card, lang, mem)
+        # enforce correct Quran/Hadith marks for Islamic content (text-level,
+        # all formats). Additive/guarded; no-op for non-Islamic text.
+        self._apply_islamic_marks(task, card, lang, mem)
+        # optional enrichments the user explicitly asked for (additive/guarded)
+        self._enrich_table_chart(task, card, lang, mem)
+
         # ── the one document-wide duplicate pass (the last net) ──
         # The per-seam guards above have already run; this catches repetition
         # between ANY two paragraphs of the finished document, at any level.
@@ -5095,17 +5107,6 @@ class WeaverOrchestrator:
                     card["dedupe_report"] = _rep
         except Exception as e:
             mem.set_status(6, f"كشف التكرار (تخطّي: {e})")
-        # run matched enrichment skills (task.skills) that have a write-stage
-        # handler — turns skill routing into real execution. Additive/guarded.
-        self._dispatch_skills(task, card, lang, mem)
-        # when a data file (csv/xlsx) is attached, run REAL statistics on it and
-        # inject the computed results (never invented). Additive/guarded.
-        self._inject_statistics(task, card, lang, mem)
-        # enforce correct Quran/Hadith marks for Islamic content (text-level,
-        # all formats). Additive/guarded; no-op for non-Islamic text.
-        self._apply_islamic_marks(task, card, lang, mem)
-        # optional enrichments the user explicitly asked for (additive/guarded)
-        self._enrich_table_chart(task, card, lang, mem)
 
     def _enrich_table_chart(self, task, card, lang, mem):
         """When the request asked for a table and/or a chart, derive them from
@@ -5122,8 +5123,11 @@ class WeaverOrchestrator:
         if card.get("want_table"):
             try:
                 tbl = _content_to_table(self.llm_fn, content, lang)
-                if tbl and self._is_outline_dump(tbl):
+                # pass the document so a "table" whose cells are copied out of
+                # it is recognised as a copy, not just by its row wording
+                if tbl and self._is_outline_dump(tbl, content):
                     tbl = None          # a summary of the paper, not a table
+                    mem.set_status(6, "رُفض جدول: نسخةٌ من المتن لا بيانات")
                 if tbl and tbl.get("headers") and tbl.get("rows"):
                     md = self._skill_call("table_builder", "make_table",
                                           "make_table", tbl["headers"],
@@ -6461,14 +6465,44 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
-    def _is_outline_dump(tbl):
-        """True when a generated "table" is really the document's own outline
-        re-tabulated (rows like «المقدمة - خلفية الموضوع» / «المبحث 1 - المطلب
-        الأول»). One run produced a 15-row «جدول توضيحي» that repeated the whole
-        research instead of presenting data, so such tables are rejected."""
+    def _is_outline_dump(tbl, content=None):
+        """True when a generated "table" is really the document re-tabulated
+        rather than data. Rejecting it protects the length budget and the
+        no-repetition rule at once.
+
+        The original test matched section WORDS in the first cell («المقدمة»,
+        «المبحث», «المطلب»). A run then produced a 32-row «النقطة | التفصيل»
+        whose first cells read «خلفية الموضوع», «أهمية البحث», «مشكلة البحث» —
+        no match, so ~1,400 copied words shipped as a "table". Two MEASURED
+        signals now decide it, with the word test kept as a third:
+
+          • CELL SIZE — measured across a real run: genuine term/explanation
+            tables had a longest cell of 7–14 words; the dump's longest was 184.
+            A cell of 40+ words is prose, and prose in cells is not a table.
+          • REPETITION — cells whose opening is already present in the document
+            are copies, not data. Needs `content` (optional, so old callers
+            behave exactly as before).
+        """
         rows = (tbl or {}).get("rows") or []
         if len(rows) < 3:
             return False
+        cells = [str(c) for r in rows for c in (r or [])]
+        lens = [len(c.split()) for c in cells if c.strip()]
+        # (a) prose in cells
+        if lens and max(lens) >= 40:
+            return True
+        # (b) cells copied out of the document
+        if content:
+            low = " ".join(str(content).split())
+            rep = 0
+            for c in cells:
+                w = c.split()
+                if len(w) >= 12 and " ".join(w[:10]) in low:
+                    rep += 1
+            if rep >= max(2, len([c for c in cells
+                                  if len(c.split()) >= 12]) // 4):
+                return True
+        # (c) the original wording signal
         marks = ("المقدمة", "المبحث", "المطلب", "الخاتمة", "التوصيات",
                  "Introduction", "Section", "Conclusion")
         hits = 0
@@ -7639,13 +7673,21 @@ def _vr_has_table(text):
 
 def _vr_page_target(req):
     """If a length requirement is expressed in PAGES, return that page count,
-    else None. Reads the requirement text + target; never guesses a topic."""
+    else None. Reads the requirement text + target; never guesses a topic.
+
+    A RANGE cannot fit in one integer, so «لا يقل عن 10 صفحات ولا يزيد عن 12»
+    came back with target=None and the whole length check degraded to
+    "unknown — لا هدف رقمي محدّد" even though both numbers were sitting in the
+    requirement's own text. The floor is read from that text as a fallback."""
     t = (req.get("text") or "").lower()
     is_pages = any(k in t for k in ("صفح", "page"))
+    if not is_pages:
+        return None
     tgt = req.get("target")
-    if is_pages and isinstance(tgt, int):
+    if isinstance(tgt, int) and not isinstance(tgt, bool):
         return tgt
-    return None
+    nums = [n for n in _vr_numbers(req.get("text") or "") if 1 <= n <= 2000]
+    return nums[0] if nums else None
 
 
 def _verify_deterministic(req, draft, card, lang):
@@ -7692,6 +7734,12 @@ def _verify_deterministic(req, draft, card, lang):
             _mx = None
             try:
                 _mx = (card or {}).get("max_pages")
+                if not _mx:
+                    # the ceiling may live only in the requirement's own text
+                    _ns = [n for n in _vr_numbers(req.get("text") or "")
+                           if 1 <= n <= 2000]
+                    if len(_ns) >= 2 and _ns[1] > _ns[0]:
+                        _mx = _ns[1]
             except Exception:
                 _mx = None
             # a PDF export gives a MEASURED page count — prefer it over the
@@ -7755,6 +7803,17 @@ def _verify_deterministic(req, draft, card, lang):
     # ── structure: count matching headings ──
     if kind == "structure":
         tgt = req.get("target")
+        if isinstance(tgt, bool):
+            tgt = None
+        if not isinstance(tgt, int):
+            # A compound rule («ثلاثة مباحث، كل مبحث فيه ثلاثة مطالب، وكل مطلب
+            # تقسيمات») cannot be expressed as one integer, so the model returns
+            # target=None — and the whole check then went to the model, which
+            # judged a TRUNCATED draft and twice reported a مبحث missing that was
+            # demonstrably present. The counts are in the requirement's own text.
+            _ns = [n for n in _vr_numbers(req.get("text") or "")
+                   if 1 <= n <= 200]
+            tgt = _ns[0] if _ns else None
         if isinstance(tgt, int):
             # map the requirement wording (often a PLURAL like «مباحث») to the
             # singular STEM that appears in the headings («المبحث الأول»).
