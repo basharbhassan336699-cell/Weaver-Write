@@ -3556,9 +3556,15 @@ class WeaverOrchestrator:
                     for p in ps:
                         pos[p] = word
                 abx = " ".join(pos[k] for k in sorted(pos))[:400]
+            # venue and language were already IN the payload and thrown away.
+            # Without them a reference could only ever print as a title and a
+            # link, and a request for «مراجع عربية» had nothing to check against.
+            _ven = ((w.get("primary_location") or {}).get("source") or {}) \
+                .get("display_name") or ""
             out.append({"title": title, "url": url_, "content": abx,
                         "authors": [a for a in auths if a],
                         "year": str(w.get("publication_year") or ""),
+                        "venue": _ven, "lang": (w.get("language") or ""),
                         "doi": doi, "source": "openalex"})
         return out or None
 
@@ -3596,8 +3602,15 @@ class WeaverOrchestrator:
             auths = [(a.get("given", "") + " " + a.get("family", "")).strip()
                      for a in (it.get("author") or [])[:4]]
             abx = re.sub(r"<[^>]+>", "", it.get("abstract", "") or "")[:400]
+            _ven = ""
+            _ct = it.get("container-title")
+            if isinstance(_ct, list) and _ct:
+                _ven = str(_ct[0] or "")
+            elif isinstance(_ct, str):
+                _ven = _ct
             out.append({"title": title, "url": url_, "content": abx,
                         "authors": [a for a in auths if a], "year": year,
+                        "venue": _ven, "lang": str(it.get("language") or ""),
                         "doi": doi, "source": "crossref"})
         return out or None
 
@@ -3703,9 +3716,15 @@ class WeaverOrchestrator:
                     url_ = L["url"]
                     break
             auths = [a.get("name", "") for a in (b.get("author") or [])[:4]]
+            _j = b.get("journal") or {}
+            _lg = _j.get("language")
+            if isinstance(_lg, (list, tuple)):
+                _lg = (_lg[0] if _lg else "")
             out.append({"title": title, "url": url_,
                         "content": (b.get("abstract") or "")[:400],
                         "authors": [a for a in auths if a],
+                        "venue": str(_j.get("title") or ""),
+                        "lang": str(_lg or ""),
                         "year": str(b.get("year") or ""), "doi": "",
                         "source": "doaj"})
         return out or None
@@ -3798,11 +3817,26 @@ class WeaverOrchestrator:
         for r in itertools.chain.from_iterable(itertools.zip_longest(*lists)):
             if not r:
                 continue
-            key = (r.get("doi") or r.get("url") or r.get("title") or "")
-            key = key.strip().lower().rstrip("/")
-            if not key or key in seen or not (r.get("title") or "").strip():
+            # DEDUPE ON THE TITLE TOO, NOT THE IDENTIFIER ALONE. Keying on the
+            # DOI first let ONE paper through TWICE whenever two indexes carry
+            # it under different DOIs — measured: «W.W.S. Charters (1994) Solar
+            # energy: A viable pathway…» printed as items 8 and 9 of the same
+            # bibliography, under …90033-7 and …90113-g. The identifiers differ;
+            # the work does not. Titles are compared with punctuation, case and
+            # spacing normalised so «Solar Energy:  A Viable…» meets «solar
+            # energy: a viable…».
+            _title = (r.get("title") or "").strip()
+            if not _title:
                 continue
-            seen.add(key)
+            _ident = (r.get("doi") or r.get("url") or "").strip().lower().rstrip("/")
+            _tkey = "t:" + " ".join(
+                "".join(c for c in _title.lower() if c.isalnum() or c.isspace()
+                        ).split())
+            if (_ident and _ident in seen) or _tkey in seen:
+                continue
+            if _ident:
+                seen.add(_ident)
+            seen.add(_tkey)
             blob = (str(r.get("title", "")) + " "
                     + str(r.get("content", ""))).lower()
             if not terms or any(t in blob for t in terms):
@@ -3915,6 +3949,8 @@ class WeaverOrchestrator:
         """
         base = (topic or "").strip()
         self._last_query_reason = ""
+        self._refs_lang = ""
+        self._refs_lang_note = ""
         # Whether the MODEL actually produced a usable query. Comparing the
         # result to the topic cannot answer that: a model may compose a query
         # and land on the same words, and reporting «لم يصغ النموذج الاستعلام»
@@ -3929,22 +3965,46 @@ class WeaverOrchestrator:
                 "0", "false", "no"):
             return base
         try:
+            # WHAT THE MODEL WAS NOT TOLD. It was asked to compose a query
+            # without being told what it was querying: OpenAlex, Crossref, arXiv,
+            # Semantic Scholar, DOAJ and Europe PMC are INTERNATIONAL indexes,
+            # and for most subjects the peer-reviewed literature sits in English
+            # whatever language the request is written in. A strong model worked
+            # that out alone («mobile phone radiation effects on children») and a
+            # weaker one did not, and searched in Arabic for a literature that
+            # barely exists there. This is not a rule imposed on the model and
+            # not a keyword list — it is the information about the tool it needs
+            # in order to decide. It still chooses; and where the user named a
+            # language for the references, that is its to weigh and to answer for.
             if lang == "en":
                 prompt = (
-                    "Compose ONE search query for academic databases (OpenAlex, "
-                    "Crossref, Semantic Scholar) for the research below. Keep "
-                    "the terms that define the subject; drop wrapper words that "
-                    "only describe the writing task. Return JSON only:\n"
-                    '{"query":"…"}\n'
+                    "Compose ONE search query for academic databases for the "
+                    "research below. Keep the terms that define the subject; "
+                    "drop wrapper words that only describe the writing task.\n"
+                    "About the tool: OpenAlex, Crossref, arXiv, Semantic "
+                    "Scholar, DOAJ and Europe PMC are INTERNATIONAL indexes "
+                    "covering every language; for many subjects the "
+                    "peer-reviewed literature is predominantly in English. You "
+                    "choose the language of the query. If the user asked for "
+                    "references in a particular language, weigh that — and if "
+                    "the literature on this subject is scarce in it, say so.\n"
+                    "Return JSON only:\n"
+                    '{"query":"…","refs_lang":"ar|en|any","note":"…"}\n'
                     f"Research topic: {base}\n"
                     f"Request: {(request or '')[:400]}")
             else:
                 prompt = (
-                    "صُغ استعلامَ بحثٍ واحداً لقواعد البيانات الأكاديمية "
-                    "(OpenAlex، Crossref، Semantic Scholar) للبحث أدناه. أبقِ "
-                    "المصطلحات التي تُعرّف الموضوع، واحذف كلماتِ الصياغة التي "
-                    "تصف مهمّة الكتابة لا الموضوع. أعِد JSON فقط:\n"
-                    '{"query":"…"}\n'
+                    "صُغ استعلامَ بحثٍ واحداً لقواعد البيانات الأكاديمية للبحث "
+                    "أدناه. أبقِ المصطلحات التي تُعرّف الموضوع، واحذف كلماتِ "
+                    "الصياغة التي تصف مهمّة الكتابة لا الموضوع.\n"
+                    "عن الأداة: OpenAlex و Crossref و arXiv و Semantic Scholar "
+                    "و DOAJ و Europe PMC فهارسُ عالميةٌ تغطّي كل اللغات، وفي "
+                    "كثيرٍ من الموضوعات يكون الأدب المحكَّم بالإنجليزية غالباً. "
+                    "لغةُ الاستعلام قرارُك أنت. وإن طلب المستخدم مراجع بلغةٍ "
+                    "بعينها فزِنْ ذلك، وإن كان الأدب في هذا الموضوع شحيحاً "
+                    "بتلك اللغة فقُل ذلك صراحةً.\n"
+                    "أعِد JSON فقط:\n"
+                    '{"query":"…","refs_lang":"ar|en|any","note":"…"}\n'
                     f"موضوع البحث: {base}\n"
                     f"الطلب: {(request or '')[:400]}")
             data, _why = self._ask_json(prompt, max_tokens=900)
@@ -3952,6 +4012,9 @@ class WeaverOrchestrator:
             q = ""
             if isinstance(data, dict):
                 q = str(data.get("query") or "").strip()
+                self._refs_lang = str(data.get("refs_lang") or "").strip().lower()
+                self._refs_lang_note = " ".join(
+                    str(data.get("note") or "").split())[:300]
             if not q:
                 self._last_query_reason = _why or "لم يُعِد النموذج استعلاماً"
                 return base
@@ -4064,6 +4127,14 @@ class WeaverOrchestrator:
         if getattr(self, "_query_composed", False):
             self._record_decision(card, "استعلام البحث", _q[:60], "model",
                                   "بحث أكاديمي")
+            _rl = getattr(self, "_refs_lang", "")
+            if _rl:
+                self._record_decision(card, "لغة المراجع", _rl, "model",
+                                      "بحث أكاديمي")
+                card["refs_lang_target"] = _rl
+            _rn = getattr(self, "_refs_lang_note", "")
+            if _rn:
+                card["refs_lang_note"] = _rn
         elif self.llm_fn:
             # RULE 2 — the fallback does not pass in silence. The raw request
             # goes to the databases as a SENTENCE, and Arabic titles match on
@@ -4152,6 +4223,24 @@ class WeaverOrchestrator:
                 f"[أكاديمي/{r.get('source','')}] {title} — {auth} ({year}) "
                 f"{('doi:'+doi) if doi else ''} {content[:200]} ({url})",
                 source_key=(url or doi or title))
+        # THE LANGUAGE THE USER ASKED FOR, ANSWERED WITH NUMBERS. Asking for
+        # «٩ مراجع عربية» used to return nine English papers with not one word
+        # about it. The indexes report each work's language, so the answer is
+        # counted, not guessed: how many came back in the language the model
+        # targeted, and what the rest are. Saying «the Arabic literature on this
+        # subject is scarce, here is what exists» is an answer; silence is not.
+        _tl = str(card.get("refs_lang_target") or "").lower()
+        if _tl and _tl not in ("any", "all", ""):
+            _in = sum(1 for r in results
+                      if str(r.get("lang") or "").lower().startswith(_tl))
+            if _in < len(results):
+                _note = card.get("refs_lang_note") or ""
+                self._skip_note(
+                    card, "لغة المراجع",
+                    f"طُلبت المراجع بـ«{_tl}» ووُجد منها {_in} من "
+                    f"{len(results)}؛ والباقي بلغاتٍ أخرى لأن الأدب المحكَّم في "
+                    "هذا الموضوع يُنشر فيها غالباً"
+                    + (f" — {_note}" if _note else ""))
         card["academic_reads"] = len(results)
         mem.set_status(4, f"بحث أكاديمي: {len(results)} مصدر محكّم")
 
@@ -7489,6 +7578,84 @@ class WeaverOrchestrator:
                 applied += 1
         return applied > 0
 
+    _REF_LANG_AR = {"ar": "العربية", "en": "الإنجليزية", "fr": "الفرنسية",
+                    "es": "الإسبانية", "de": "الألمانية", "tr": "التركية",
+                    "fa": "الفارسية", "ru": "الروسية", "zh": "الصينية"}
+
+    @classmethod
+    def _ref_annotation(cls, src, lang="ar"):
+        """One annotation line under a reference: where it was published, what
+        language it is in, and what it is ABOUT.
+
+        A bibliography of bare titles and links tells the reader nothing about
+        why an entry is there — a chat assistant answering the same request
+        gives the venue, the language and a sentence of substance for each one.
+        Every field here already arrives from the indexes (venue, language,
+        abstract) and was simply being dropped, so this costs no model call and
+        behaves the same with any provider. Returns "" when nothing is known,
+        so an entry that has no metadata prints exactly as it does today."""
+        if not isinstance(src, dict):
+            return ""
+        try:
+            bits = []
+            ven = " ".join(str(src.get("venue") or src.get("journal") or "").split())
+            if ven:
+                bits.append((f"الجهة: {ven[:90]}" if lang != "en"
+                             else f"Venue: {ven[:90]}"))
+            lg = str(src.get("lang") or "").strip().lower()[:2]
+            if lg:
+                nm = (cls._REF_LANG_AR.get(lg, lg) if lang != "en" else lg)
+                bits.append((f"اللغة: {nm}" if lang != "en"
+                             else f"Language: {nm}"))
+            # a sentence of substance from the abstract the index returned
+            abx = " ".join(str(src.get("content") or "").split())
+            if len(abx) >= 60:
+                cut = abx[:240]
+                for stop in (". ", "؟ ", "! ", "، "):
+                    i = cut.rfind(stop)
+                    if i > 80:
+                        cut = cut[:i + 1]
+                        break
+                bits.append((f"الوصف: {cut.strip()}" if lang != "en"
+                             else f"Summary: {cut.strip()}"))
+            return " · ".join(bits)
+        except Exception:
+            return ""
+
+    @classmethod
+    def _annotate_bibliography(cls, txt, items, lang="ar"):
+        """Append each source's annotation under its own numbered APA entry.
+
+        The formatter returns a numbered list in the SAME order as `items`, so
+        the n-th entry belongs to the n-th source. Matching is by that order and
+        by the numbering the formatter emitted — never by searching the text for
+        a title, which would misfire on two papers sharing words. On any doubt
+        the text is returned untouched: an un-annotated list is the behaviour of
+        yesterday, a mis-annotated one would be a new lie."""
+        try:
+            lines = (txt or "").split("\n")
+            if not lines or not items:
+                return txt
+            import re
+            num = re.compile(r"^\s*(\d+)[.)]\s")
+            idx, out, used = 0, [], 0
+            for ln in lines:
+                out.append(ln)
+                m = num.match(ln)
+                if not m:
+                    continue
+                n = int(m.group(1))
+                idx = n if 1 <= n <= len(items) else idx + 1
+                if not (1 <= idx <= len(items)):
+                    continue
+                note = cls._ref_annotation(items[idx - 1], lang)
+                if note:
+                    out.append("   " + note)
+                    used += 1
+            return "\n".join(out) if used else txt
+        except Exception:
+            return txt
+
     def _grouped_refs_body(self, sources, lang, skill, module, pq_refs, card):
         """Build ONE bibliography body with the types separated by internal
         sub-headings (the «قائمة المصادر والمراجع» layout of Arabic theses).
@@ -7534,6 +7701,7 @@ class WeaverOrchestrator:
                 txt = "\n".join(
                     f"{i}. {(x.get('title') or '')} {(x.get('url') or '')}".strip()
                     for i, x in enumerate(groups[t], 1))
+            txt = self._annotate_bibliography(txt, groups[t], lang)
             if (txt or "").strip():
                 _label = names[t]
                 if lang != "en" and _n < len(self._REF_ORDINALS_AR):
