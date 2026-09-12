@@ -1012,6 +1012,76 @@ class WeaverOrchestrator:
         except Exception:
             return None
 
+    # ── the return channel: a decision line the WRITER appends to its section ──
+    # Every constraint the system used to impose was INJECTED into the prompt as
+    # silent text with no way back: the writer could not say "this section needs
+    # no table", and the system could not tell refusal from forgetting. Silence
+    # was read as consent, so flags could only ever be turned ON.
+    #
+    # The channel costs NOTHING: no extra call, no extra round trip. The writer
+    # is asked to end its reply with one JSON line, which is cut off here before
+    # anything else sees the text. If the line is absent, malformed, or the model
+    # ignored the instruction entirely, the caller behaves EXACTLY as it does
+    # today — absence is the current behaviour, never an error.
+    _DECISION_HEAD = ("### القرارات", "### DECISIONS", "###القرارات")
+
+    @classmethod
+    def _split_decisions(cls, text):
+        """Return (text_without_the_decision_line, decisions_dict).
+
+        The document must never contain the line, so the split happens the
+        moment the reply arrives. Returns ({} ) for decisions whenever anything
+        is missing or unreadable. Never raises."""
+        t = text or ""
+        try:
+            import json as _json
+            import re as _re
+            low = t
+            idx = -1
+            for h in cls._DECISION_HEAD:
+                j = low.rfind(h)
+                if j > idx:
+                    idx = j
+            if idx < 0:
+                return t, {}
+            head, tail = t[:idx], t[idx:]
+            m = _re.search(r"\{.*\}", tail, _re.S)
+            if not m:
+                return head.rstrip(), {}
+            try:
+                data = _json.loads(m.group(0))
+            except Exception:
+                return head.rstrip(), {}
+            if not isinstance(data, dict):
+                return head.rstrip(), {}
+            out = {}
+            for k, v in data.items():
+                k = str(k)[:40]
+                if isinstance(v, bool) or v is None:
+                    out[k] = v
+                elif isinstance(v, (int, float)):
+                    out[k] = v
+                elif isinstance(v, str):
+                    out[k] = v[:200]
+            return head.rstrip(), out
+        except Exception:
+            return t, {}
+
+    @staticmethod
+    def _record_decision(card, key, value, by, where=""):
+        """One ledger of WHO decided WHAT: "user" (they said it), "measured"
+        (counted), "model" (it judged), "fallback" (a template was used because
+        nothing else was available). Surfaced at the end so no decision is
+        anonymous. Never raises."""
+        try:
+            if not isinstance(card, dict):
+                return
+            d = card.setdefault("decisions", {})
+            d[str(key)[:40]] = {"value": value, "by": str(by)[:20],
+                                "where": str(where)[:60]}
+        except Exception:
+            pass
+
     @staticmethod
     def _skip_note(card, step, reason):
         """RULE 2 — NO step cancels itself in silence.
@@ -5408,6 +5478,32 @@ class WeaverOrchestrator:
         except Exception:
             _tbl_budget = _tbl_used = None
 
+        # the writer's return channel (see _split_decisions). Off with
+        # WEAVER_DECISIONS=0; absent answers simply mean today's behaviour.
+        try:
+            import os as _os3
+            _dec_on = _os3.environ.get("WEAVER_DECISIONS", "1") != "0"
+        except Exception:
+            _dec_on = False
+        _sec_decisions = {}
+        # who decided the big things, recorded once so nothing is anonymous
+        try:
+            if card.get("target_words") or card.get("target_pages"):
+                self._record_decision(card, "length",
+                                      card.get("target_words")
+                                      or card.get("target_pages"), "user")
+            self._record_decision(card, "structure",
+                                  f"{len(sections_plan)} قسماً",
+                                  card.get("structure_source") or "template")
+            if _tbl_budget is not None:
+                self._record_decision(card, "table_budget", _tbl_budget,
+                                      "measured", "من عدد الأقسام الرئيسية")
+            self._record_decision(card, "model_strength",
+                                  card.get("model_strength", "medium"),
+                                  card.get("model_strength_source", "neutral"))
+        except Exception:
+            pass
+
         parts, out_sections = [], []
         for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
@@ -5597,11 +5693,43 @@ class WeaverOrchestrator:
                     prompt = prompt + "\n\n" + (self._ISLAMIC_DIRECTIVE_AR
                                                if lang == "ar"
                                                else self._ISLAMIC_DIRECTIVE_EN)
+                # ── ask for the decision line (no extra call) ──
+                # Guidance the writer used to receive silently now comes back as
+                # data: whether it actually used a table here, and whether the
+                # length it was given fitted. Ignoring the line costs nothing —
+                # the caller then behaves exactly as before.
+                if _dec_on:
+                    prompt = prompt + "\n\n" + (
+                        "وفي آخر ردّك تماماً، بعد نصّ القسم، أضِف سطراً واحداً "
+                        "بهذا الشكل حرفياً (وسيُحذف قبل الإخراج فلا تُشر إليه في "
+                        "النصّ):\n"
+                        "### القرارات\n"
+                        '{"used_table": true أو false, '
+                        '"length_fits": true أو false, '
+                        '"note": "سببٌ قصير أو null"}\n'
+                        "used_table: هل أدرجتَ جدولاً في هذا القسم فعلاً. "
+                        "length_fits: هل كان الطول المطلوب مناسباً لهذا المحتوى."
+                        if lang == "ar" else
+                        "At the very end of your reply, after the section text, "
+                        "add ONE line exactly like this (it is stripped before "
+                        "export, so never refer to it in the text):\n"
+                        "### DECISIONS\n"
+                        '{"used_table": true|false, "length_fits": true|false, '
+                        '"note": "short reason or null"}\n'
+                        "used_table: whether you actually included a table "
+                        "here. length_fits: whether the requested length suited "
+                        "this content.")
                 try:
                     body = self.llm_fn(prompt, system=system,
                                        temperature=prof.get("temp", 0.5))
                 except Exception as e:
                     mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
+                # cut the decision line off IMMEDIATELY — before the retry
+                # guard, the cleaners, the draft or the export can ever see it
+                if _dec_on and body:
+                    body, _dec = self._split_decisions(body)
+                    if _dec:
+                        _sec_decisions[title] = _dec
                 # guard: a conversational model may answer with a greeting /
                 # clarifying question / options menu instead of content. Detect
                 # it and retry ONCE with a blunt content-only instruction.
@@ -5618,6 +5746,10 @@ class WeaverOrchestrator:
                     try:
                         retry = self.llm_fn(firm, system=_p.SYSTEM_PROMPT_WRITE,
                                             temperature=0.4)
+                        if _dec_on and retry:
+                            retry, _dec2 = self._split_decisions(retry)
+                            if _dec2:
+                                _sec_decisions[title] = _dec2
                         if retry and not self._looks_conversational(retry):
                             body = retry
                         elif self._looks_conversational(body):
@@ -5660,6 +5792,16 @@ class WeaverOrchestrator:
                     body = self._cap_bridge(body, _bridge.get("max_words"))
                 except Exception:
                     pass
+            # FINAL strip, whatever wrote this body. The early strip above only
+            # covers the generic writer; the specialized writers (intro,
+            # conclusion, results) call the model through their own skills, and
+            # a model that learned the decision-line habit appends it there too
+            # — which leaked "used_table" into the document. One strip here
+            # catches every origin, present and future.
+            if _dec_on and body:
+                body, _decF = self._split_decisions(body)
+                if _decF and title not in _sec_decisions:
+                    _sec_decisions[title] = _decF
             body = self._clean_section_body(body, title)
             # ── measurement replaces the name guess, for the NEXT sections ──
             # Strictly forward-looking: what is already written is never touched.
@@ -5694,8 +5836,22 @@ class WeaverOrchestrator:
             if _tbl_budget is not None:
                 try:
                     import re as _re
-                    _tbl_used += len(_re.findall(
+                    _cnt = len(_re.findall(
                         r"(?m)^\s*\|[^\n]*\|\s*$\n\s*\|[\s:\-|]+\|\s*$", body))
+                    _tbl_used += _cnt
+                    # the writer's own answer, now that it HAS one. The count is
+                    # the fact; the declaration is recorded next to it, and a
+                    # disagreement is reported rather than silently preferred.
+                    _d = _sec_decisions.get(title) or {}
+                    if "used_table" in _d:
+                        self._record_decision(
+                            card, f"table::{title[:28]}",
+                            bool(_d.get("used_table")), "model", title)
+                        if bool(_d.get("used_table")) != bool(_cnt):
+                            mem.set_status(
+                                6, f"تعارض: أعلن الكاتب used_table="
+                                   f"{_d.get('used_table')} والمقيس {_cnt} — "
+                                   "المقيس هو المعتمد")
                 except Exception:
                     pass
             parts.append((f"{title}\n{body}").strip())
@@ -7369,6 +7525,32 @@ class WeaverOrchestrator:
                                 + "\n\n" + "\n".join(_lines)
         except Exception as e:
             mem.set_status(8, f"تحقّق/إصلاح المتطلّبات (تخطّي: {e})")
+
+        # ── who decided what ──
+        # A decision with no named source is a decision nobody can argue with.
+        # Only the document-level ones are shown; the per-section table answers
+        # stay on the card for inspection.
+        try:
+            _dec = (task.task_card or {}).get("decisions") or {}
+            _big = [(k, v) for k, v in _dec.items() if "::" not in k]
+            if _big:
+                _ar = (task.task_card.get("language", "ar") != "en")
+                _by = {"user": "المستخدم" if _ar else "user",
+                       "measured": "قياس" if _ar else "measured",
+                       "model": "النموذج" if _ar else "model",
+                       "counted": "قياس" if _ar else "measured",
+                       "neutral": "افتراضي محايد" if _ar else "neutral default",
+                       "template": "قالب احتياطي" if _ar else "fallback template",
+                       "fallback": "قالب احتياطي" if _ar else "fallback template"}
+                _line = " · ".join(
+                    f"{k}: {v.get('value')} ← "
+                    f"{_by.get(str(v.get('by')), v.get('by'))}"
+                    for k, v in _big)
+                task.draft = (task.draft or "").rstrip() + "\n\n" + (
+                    ("مصدر القرارات: " if _ar else "Decided by: ") + _line)
+                self._emit("detail", "", "مصدر القرارات: " + _line)
+        except Exception as e:
+            mem.set_status(8, f"سجلّ القرارات (تخطّي: {e})")
 
         # ── RULE 2 — surface every step that cancelled itself ──
         # Deliberately INDEPENDENT of the verification block above: that one
