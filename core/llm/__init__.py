@@ -52,6 +52,18 @@ def _is_anthropic(provider: str, base: str) -> bool:
 # so the retry loop can tell the two apart. Never reaches a caller.
 _REASONING_MARK = "\x00weaver-reasoning\x00"
 
+# Endpoints that REJECTED the reasoning switches, remembered for this process.
+# A table of known providers can only ever grow, and a gateway nobody has listed
+# yet would be a code change and a release. This is the other half: send the
+# switches, and if the endpoint refuses the request because of them, drop them,
+# retry, and never send them there again. Try, and adapt when refused — so an
+# unknown endpoint works on its FIRST call, not after someone patches a table.
+_REASONING_REFUSED = set()
+
+
+def _reasoning_key(base, model):
+    return (str(base or "").strip().lower(), str(model or "").strip().lower())
+
 REASONING_FAMILIES = [
     {
         "name": "deepseek",              # DeepSeek v3/r1/v4-flash/pro/reasoner
@@ -66,11 +78,81 @@ REASONING_FAMILIES = [
 ]
 
 
+# Routers (OpenRouter, and any gateway added later) read their OWN parameter
+# name, not the upstream family's. Sending the family's name alone left thinking
+# ON: measured on a live run, the model spent its budget reasoning and was cut
+# off before it could close its JSON. These rows sit BESIDE the families and
+# both are merged, so each endpoint reads the one it knows.
+REASONING_ROUTERS = [
+    {
+        "name": "openrouter",
+        "match": ("openrouter",),
+        "off": {"reasoning": {"enabled": False, "exclude": True}},
+        "on": {"reasoning": {"enabled": True}},
+    },
+]
+
+# config/reasoning.json — THE SAME TABLES AS DATA, editable without touching
+# code. A row whose "name" already exists REPLACES the built-in one; a new name
+# is appended. So connecting a new provider, router or family is a line YOU
+# write, not a release you wait for. A missing or malformed file changes
+# nothing: the built-in tables stand.
+_REASONING_CONF_LOADED = [False]
+
+
+def _reasoning_conf_path():
+    return os.path.join(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))), "config", "reasoning.json")
+
+
+def _merge_rows(base_rows, extra):
+    out = list(base_rows)
+    by_name = {str(r.get("name", "")).lower(): i for i, r in enumerate(out)}
+    for r in (extra or []):
+        if not isinstance(r, dict) or not r.get("match"):
+            continue
+        row = {"name": str(r.get("name") or "")[:40],
+               "match": tuple(str(m).lower() for m in r.get("match") or ()),
+               "off": dict(r.get("off") or {}),
+               "on": dict(r.get("on") or {})}
+        if not row["match"]:
+            continue
+        k = row["name"].lower()
+        if k and k in by_name:
+            out[by_name[k]] = row
+        else:
+            by_name[k] = len(out)
+            out.append(row)
+    return out
+
+
+def load_reasoning_config(force=False):
+    """Merge config/reasoning.json into the tables. Called once, lazily."""
+    global REASONING_FAMILIES, REASONING_ROUTERS
+    if _REASONING_CONF_LOADED[0] and not force:
+        return
+    _REASONING_CONF_LOADED[0] = True
+    try:
+        path = os.environ.get("WEAVER_REASONING_CONF") or _reasoning_conf_path()
+        if not os.path.isfile(path):
+            return
+        with open(path, encoding="utf-8") as fh:
+            conf = json.load(fh)
+        if not isinstance(conf, dict):
+            return
+        REASONING_FAMILIES = _merge_rows(REASONING_FAMILIES,
+                                         conf.get("families"))
+        REASONING_ROUTERS = _merge_rows(REASONING_ROUTERS, conf.get("routers"))
+    except Exception:
+        pass                      # a bad file must never break a model call
+
+
 def detect_reasoning_family(provider, base, model):
     """Return the REASONING_FAMILIES row matching this provider/base/model, or
     None for a plain (non-reasoning) or unlisted model. Matches on a case-folded
     haystack of all three, so detection works whether the family shows up in the
     provider name, the base URL, or the model id."""
+    load_reasoning_config()
     hay = " ".join([(provider or ""), (base or ""), (model or "")]).lower()
     for fam in REASONING_FAMILIES:
         if any(tok in hay for tok in fam.get("match", ())):
@@ -89,14 +171,15 @@ def _openrouter_reasoning(provider, base, model):
     OpenRouter reads `reasoning`, so send that too when the call is routed
     there. Sending both is deliberate: each endpoint reads the one it knows.
     WEAVER_THINKING=enabled turns reasoning back on for both."""
-    hay = " ".join([(provider or ""), (base or "")]).lower()
-    if "openrouter" not in hay:
-        return {}
+    load_reasoning_config()
+    hay = " ".join([(provider or ""), (base or ""), (model or "")]).lower()
     think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
     on = think in ("enabled", "on", "1", "true")
-    if on:
-        return {"reasoning": {"enabled": True}}
-    return {"reasoning": {"enabled": False, "exclude": True}}
+    out = {}
+    for row in REASONING_ROUTERS:
+        if any(tok in hay for tok in row.get("match", ())):
+            out.update(row.get("on" if on else "off") or {})
+    return out
 
 
 def reasoning_payload(provider, base, model):
@@ -260,7 +343,26 @@ def get_llm_fn():
             # unlisted model gets {} so its payload is unchanged. Adding a new
             # reasoning family later is ONE row there, not a change here.
             payload.update(reasoning_payload(provider, base, model))
+        # an endpoint that already refused these switches never sees them again
+        _rk = _reasoning_key(base, model)
+        _extra_keys = [k for k in reasoning_payload(provider, base, model)
+                       if k in payload]
+        if _rk in _REASONING_REFUSED:
+            for k in _extra_keys:
+                payload.pop(k, None)
+            _extra_keys = []
         body = json.dumps(payload).encode("utf-8")
+
+        def _drop_reasoning_and_retry():
+            """Strip the reasoning switches, remember, return the new body —
+            or None when there was nothing to strip."""
+            if not _extra_keys:
+                return None
+            _REASONING_REFUSED.add(_rk)
+            _p = dict(payload)
+            for k in _extra_keys:
+                _p.pop(k, None)
+            return json.dumps(_p).encode("utf-8")
         # per-call timeout wins; otherwise WEAVER_TIMEOUT (default 180s) — slow
         # on-device models need more than 120s for long generations.
         try:
@@ -283,7 +385,21 @@ def get_llm_fn():
             try:
                 _req = urllib.request.Request(url, data=_sbody, headers=headers,
                                               method="POST")
-                with urllib.request.urlopen(_req, timeout=_to) as r:
+                try:
+                    _r0 = urllib.request.urlopen(_req, timeout=_to)
+                except urllib.error.HTTPError as _he:
+                    if _he.code not in (400, 422):
+                        raise
+                    _nb = _drop_reasoning_and_retry()
+                    if _nb is None:
+                        raise
+                    _sp2 = dict(json.loads(_nb.decode("utf-8")))
+                    _sp2["stream"] = True
+                    _req = urllib.request.Request(
+                        url, data=json.dumps(_sp2).encode("utf-8"),
+                        headers=headers, method="POST")
+                    _r0 = urllib.request.urlopen(_req, timeout=_to)
+                with _r0 as r:
                     for _raw in r:
                         _line = _raw.decode("utf-8", "ignore").strip()
                         if not _line or not _line.startswith("data:"):
@@ -352,7 +468,24 @@ def get_llm_fn():
                                          method="POST")
             # a network/timeout error propagates immediately (callers handle it,
             # and a big generation must not be retried into a multi-minute wait).
-            with urllib.request.urlopen(req, timeout=_to) as r:
+            # The ONE exception is a 400/422 while the reasoning switches are in
+            # the payload: that is an endpoint saying it does not know them, so
+            # they are dropped and the call is retried once, immediately, and
+            # this endpoint is remembered. No table to maintain, no release to
+            # wait for — and every other error still propagates untouched.
+            try:
+                _resp = urllib.request.urlopen(req, timeout=_to)
+            except urllib.error.HTTPError as _he:
+                if _he.code not in (400, 422):
+                    raise
+                _nb = _drop_reasoning_and_retry()
+                if _nb is None:
+                    raise
+                body = _nb
+                req = urllib.request.Request(url, data=body, headers=headers,
+                                             method="POST")
+                _resp = urllib.request.urlopen(req, timeout=_to)
+            with _resp as r:
                 data = json.loads(r.read().decode("utf-8"))
             content = _extract(data)
             if content.startswith(_REASONING_MARK):
