@@ -4214,9 +4214,14 @@ class WeaverOrchestrator:
             year = r.get("year", "")
             doi = r.get("doi", "")
             content = r.get("content") or ""
+            # venue and language must travel WITH the source. They are captured
+            # from the indexes, but this record dropped them, so the annotation
+            # line under each reference could only ever print the summary —
+            # caught by replaying real payloads through the real pipeline.
             srcs.append({"key": (title or url)[:60], "url": url, "title": title,
                          "content": content, "authors": r.get("authors") or [],
                          "year": year, "doi": doi,
+                         "venue": r.get("venue", ""), "lang": r.get("lang", ""),
                          "source": r.get("source", ""), "academic": True,
                          "full": False})
             mem.add_reference(
