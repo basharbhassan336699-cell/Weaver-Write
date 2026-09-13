@@ -3546,6 +3546,7 @@ class WeaverOrchestrator:
             doi = (w.get("doi") or "").replace("https://doi.org/", "")
             oa = (w.get("open_access") or {}).get("oa_url")
             url_ = oa or w.get("doi") or w.get("id") or ""
+            _is_oa = bool(oa) or bool((w.get("open_access") or {}).get("is_oa"))
             auths = [(a.get("author") or {}).get("display_name", "")
                      for a in (w.get("authorships") or [])[:4]]
             abx = ""
@@ -3565,6 +3566,7 @@ class WeaverOrchestrator:
                         "authors": [a for a in auths if a],
                         "year": str(w.get("publication_year") or ""),
                         "venue": _ven, "lang": (w.get("language") or ""),
+                        "oa": _is_oa,
                         "doi": doi, "source": "openalex"})
         return out or None
 
@@ -4200,6 +4202,86 @@ class WeaverOrchestrator:
         except Exception:
             return None
 
+    @staticmethod
+    def _resolve_chain(url, timeout=20):
+        """Follow a URL's redirects and report WHERE it actually ended and HOW.
+
+        _extract_full returns text, not the journey — so a page that arrived
+        after being bounced to a sign-in screen was indistinguishable from a
+        page that simply had little on it. Returns (final_url, chain) where
+        chain is [(code, url), …]. Never raises; on any failure the original
+        URL comes back with an empty chain, and the caller behaves as before."""
+        try:
+            import urllib.request
+            import urllib.error
+            chain = []
+
+            class _Keep(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+                    chain.append((code, newurl))
+                    if len(chain) > 12:
+                        return None          # stop an endless bounce
+                    return super().redirect_request(req, fp, code, msg, hdrs,
+                                                    newurl)
+            op = urllib.request.build_opener(_Keep)
+            req = urllib.request.Request(url, headers={
+                "User-Agent": WeaverOrchestrator._ACAD_UA,
+                "Accept": "text/html,application/xhtml+xml"})
+            try:
+                r = op.open(req, timeout=timeout)
+                fin = r.geturl()
+                r.close()
+            except urllib.error.HTTPError as e:
+                fin = getattr(e, "url", None) or url
+            return fin, chain
+        except Exception:
+            return url, []
+
+    @classmethod
+    def _crossref_record(cls, doi, timeout=15):
+        """The DOI's OWN registration record, from the registrar.
+
+        When the publisher's page is behind a subscription there is still one
+        authoritative source for the citation fields: what the publisher itself
+        DEPOSITED when it registered the DOI. That is a registry record, not an
+        aggregator's scrape — which is the distinction the methodology draws.
+        It is weaker than reading the article page, so it is reported as its own
+        state, never as «confirmed on the source page». Returns a dict or None."""
+        import json as _json
+        import urllib.parse            # lazy, like every other import here
+        d = str(doi or "").strip().replace("https://doi.org/", "")
+        if not d or "/" not in d:
+            return None
+        raw = cls._http_get(
+            "https://api.crossref.org/works/" + urllib.parse.quote(d, safe="/"),
+            {"User-Agent": cls._ACAD_UA, "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            m = (_json.loads(raw) or {}).get("message") or {}
+        except Exception:
+            return None
+        if not isinstance(m, dict) or not m.get("DOI"):
+            return None
+        ttl = m.get("title") or []
+        ct = m.get("container-title") or []
+        auth = []
+        for a in (m.get("author") or [])[:6]:
+            nm = " ".join(x for x in [a.get("given"), a.get("family")] if x)
+            if nm.strip():
+                auth.append(nm.strip())
+        yr = ""
+        dp = ((m.get("issued") or {}).get("date-parts")
+              or (m.get("published") or {}).get("date-parts"))
+        if dp and dp[0]:
+            yr = str(dp[0][0])
+        return {"doi": m.get("DOI") or d,
+                "title": (ttl[0] if isinstance(ttl, list) and ttl else ""),
+                "venue": (ct[0] if isinstance(ct, list) and ct else ""),
+                "authors": auth, "year": yr,
+                "volume": m.get("volume") or "", "issue": m.get("issue") or "",
+                "pages": m.get("page") or ""}
+
     async def _verify_references(self, results, card, lang="ar"):
         """THE ACADEMIC LAYER, BUILT ON THE GENERAL ONE.
 
@@ -4237,7 +4319,8 @@ class WeaverOrchestrator:
         except Exception:
             _cap = 0
         targets = items if _cap <= 0 else items[:_cap]
-        n_ok = n_bad = n_shut = 0
+        n_ok = n_bad = n_shut = n_reg = n_wall = 0
+        _seen_pages = {}
         for src in targets:
             url = str(src.get("url") or "").strip()
             doi = str(src.get("doi") or "").strip()
@@ -4255,42 +4338,82 @@ class WeaverOrchestrator:
                 src["unconfirmed"] = ["url"]
                 n_bad += 1
                 continue
+            # WHERE did the link actually end, and how? A page reached after
+            # being bounced to a sign-in screen is not the work.
+            _fin, _chain = self._resolve_chain(url)
+            _verdict = wr.redirect_verdict(_chain, _fin, url)
             try:
                 page = await self._extract_full(url)
             except Exception:
                 page = None
-            if not page or len(str(page).strip()) < 120:
-                src["verified"] = wr.UNREACHABLE
-                n_bad += 1
+            _walled = _verdict in ("paywall", "loop")
+            if page and wr.same_page_across_sources(page, _seen_pages):
+                # one page body served for two different works is a site page
+                _walled = True
+                page = None
+            got = wr.confirm_fields(page, src) if page else {}
+            _read = bool(got.get("title") or got.get("doi"))
+            if _read and not _walled:
+                src["verified"] = wr.VERIFIED
+                src["verified_fields"] = sorted(k for k, v in got.items() if v)
+                src["unconfirmed"] = sorted(k for k, v in got.items() if not v)
+                n_ok += 1
                 continue
-            got = wr.confirm_fields(page, src)
+            # THE PAGE IS SHUT — the registry still has what the publisher
+            # deposited. Weaker than reading the article, stronger than an
+            # aggregator's scrape, so it gets its OWN state and says so.
+            reg = self._crossref_record(src.get("doi")) if src.get("doi") else None
+            if reg and reg.get("title"):
+                _fl = []
+                for k in ("title", "venue", "authors", "year", "volume",
+                          "issue", "pages"):
+                    if reg.get(k):
+                        src[k] = reg[k] if k not in ("authors",) else reg[k]
+                        _fl.append(k)
+                src["verified"] = "registry"
+                src["verified_fields"] = _fl
+                src["unconfirmed"] = []
+                src["blocked_at"] = ((_fin or "")[:120]
+                                     if (_walled and _chain) else "")
+                n_reg += 1
+                if _walled:
+                    n_wall += 1
+                continue
+            src["verified"] = ("paywalled" if _walled else wr.UNREACHABLE)
+            # name the host ONLY when a redirect chain actually took us there.
+            # When the wall was inferred from one page body serving several
+            # works, we never got bounced anywhere — printing the DOI resolver
+            # as the blocker would name the wrong party.
+            src["blocked_at"] = ((_fin or "")[:120]
+                                 if (_walled and _chain) else "")
             src["verified_fields"] = sorted(k for k, v in got.items() if v)
             src["unconfirmed"] = sorted(k for k, v in got.items() if not v)
-            # the page must at least prove it IS this work: its title or its DOI
-            src["verified"] = (wr.VERIFIED
-                               if (got.get("title") or got.get("doi"))
-                               else wr.UNVERIFIED)
-            # Step 5: only page-confirmed text is handed to formatting. An
-            # abstract that the page does not carry is an aggregator's, so it
-            # is kept but no longer presented as read from the source.
-            if src["verified"] == wr.VERIFIED:
-                n_ok += 1
-            else:
-                n_bad += 1
+            if _walled:
+                n_wall += 1
+            n_bad += 1
         for src in items[len(targets):]:
             src.setdefault("verified", wr.UNVERIFIED)
         try:
-            card["refs_verified"] = {"ok": n_ok, "unverified": n_bad,
+            card["refs_verified"] = {"ok": n_ok, "registry": n_reg,
+                                     "unverified": n_bad, "paywalled": n_wall,
                                      "blocked": n_shut, "total": len(items)}
-            self._record_decision(card, "تحقّق المراجع",
-                                  f"فُتح وقُرئ {n_ok} من {len(items)}",
-                                  "measured", "بحث أكاديمي")
+            self._record_decision(
+                card, "تحقّق المراجع",
+                f"من الصفحة {n_ok}، من سجلّ الـDOI {n_reg}، بلا تحقّق "
+                f"{n_bad} — من {len(items)}", "measured", "بحث أكاديمي")
+            if n_wall:
+                self._skip_note(
+                    card, "مراجع محجوبة باشتراك",
+                    f"{n_wall} مرجعاً صفحتُه خلف تسجيل دخول، فلم تُقرأ؛ "
+                    + (f"وأُخذت بيانات {n_reg} منها من سجلّ الـDOI الذي "
+                       "أودعه الناشر" if n_reg else
+                       "ولم يُعوَّض ذلك بسجلّ الـDOI"))
             if n_bad or n_shut:
                 self._skip_note(
                     card, "تحقّق المراجع",
-                    f"تعذّر فتح {n_bad + n_shut} مرجعاً من {len(items)} "
-                    "والتحقّق من بياناته من صفحته الأصلية، فوُسم «غير "
-                    "مُتحقَّق منه» ولم يُحذف")
+                    f"تعذّر التحقّق من {n_bad + n_shut} مرجعاً من "
+                    f"{len(items)} من صفحته الأصلية ولا من سجلّه، فوُسم "
+                    "«غير مُتحقَّق منه» ولم يُحذف")
         except Exception:
             pass
         return items
@@ -4450,6 +4573,8 @@ class WeaverOrchestrator:
                          "verified": r.get("verified", ""),
                          "verified_fields": r.get("verified_fields") or [],
                          "unconfirmed": r.get("unconfirmed") or [],
+                         "blocked_at": r.get("blocked_at", ""),
+                         "oa": r.get("oa", False),
                          "source": r.get("source", ""), "academic": True,
                          "full": False})
             mem.add_reference(
@@ -7925,6 +8050,33 @@ class WeaverOrchestrator:
                      if lang != "en" else
                      "✓ confirmed on the source page"
                      + (f" ({', '.join(_fl[:4])})" if _fl else "")))
+            elif _v == "registry":
+                # A DISTINCT, HONEST MIDDLE STATE. The article page is shut, so
+                # these fields come from the DOI's registration record — what
+                # the publisher itself deposited. That is not the article, and
+                # it is not an aggregator's scrape either, so it is neither
+                # claimed as read nor dismissed as unverified.
+                _at = str(src.get("blocked_at") or "")
+                _host = _at.split("//")[-1].split("/")[0] if _at else ""
+                bits.append(
+                    ("◐ مُتحقَّق من سجلّ الـDOI (أودعه الناشر) — صفحة المقال "
+                     + (f"محجوبة خلف تسجيل دخول في {_host}" if _host
+                        else "غير متاحة")
+                     if lang != "en" else
+                     "◐ confirmed from the DOI registration record — the "
+                     "article page is "
+                     + (f"behind a sign-in at {_host}" if _host
+                        else "not reachable")))
+            elif _v == "paywalled":
+                _at = str(src.get("blocked_at") or "")
+                _host = _at.split("//")[-1].split("/")[0] if _at else ""
+                bits.append(
+                    ("⚠ محجوب باشتراك" + (f" ({_host})" if _host else "")
+                     + " — لم تُقرأ الصفحة ولا سجلّ الـDOI"
+                     if lang != "en" else
+                     "⚠ behind a subscription"
+                     + (f" ({_host})" if _host else "")
+                     + " — neither the page nor the DOI record could be read"))
             elif _v in ("unverified", "unreachable"):
                 bits.append(
                     "⚠ غير مُتحقَّق منه — تعذّر فتح الصفحة الأصلية، "
@@ -7950,7 +8102,8 @@ class WeaverOrchestrator:
                         cut = cut[:i + 1]
                         break
                 _lbl = ("الوصف" if lang != "en" else "Summary")
-                if str(src.get("verified") or "") != "verified":
+                if str(src.get("verified") or "") not in ("verified",
+                                                          "registry"):
                     _lbl = ("الوصف (من الفهرس)" if lang != "en"
                             else "Summary (from the index)")
                 bits.append(f"{_lbl}: {cut.strip()}")

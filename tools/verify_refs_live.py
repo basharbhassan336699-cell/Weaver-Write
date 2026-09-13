@@ -96,17 +96,22 @@ def main():
 
     v = card.get("refs_verified") or {}
     _hdr("٣) النتيجة")
-    print(f"  N/M الفعليّ = {v.get('ok', 0)}/{v.get('total', 0)}"
-          f"   · غير مُتحقَّق: {v.get('unverified', 0)}"
-          f" · محجوب: {v.get('blocked', 0)}")
+    print(f"  من الصفحة الأصلية : {v.get('ok', 0)}/{v.get('total', 0)}")
+    print(f"  من سجلّ الـDOI     : {v.get('registry', 0)}")
+    print(f"  محجوب باشتراك      : {v.get('paywalled', 0)}")
+    print(f"  بلا تحقّق          : {v.get('unverified', 0)}")
     print(LINE)
     for r in res:
-        mark = {"verified": "✓ مُتحقَّق    ",
+        mark = {"verified": "✓ من الصفحة  ",
+                "registry": "◐ من السجلّ   ",
+                "paywalled": "⚠ محجوب       ",
                 "unverified": "⚠ غير مُتحقَّق",
                 "unreachable": "⚠ تعذّر الفتح"}.get(str(r.get("verified") or ""),
                                                    "؟ بلا وسم   ")
         fl = "، ".join(r.get("verified_fields") or []) or "—"
-        print(f"  {mark} | {(r.get('title') or '')[:44]:46s} | مؤكَّد: {fl}")
+        _ba = str(r.get("blocked_at") or "")
+        _h = ("@" + _ba.split("//")[-1].split("/")[0]) if _ba else ""
+        print(f"  {mark} | {(r.get('title') or '')[:40]:42s} | {fl[:34]} {_h}")
     print(LINE)
     for n in (card.get("skipped_steps") or []):
         s = n if isinstance(n, str) else f"{n.get('step')} — {n.get('reason')}"
@@ -158,9 +163,10 @@ def main():
     print(f"\n  ⟵ سقف الثلاثة {'سليم ✅' if ok3 else 'مكسور ❌'}")
 
     _hdr("الخلاصة — انسخ هذا السطر وأرسله")
-    print(f"  N/M = {v.get('ok', 0)}/{v.get('total', 0)} · "
-          f"CAP = {cap or 'unset(بلا سقف)'} · "
-          f"web_fetches = {len(fetches)}/3")
+    print(f"  صفحة={v.get('ok',0)} سجلّ={v.get('registry',0)} "
+          f"محجوب={v.get('paywalled',0)} بلا={v.get('unverified',0)} "
+          f"/ {v.get('total',0)} · CAP={cap or 'بلا سقف'} · "
+          f"web={len(fetches)}/3")
     return 0
 
 

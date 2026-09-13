@@ -79,7 +79,7 @@ def confirm_fields(page_text, candidate, fields=("title", "authors", "venue",
 # The ladder is the ACADEMIC one (Section 4 of the academic methodology). It
 # lives in the general layer because the general layer owns ordering; the
 # academic path is what actually applies it as a gate.
-TIER_PEER_DOI = 5       # ★★★★★ peer-reviewed + real DOI
+TIER_PEER_DOI = 5       # ★★★★★ peer-reviewed + real DOI (+1 open access)
 TIER_BOOK = 4           # ★★★★  academic book, known publisher
 TIER_OFFICIAL = 3       # ★★★   official university / government page
 TIER_REPORT = 2         # ★★    institutional report
@@ -105,7 +105,12 @@ def quality_tier(src):
     doi = str(src.get("doi") or "").strip()
     venue = str(src.get("venue") or src.get("journal") or "").strip()
     if doi and (venue or src.get("academic")):
-        return TIER_PEER_DOI
+        # OPEN ACCESS WINS A TIE. Two peer-reviewed papers with a DOI are worth
+        # the same on paper, but only one of them can be OPENED and checked —
+        # and a reference nobody can verify is worth less than one anybody can.
+        # Measured: the single reference that verified on a live run was the
+        # open-access one; the eight behind a subscription wall could not be.
+        return TIER_PEER_DOI + (1 if src.get("oa") else 0)
     if doi:
         return TIER_PEER_DOI
     if src.get("publisher") and src.get("authors"):
@@ -238,3 +243,62 @@ def quote_guard(text, source_key, used):
     if used is not None:
         used.add(key)
     return t
+
+# ── A PAYWALL IS NOT AN OUTAGE ─────────────────────────────────────────────
+# Measured on a live run: eight of nine DOIs resolved, were followed through
+# seven redirects, and ended on ONE login page whose text was identical to the
+# byte for all eight — «العلوم التربوية والإجتماعية · …», the subject menu of
+# search.mandumah.com. The fetcher was not broken; it arrived, and what it
+# found was a sign-in wall. Reporting that as «could not open the page» hides
+# the one thing the reader needs to know: the work exists and is readable, for
+# subscribers. These two detectors say so from the SHAPE of what happened —
+# a redirect that loops, or a destination carrying the record we asked for as a
+# return parameter — so no list of site names is kept and any paywall behaves
+# the same, today's and next year's.
+
+_RETURN_PARAMS = ("rurl", "returnurl", "return_url", "redirect", "redirect_uri",
+                  "next", "continue", "came_from", "backurl", "target")
+
+
+def redirect_verdict(chain, final_url, asked_url=""):
+    """Read a redirect chain. Returns "paywall", "loop" or "ok".
+
+    chain is [(code, url), …] in order. A destination reached more than once is
+    a loop — the classic shape of a wall bouncing an anonymous visitor. A final
+    URL that carries an earlier URL's path inside a return parameter is a
+    sign-in page holding your destination for after you log in."""
+    urls = [str(u or "") for _c, u in (chain or [])]
+    if not urls and not final_url:
+        return "ok"
+    tail = [u.split("#")[0] for u in urls]
+    for u in set(tail):
+        if u and tail.count(u) > 1:
+            return "loop"
+    fin = str(final_url or "")
+    low = fin.lower()
+    for prm in _RETURN_PARAMS:
+        if (prm + "=") in low:
+            return "paywall"
+    # the first hop pointed at a record; the last no longer contains that path
+    if len(tail) >= 2:
+        first, last = tail[0], tail[-1]
+        fp = first.split("?")[0].rstrip("/")
+        if fp and fp not in last and len(last) < len(fp):
+            return "paywall"
+    return "ok"
+
+
+def same_page_across_sources(text, seen):
+    """True when this exact page body has already been returned for a DIFFERENT
+    source. One page serving many distinct DOIs is a site page — a menu, a login
+    screen, an error — never the work itself. `seen` is a dict the caller keeps
+    across one verification pass. Arithmetic, not a rule about any one site."""
+    t = " ".join(str(text or "").split())
+    if len(t) < 30:
+        return False
+    key = (len(t), t[:120])
+    if key in (seen or {}):
+        return True
+    if seen is not None:
+        seen[key] = True
+    return False
