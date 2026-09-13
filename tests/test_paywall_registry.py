@@ -71,7 +71,10 @@ print(f"   من الصفحة {v.get('ok')} · من السجلّ {v.get('registry
       f"بلا تحقّق {v.get('unverified')} · محجوب {v.get('paywalled')}")
 for r in res:
     print(f"   {str(r.get('verified')):11s} | {r['title'][:34]}")
-good = ([r.get("verified") for r in res] == ["verified", "registry", "paywalled"])
+# الثالثة لا دليلَ تحويلٍ عليها — صفحةٌ مشتركةٌ فقط — فهي «لا تُقرأ» لا
+# «محجوبة باشتراك». هذا هو التمييز الذي بُني بعد أن وُسم سيمانتك سكولار
+# حجباً وهو لا يحجب أحداً.
+good = ([r.get("verified") for r in res] == ["verified", "registry", "unreadable"])
 ok &= good
 print(f"   ⟵ ثلاث حالات متمايزة: {'✅' if good else '❌'}")
 reg = res[1]
@@ -84,7 +87,10 @@ print("\n   الوسم كما يراه القارئ:")
 for r in res:
     print("    " + (W._ref_annotation(r, "ar") or "—")[:104])
 a = [W._ref_annotation(r, "ar") for r in res]
-ok &= ("✓" in a[0] and "◐" in a[1] and "mandumah" in a[1] and "⚠" in a[2])
+ok &= ("✓" in a[0] and "◐" in a[1] and "mandumah" in a[1]
+       # النصّ يقول «ليست محجوبةً باشتراك» — فالكلمة واردةٌ منفيّةً، والشرط
+       # الصحيح أن يكون النفي حاضراً لا أن تغيب الكلمة.
+       and "لا تُقرأ" in a[2] and "ليست محجوبةً" in a[2])
 for n in (card.get("skipped_steps") or []):
     print(f"   • {n.get('step')} — {n.get('reason')}")
 ok &= any("محجوب" in str(n.get("step", "")) for n in (card.get("skipped_steps") or []))
@@ -143,6 +149,53 @@ _n = (c3.get("refs_verified") or {})
 ok &= (_n.get("paywalled", 0) == 3)
 # ولا تُمسّ ورقةٌ تحقّقت من صفحتها
 print(f"   ⟵ حسابُ الملاحظة متّسق: {'✅' if _n.get('paywalled') == 3 else '❌'}")
+
+print("\n" + "═"*66)
+print(" ٧) صفحةٌ لا تُقرأ ≠ حائط اشتراك")
+print("═"*66)
+# سيمانتك سكولار أعاد ١٥٧ حرفاً متطابقة لأربع أوراق — صفحةُ موقعٍ تحتاج
+# جافاسكربت، ولا يتقاضى أحداً شيئاً. وسمُها «محجوب باشتراك» كذبٌ عليها.
+S2 = "Semantic Scholar Sign In Create Free Account Home Research Feeds Papers"
+o4 = W.__new__(W); o4.llm_fn = None; o4.system_main = ""
+async def s2page(url): return S2
+o4._extract_full = s2page
+W._resolve_chain = staticmethod(lambda u, timeout=20: (u, []))   # لا تحويل
+W._crossref_record = classmethod(lambda cls, doi, timeout=15: None)
+S2SRC = [{"title": f"ورقة {i}", "doi": "",
+          "url": f"https://www.semanticscholar.org/paper/{i}abc",
+          "venue": "", "year": "", "authors": [], "content": ""}
+         for i in (1, 2, 3)]
+c4 = {}
+r4 = asyncio.run(o4._verify_references([dict(x) for x in S2SRC], c4, "ar"))
+for r in r4:
+    print(f"   {str(r.get('verified')):11s} | حاجب: {r.get('blocked_at') or '—'}")
+g7 = all(str(r.get("verified")) == "unreadable" for r in r4)
+ok &= g7
+print(f"   ⟵ وُسمت «لا تُقرأ» لا «محجوب»: {'✅' if g7 else '❌'}")
+ann = W._ref_annotation(r4[0], "ar")
+ok &= ("لا تُقرأ" in ann and "ليست محجوبةً" in ann)
+print(f"   الوسم: {ann[:80]}")
+n4 = c4.get("refs_verified") or {}
+print(f"   محجوب={n4.get('paywalled')} · لا-تُقرأ={n4.get('unreadable')} "
+      f"· بلا-DOI={n4.get('no_doi')}")
+ok &= (n4.get("paywalled") == 0 and n4.get("unreadable") == 3
+       and n4.get("no_doi") == 3)
+print(f"   ⟵ لا يُنسَب حجبٌ إلى موقعٍ لا يحجب: "
+      f"{'✅' if n4.get('paywalled') == 0 else '❌'}")
+for n in (c4.get("skipped_steps") or []):
+    print(f"   • {n.get('step')} — {n.get('reason')}")
+
+print("\n" + "═"*66)
+print(" ٨) الحالات الثلاث تجمع إلى المجموع دائماً")
+print("═"*66)
+for nm, cc in [("المنظومة", c3), ("سيمانتك", c4)]:
+    d = cc.get("refs_verified") or {}
+    tot = d.get("ok",0) + d.get("registry",0) + d.get("unverified",0)
+    g = (tot == d.get("total"))
+    ok &= g
+    print(f"   {nm:10s} {d.get('ok',0)}+{d.get('registry',0)}+"
+          f"{d.get('unverified',0)} = {tot} / {d.get('total')}  "
+          f"{'✅' if g else '❌'}")
 
 print("\n" + ("PASS ✅" if ok else "FAIL ❌"))
 sys.exit(0 if ok else 1)

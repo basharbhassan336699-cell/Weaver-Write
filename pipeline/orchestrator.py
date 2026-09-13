@@ -4346,7 +4346,16 @@ class WeaverOrchestrator:
                 page = await self._extract_full(url)
             except Exception:
                 page = None
-            _walled = _verdict in ("paywall", "loop")
+            # TWO DIFFERENT FAILURES, TWO DIFFERENT TRUTHS. A redirect chain
+            # that loops or carries a return parameter PROVES a sign-in wall.
+            # One page body served for several works proves only that what came
+            # back is a site page, not the work — which is equally true of a
+            # JavaScript-only page. Measured: semanticscholar.org returned the
+            # same 157-byte stub for four different papers, and calling that
+            # «behind a subscription» would be a plain falsehood about a site
+            # that charges nobody. The evidence decides the wording.
+            _wall_proof = _verdict in ("paywall", "loop")
+            _walled = _wall_proof
             # remember WHICH body this source got, so the FIRST user of a
             # shared page can be corrected once the sharing becomes visible.
             _pk = None
@@ -4360,6 +4369,7 @@ class WeaverOrchestrator:
                 # one page body served for two different works is a site page
                 _walled = True
                 page = None
+            src["_wall_proof"] = _wall_proof
             got = wr.confirm_fields(page, src) if page else {}
             _read = bool(got.get("title") or got.get("doi"))
             if _read and not _walled:
@@ -4388,7 +4398,8 @@ class WeaverOrchestrator:
                 if _walled:
                     n_wall += 1
                 continue
-            src["verified"] = ("paywalled" if _walled else wr.UNREACHABLE)
+            src["verified"] = ("paywalled" if _wall_proof else
+                               ("unreadable" if _walled else wr.UNREACHABLE))
             # name the host ONLY when a redirect chain actually took us there.
             # When the wall was inferred from one page body serving several
             # works, we never got bounced anywhere — printing the DOI resolver
@@ -4420,15 +4431,27 @@ class WeaverOrchestrator:
             if not src.get("blocked_at") and _ce:
                 src["blocked_at"] = _ce[:120]
             if str(src.get("verified") or "") in (wr.UNREACHABLE, wr.UNVERIFIED):
-                src["verified"] = "paywalled"
+                src["verified"] = ("paywalled" if src.get("_wall_proof")
+                                   else "unreadable")
+        for x in targets:
+            x.pop("_wall_proof", None)
         n_wall = sum(1 for x in targets
-                     if x.get("blocked_at")
-                     or str(x.get("verified") or "") == "paywalled")
+                     if str(x.get("verified") or "") == "paywalled"
+                     or (x.get("blocked_at") and x.get("verified") == "registry"))
+        n_unread = sum(1 for x in targets
+                       if str(x.get("verified") or "") == "unreadable")
         for src in items[len(targets):]:
             src.setdefault("verified", wr.UNVERIFIED)
         try:
+            # `ok` + `registry` + `unverified` == total. `paywalled` and
+            # `unreadable` are ATTRIBUTES of the failures, not extra buckets —
+            # printing them as a fourth column made four numbers sum to 17 out
+            # of 9.
             card["refs_verified"] = {"ok": n_ok, "registry": n_reg,
                                      "unverified": n_bad, "paywalled": n_wall,
+                                     "unreadable": n_unread,
+                                     "no_doi": sum(1 for x in targets
+                                                   if not x.get("doi")),
                                      "blocked": n_shut, "total": len(items)}
             self._record_decision(
                 card, "تحقّق المراجع",
@@ -4447,6 +4470,16 @@ class WeaverOrchestrator:
                     + (f"وأُخذت بيانات {_saved} منها من سجلّ الـDOI الذي "
                        "أودعه الناشر" if _saved else
                        "ولم يُعوَّض ذلك بسجلّ الـDOI"))
+            if n_unread:
+                _nd = sum(1 for x in targets
+                          if str(x.get("verified") or "") == "unreadable"
+                          and not x.get("doi"))
+                self._skip_note(
+                    card, "صفحات لا تُقرأ آلياً",
+                    f"{n_unread} مرجعاً أعادت صفحتُه صفحةَ موقعٍ لا ورقةً "
+                    "(تحتاج جافاسكربت أو ما شابه) — وهذا ليس حجباً باشتراك"
+                    + (f"؛ و{_nd} منها بلا DOI فتعذّر الرجوع إلى السجلّ"
+                       if _nd else ""))
             if n_bad or n_shut:
                 self._skip_note(
                     card, "تحقّق المراجع",
@@ -8106,6 +8139,18 @@ class WeaverOrchestrator:
                      "article page is "
                      + (f"behind a sign-in at {_host}" if _host
                         else "not reachable")))
+            elif _v == "unreadable":
+                # NOT a paywall. The page came back as a site stub — a
+                # JavaScript-only view, a menu, an error — so it could not be
+                # read. Saying «behind a subscription» about a site that
+                # charges nobody would be a false statement about a third
+                # party, which is exactly what this whole verification layer
+                # exists to prevent.
+                bits.append(
+                    ("⚠ صفحةٌ لا تُقرأ آلياً (صفحة موقعٍ لا ورقة) — ليست "
+                     "محجوبةً باشتراك" if lang != "en" else
+                     "⚠ page not machine-readable (a site stub, not the "
+                     "work) — not a paywall"))
             elif _v == "paywalled":
                 _at = str(src.get("blocked_at") or "")
                 _host = _at.split("//")[-1].split("/")[0] if _at else ""

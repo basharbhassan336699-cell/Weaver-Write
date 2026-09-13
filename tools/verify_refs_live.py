@@ -96,15 +96,24 @@ def main():
 
     v = card.get("refs_verified") or {}
     _hdr("٣) النتيجة")
-    print(f"  من الصفحة الأصلية : {v.get('ok', 0)}/{v.get('total', 0)}")
-    print(f"  من سجلّ الـDOI     : {v.get('registry', 0)}")
-    print(f"  محجوب باشتراك      : {v.get('paywalled', 0)}")
-    print(f"  بلا تحقّق          : {v.get('unverified', 0)}")
+    _t = v.get("total", 0)
+    _a, _b, _c = v.get("ok", 0), v.get("registry", 0), v.get("unverified", 0)
+    print("  الحالات (تجمع إلى المجموع):")
+    print(f"    ✓ من الصفحة الأصلية : {_a}")
+    print(f"    ◐ من سجلّ الـDOI     : {_b}")
+    print(f"    ⚠ بلا تحقّق          : {_c}")
+    print(f"    ─────────────────────  {_a + _b + _c} / {_t}"
+          f"  {'✓' if _a + _b + _c == _t else '← لا تجمع!'}")
+    print("  ومنها، كصفةٍ لا كحالة:")
+    print(f"    محجوب باشتراك (دليل تحويل) : {v.get('paywalled', 0)}")
+    print(f"    صفحةٌ لا تُقرأ آلياً        : {v.get('unreadable', 0)}")
+    print(f"    بلا DOI (فلا سجلّ)          : {v.get('no_doi', 0)}")
     print(LINE)
     for r in res:
         mark = {"verified": "✓ من الصفحة  ",
                 "registry": "◐ من السجلّ   ",
                 "paywalled": "⚠ محجوب       ",
+                "unreadable": "⚠ لا تُقرأ     ",
                 "unverified": "⚠ غير مُتحقَّق",
                 "unreachable": "⚠ تعذّر الفتح"}.get(str(r.get("verified") or ""),
                                                    "؟ بلا وسم   ")
@@ -163,10 +172,11 @@ def main():
     print(f"\n  ⟵ سقف الثلاثة {'سليم ✅' if ok3 else 'مكسور ❌'}")
 
     _hdr("الخلاصة — انسخ هذا السطر وأرسله")
-    print(f"  صفحة={v.get('ok',0)} سجلّ={v.get('registry',0)} "
-          f"محجوب={v.get('paywalled',0)} بلا={v.get('unverified',0)} "
-          f"/ {v.get('total',0)} · CAP={cap or 'بلا سقف'} · "
-          f"web={len(fetches)}/3")
+    print(f"  صفحة={v.get('ok',0)} + سجلّ={v.get('registry',0)} + "
+          f"بلا={v.get('unverified',0)} = {v.get('total',0)}"
+          f"  (محجوب={v.get('paywalled',0)} لا-تُقرأ={v.get('unreadable',0)}"
+          f" بلا-DOI={v.get('no_doi',0)})"
+          f" · CAP={cap or 'بلا سقف'} · web={len(fetches)}/3")
     return 0
 
 
