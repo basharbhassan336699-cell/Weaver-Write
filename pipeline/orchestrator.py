@@ -700,11 +700,32 @@ class WeaverOrchestrator:
         section's content is genuinely tabular. At 0 the invitation is dropped
         entirely. None keeps the old unbounded wording (old callers unchanged)."""
         reqs = (card or {}).get("requirements") or []
-        if not isinstance(reqs, list) or not reqs:
-            return ""
+        # THE RULE THE WRITER NEVER SAW. Fetched pages are other people's
+        # writing, and the writer was handed their full text as context with
+        # nothing said about reproducing it. The measurement in layer 6.6 counts
+        # the longest verbatim run afterwards; this is the instruction meant to
+        # make that count come back zero. It stands on its own: sources can be
+        # present with no requirements checklist at all, so it must survive the
+        # early returns below — but never on a references list, which is not
+        # prose and is generated, not written.
+        _copy_rule = ""
+        try:
+            if (card or {}).get("sources"):
+                _copy_rule = (
+                    "- ما تنقله من المصادر أعِد صياغته بأسلوبك أنت؛ ولا "
+                    "تقتبس حرفياً إلا نادراً وفي حدود خمس عشرة كلمة، "
+                    "ومرّةً واحدة من المصدر الواحد."
+                    if lang != "en" else
+                    "- Reword anything you take from the sources in your own "
+                    "words; quote verbatim only rarely, under fifteen words, "
+                    "and at most once from any one source.")
+        except Exception:
+            _copy_rule = ""
         n = (section_name or "").lower()
         if any(k in n for k in ("مراجع", "مصادر", "references", "bibliography")):
             return ""
+        if not isinstance(reqs, list) or not reqs:
+            return _copy_rule
         styles, contents, want_table = [], [], False
         for r in reqs:
             if not isinstance(r, dict):
@@ -776,7 +797,15 @@ class WeaverOrchestrator:
                 if isinstance(want_table, str) else
                 "- حين يكون محتوى هذا القسم مقارنةً أو مجموعةَ مصطلحاتٍ/قيَم، "
                 "اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل السرد." + _budget)
-        return "\n".join(lines)
+        # THE RULE THE WRITER NEVER SAW. Fetched pages are other people's
+        # writing, and the writer was handed their full text as context with
+        # nothing said about reproducing it. The measurement in layer 6.6 counts
+        # the longest verbatim run afterwards; this is the instruction that
+        # should make the count come back zero. Only when fetched sources are
+        # actually in play — a document written from the model's own knowledge
+        # has nothing to copy from.
+        lines.append(_copy_rule)
+        return "\n".join(x for x in lines if x)
 
     def _intent_router(self, request):
         """UNDERSTANDING FIRST: ask the connected model to read the user's own
@@ -4356,6 +4385,40 @@ class WeaverOrchestrator:
                 "volume": m.get("volume") or "", "issue": m.get("issue") or "",
                 "pages": m.get("page") or ""}
 
+    @classmethod
+    def _verbatim_overlap(cls, draft, sources, floor=None):
+        """The LONGEST run of words the draft copies verbatim from any fetched
+        source. Returns that length in words (0 when nothing exceeds `floor`).
+
+        Telling the writer to paraphrase is an instruction; this is the
+        measurement. Fetched pages are other people's writing, and a long
+        verbatim run is a copyright problem whether or not anyone intended it.
+        Deterministic — difflib over word sequences, no model call, so it costs
+        nothing and behaves the same with any provider. Never raises."""
+        try:
+            import difflib
+            wr = cls._wr()
+            cap = int(floor if floor is not None
+                      else (wr.MAX_QUOTE_WORDS if wr else 15))
+            dw = " ".join(str(draft or "").split()).split()
+            if len(dw) < cap:
+                return 0
+            best = 0
+            for src in (sources or []):
+                if not isinstance(src, dict):
+                    continue
+                txt = str(src.get("content") or "")
+                sw = " ".join(txt.split()).split()
+                if len(sw) < cap:
+                    continue
+                m = difflib.SequenceMatcher(None, dw, sw, autojunk=False)
+                blk = m.find_longest_match(0, len(dw), 0, len(sw))
+                if blk.size > best:
+                    best = blk.size
+            return best if best > cap else 0
+        except Exception:
+            return 0
+
     async def _verify_references(self, results, card, lang="ar"):
         """THE ACADEMIC LAYER, BUILT ON THE GENERAL ONE.
 
@@ -4568,6 +4631,7 @@ class WeaverOrchestrator:
         """Layer 4 academic path: gather peer-reviewed / open-access sources
         from the free scholarly APIs and add them to the task's sources + RAG
         memory. Degrades safely (no network / all down → nothing added)."""
+        import os                       # lazy, like every other import here
         card = task.task_card
         query = (card.get("topic") or task.description or "").strip()
         if not query:
@@ -4601,11 +4665,48 @@ class WeaverOrchestrator:
                             + (getattr(self, "_last_query_reason", "")
                                or "بلا سبب معلوم")
                             + ")، فأُرسل نصّ الطلب كما هو وقد تتأثّر دقّة المراجع")
+        _wr = self._wr()                # the general layer, needed from here on
         try:
             # ② the lexical filter widens the candidate pool instead of ruling
             #    on it, whenever there is a model to rule.
             results = self._scholarly_search(_q or query, lang, limit,
                                              wide=bool(self.llm_fn))
+            # SEARCH EACH PART SEPARATELY, NOT ALL OF THEM AT ONCE. One combined
+            # query returns shallow results for every part of a multi-part
+            # request: «الإعجاز العلمي والأخلاقي» searched as one phrase brought
+            # back nine papers and not one on the moral side, because the scientific
+            # half dominates the phrase. The facets are the MODEL's own reading of
+            # the topic — it already named them in the same call that composed the
+            # query, so this costs no extra model call — and the number of searches
+            # is scaled to how many parts there actually are.
+            _fx = [f for f in (getattr(self, "_facets", []) or []) if len(f) >= 3]
+            if _wr and len(_fx) >= 2 and (os.environ.get(
+                    "WEAVER_MULTI_QUERY", "1") or "1").strip() not in (
+                    "0", "false", "no"):
+                _budget = _wr.scale_calls(len(_fx))
+                _extra = min(len(_fx), max(0, _budget - 1), 6)
+                _have = {(r.get("doi") or r.get("url") or r.get("title") or "")
+                         for r in (results or [])}
+                _added = 0
+                for _f in _fx[:_extra]:
+                    try:
+                        _more = self._scholarly_search(
+                            _f, lang, max(3, limit // 2),
+                            wide=bool(self.llm_fn)) or []
+                    except Exception:
+                        _more = []
+                    for _m in _more:
+                        _k = (_m.get("doi") or _m.get("url")
+                              or _m.get("title") or "")
+                        if _k and _k not in _have:
+                            _have.add(_k)
+                            (results or []).append(_m) if results else None
+                            _added += 1
+                if _added:
+                    self._record_decision(
+                        card, "استعلامات الجوانب",
+                        f"{_extra} جانباً ⟶ +{_added} مرشّحاً", "measured",
+                        "بحث أكاديمي")
         except Exception:
             results = None
         if not results:
@@ -4646,7 +4747,6 @@ class WeaverOrchestrator:
         for _r in (results or []):
             _r.pop("_prefilter", None)
         # ── the GENERAL layer, applied before anything is verified ──────────
-        _wr = self._wr()
         if _wr and results:
             # Section 5: a requested year/range narrows the pool BEFORE the
             # fetch step, not after it — candidates outside the window are not
@@ -7092,6 +7192,27 @@ class WeaverOrchestrator:
                 return
             if not task.sections:
                 return
+            # COPYRIGHT, MEASURED NOT ASSUMED. Fetched pages are other people's
+            # writing. The writer is told to paraphrase, but an instruction is
+            # not a check — so the finished draft is compared against every
+            # fetched source and the longest verbatim run is counted. Anything
+            # past the quotation limit is reported in the ledger the reader
+            # sees, rather than shipped quietly. Costs no model call.
+            try:
+                _draft = "\n".join(str((sec or {}).get("body") or "")
+                                    for sec in (task.sections or [])
+                                    if isinstance(sec, dict))
+                _ov = self._verbatim_overlap(_draft, card.get("sources") or [])
+                if _ov:
+                    _lim = (self._wr().MAX_QUOTE_WORDS if self._wr() else 15)
+                    self._skip_note(
+                        card, "حدّ الاقتباس",
+                        f"في النصّ مقطعٌ منقولٌ حرفياً من مصدرٍ مجلوب طولُه "
+                        f"{_ov} كلمة، والحدّ {_lim} — يلزم إعادة صياغته")
+                    self._record_decision(card, "أطول نقلٍ حرفيّ", _ov,
+                                          "measured", "طبقة ٦.٦")
+            except Exception:
+                pass
             # نطاق مُقيِّد (هيكلة/مراجع/خطة/جزء) → المخرَج مكتمل كما أنتجته الطبقة 6.
             # حلقة التغطية هنا تعتبر كل عنوان في الخطة «ناقصاً» (لأن المخرَج سطرٌ
             # واحد «هيكل العمل») فتكتب جسماً كاملاً لكل عنوان عبر النموذج — وهذا
