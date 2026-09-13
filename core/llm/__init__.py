@@ -48,6 +48,10 @@ def _is_anthropic(provider: str, base: str) -> bool:
 # listed or not — from returning nothing, so an unlisted new family degrades
 # gracefully (never breaks); adding its row later just makes it fast/clean.
 # The "off"/"on" fragments are merged verbatim into the request payload.
+# marks a reply that is the model's hidden reasoning rather than its answer,
+# so the retry loop can tell the two apart. Never reaches a caller.
+_REASONING_MARK = "\x00weaver-reasoning\x00"
+
 REASONING_FAMILIES = [
     {
         "name": "deepseek",              # DeepSeek v3/r1/v4-flash/pro/reasoner
@@ -74,18 +78,41 @@ def detect_reasoning_family(provider, base, model):
     return None
 
 
+def _openrouter_reasoning(provider, base, model):
+    """OpenRouter's own switch for hidden reasoning.
+
+    The registry fragment below is each MODEL FAMILY's native parameter — what
+    DeepSeek's own API accepts. Routed through OpenRouter, that parameter is not
+    the one OpenRouter reads, so thinking stayed ON: measured in a real run, the
+    model spent its budget reasoning in English and was cut off before it could
+    emit `{"keep": …}`, and its reasoning reached the user's chat verbatim.
+    OpenRouter reads `reasoning`, so send that too when the call is routed
+    there. Sending both is deliberate: each endpoint reads the one it knows.
+    WEAVER_THINKING=enabled turns reasoning back on for both."""
+    hay = " ".join([(provider or ""), (base or "")]).lower()
+    if "openrouter" not in hay:
+        return {}
+    think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
+    on = think in ("enabled", "on", "1", "true")
+    if on:
+        return {"reasoning": {"enabled": True}}
+    return {"reasoning": {"enabled": False, "exclude": True}}
+
+
 def reasoning_payload(provider, base, model):
     """Return the payload fragment that switches a reasoning model's hidden
     thinking OFF (default) or ON, per its family in the registry. Returns {} for
     any non-reasoning / unlisted model, so those payloads stay byte-for-byte
     unchanged. Direction is controlled by WEAVER_THINKING (disabled by default,
     matching OpenClaw's default of thinking:{type:"disabled"})."""
+    out = _openrouter_reasoning(provider, base, model)
     fam = detect_reasoning_family(provider, base, model)
     if not fam:
-        return {}
+        return out
     think = os.environ.get("WEAVER_THINKING", "disabled").strip().lower()
     on = think in ("enabled", "on", "1", "true")
-    return dict(fam["on"] if on else fam["off"])
+    out.update(fam["on"] if on else fam["off"])
+    return out
 
 
 # ── OFFLINE TEST MODEL (costs nothing, needs no key, makes no request) ──────
@@ -296,11 +323,16 @@ def get_llm_fn():
             content = msg.get("content") or ""
             if content and content.strip():
                 return content
-            # SAFETY NET: a reasoning model that emitted only hidden reasoning and
-            # no final text (content empty). Fall back to the reasoning field so we
-            # never return nothing — mirrors OpenClaw promoting thinking→text.
-            return (msg.get("reasoning_content") or msg.get("reasoning")
-                    or msg.get("reasoning_text") or "")
+            # A reasoning model that emitted only hidden reasoning and no final
+            # text. Promoting that to the answer IMMEDIATELY is what put English
+            # chain-of-thought into a user's document («We need answer user: …»)
+            # and what made a JSON call return prose. The promotion stays as a
+            # last resort — returning nothing is worse — but it is marked, so
+            # the retry loop below tries for a real answer first and only falls
+            # back to it once every attempt is spent.
+            _r = (msg.get("reasoning_content") or msg.get("reasoning")
+                  or msg.get("reasoning_text") or "")
+            return (_REASONING_MARK + _r) if (_r or "").strip() else ""
 
         # ROBUSTNESS: on-device servers intermittently return an EMPTY completion
         # (load/overflow), which otherwise surfaces as "(رد فارغ من المزوّد)" and
@@ -314,6 +346,7 @@ def get_llm_fn():
             _tries = 3
         _tries = max(1, min(_tries, 6))
         last = ""
+        _thought = ""
         for _i in range(_tries):
             req = urllib.request.Request(url, data=body, headers=headers,
                                          method="POST")
@@ -322,6 +355,10 @@ def get_llm_fn():
             with urllib.request.urlopen(req, timeout=_to) as r:
                 data = json.loads(r.read().decode("utf-8"))
             content = _extract(data)
+            if content.startswith(_REASONING_MARK):
+                # hidden reasoning only — keep it aside and ask again
+                _thought = content[len(_REASONING_MARK):]
+                content = ""
             if content and content.strip():
                 return content
             # EMPTY completion (provider quirk under load) → retry; empties come
@@ -330,7 +367,8 @@ def get_llm_fn():
             last = content or ""
             if _i < _tries - 1:
                 time.sleep(1.0 * (_i + 1))
-        return last
+        # every attempt produced no final text: the reasoning is all there is.
+        return last or _thought
 
     return llm_fn
 

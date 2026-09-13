@@ -3906,11 +3906,17 @@ class WeaverOrchestrator:
             from core.llm import extract_json
         except Exception as e:
             return None, f"تعذّر تحميل محلّل JSON: {type(e).__name__}"
+        # A reasoning model spends its budget thinking and is cut off before it
+        # writes the closing brace — measured: «We need decide which titles
+        # actually pertain to research )» arrived instead of {"keep": …}. So the
+        # budget rises steeply rather than politely, and the long system prompt
+        # is dropped on the retry so the whole budget is the task's.
         attempts = [(self.system_main, 0.2, int(max_tokens), prompt)]
         if retry:
             attempts.append(
-                (None, 0.0, int(max_tokens) * 2,
-                 prompt + "\n\nأعِد كائن JSON وحده، بلا شرحٍ ولا تمهيد."))
+                (None, 0.0, max(int(max_tokens) * 3, 4000),
+                 "أعِد كائن JSON وحده، بلا شرحٍ ولا تمهيد ولا تفكيرٍ ظاهر. "
+                 "ابدأ ردَّك بالقوس { مباشرةً.\n\n" + prompt))
         last = "سببٌ غير معروف"
         for _sys, _temp, _mt, _pr in attempts:
             try:
@@ -3951,6 +3957,7 @@ class WeaverOrchestrator:
         self._last_query_reason = ""
         self._refs_lang = ""
         self._refs_lang_note = ""
+        self._facets = []
         # Whether the MODEL actually produced a usable query. Comparing the
         # result to the topic cannot answer that: a model may compose a query
         # and land on the same words, and reporting «لم يصغ النموذج الاستعلام»
@@ -3989,7 +3996,10 @@ class WeaverOrchestrator:
                     "references in a particular language, weigh that — and if "
                     "the literature on this subject is scarce in it, say so.\n"
                     "Return JSON only:\n"
-                    '{"query":"…","refs_lang":"ar|en|any","note":"…"}\n'
+                    '{"query":"…","refs_lang":"ar|en|any","facets":["…","…"],'
+                    '"note":"…"}\n'
+                    '"facets" are the distinct aspects the topic is made of, '
+                    "in the words titles would actually use.\n"
                     f"Research topic: {base}\n"
                     f"Request: {(request or '')[:400]}")
             else:
@@ -4004,7 +4014,10 @@ class WeaverOrchestrator:
                     "بعينها فزِنْ ذلك، وإن كان الأدب في هذا الموضوع شحيحاً "
                     "بتلك اللغة فقُل ذلك صراحةً.\n"
                     "أعِد JSON فقط:\n"
-                    '{"query":"…","refs_lang":"ar|en|any","note":"…"}\n'
+                    '{"query":"…","refs_lang":"ar|en|any","facets":["…","…"],'
+                    '"note":"…"}\n'
+                    "و«facets» هي الجوانب التي يتألّف منها موضوع البحث كما "
+                    "تفهمه أنت، بكلماتٍ تُطابق ما يُكتب في العناوين.\n"
                     f"موضوع البحث: {base}\n"
                     f"الطلب: {(request or '')[:400]}")
             data, _why = self._ask_json(prompt, max_tokens=900)
@@ -4012,6 +4025,9 @@ class WeaverOrchestrator:
             q = ""
             if isinstance(data, dict):
                 q = str(data.get("query") or "").strip()
+                self._facets = [" ".join(str(x).split())[:60]
+                                for x in (data.get("facets") or [])
+                                if str(x).strip()][:6]
                 self._refs_lang = str(data.get("refs_lang") or "").strip().lower()
                 self._refs_lang_note = " ".join(
                     str(data.get("note") or "").split())[:300]
@@ -4029,6 +4045,52 @@ class WeaverOrchestrator:
         except Exception as e:
             self._last_query_reason = f"{type(e).__name__}: {str(e)[:60]}"
             return base
+
+    def _judge_numbers_prompt(self, base_prompt, n, lang="ar"):
+        """Re-ask the SAME question in a format that cannot half-arrive."""
+        if lang == "en":
+            tail = ("\n\nAnswer with the numbers of the titles that belong to "
+                    "this research, separated by commas. Nothing else — no "
+                    "JSON, no explanation, no reasoning. Example: 1,4,7")
+        else:
+            tail = ("\n\nأجب بأرقام العناوين التي تخصّ هذا البحث، مفصولةً "
+                    "بفواصل. لا شيء غير الأرقام — لا JSON ولا شرح ولا تفكير. "
+                    "مثال: 1,4,7")
+        return base_prompt.split("\n\n")[0] + tail + "\n\n" + base_prompt
+
+    def _judge_by_numbers(self, base_prompt, n, lang="ar"):
+        """Last resort for the relevance judgement: ask for bare numbers.
+
+        Returns a {"keep": [...], "drop": [...]} dict shaped exactly like the
+        JSON path so the caller is unchanged, or None. A reply naming EVERY
+        number is not a judgement — it is a model agreeing with the list it was
+        shown — so it is refused; and so is one naming none, which would empty
+        the bibliography on a formatting accident. Never raises."""
+        if not self.llm_fn or n <= 0:
+            return None
+        try:
+            import re
+            raw = self.llm_fn(self._judge_numbers_prompt(base_prompt, n, lang),
+                              system=None, temperature=0.0, max_tokens=300,
+                              timeout=60) or ""
+            # read the LAST run of comma-separated numbers: a model that thinks
+            # aloud first still ends with its answer.
+            runs = re.findall(r"(?:\d{1,3}\s*[,،]\s*)+\d{1,3}|\b\d{1,3}\b",
+                              raw)
+            if not runs:
+                return None
+            keep = []
+            for tok in re.findall(r"\d{1,3}", runs[-1] if len(runs) == 1
+                                  else max(runs, key=len)):
+                v = int(tok)
+                if 1 <= v <= n and v not in keep:
+                    keep.append(v)
+            if not keep or len(keep) == n:
+                return None
+            return {"keep": keep,
+                    "drop": [i for i in range(1, n + 1) if i not in keep]}
+        except Exception:
+            return None
 
     def _judge_relevance(self, results, topic, request, lang="ar"):
         """ONE batched call: the model reads the fetched TITLES and says which
@@ -4080,10 +4142,20 @@ class WeaverOrchestrator:
                     f"موضوع البحث: {topic}\n"
                     f"الطلب: {(request or '')[:400]}\n"
                     f"العناوين:\n{listing}")
-            data, _why = self._ask_json(prompt, max_tokens=1400)
+            data, _why = self._ask_json(prompt, max_tokens=1800)
             self._last_judge_reason = _why
             if not isinstance(data, dict):
-                return None, None
+                # DEGRADE THE FORMAT, NEVER THE DECISION. JSON is all-or-nothing:
+                # a reply truncated one character early parses as nothing, and
+                # the judgement — the only step that asks whether a reference
+                # belongs — was being thrown away for a missing brace. A bare
+                # list of numbers survives truncation, needs no closing token,
+                # and is read with a regular expression. Same question, same
+                # judge, a format that cannot half-arrive.
+                data = self._judge_by_numbers(prompt, len(items), lang)
+                if not isinstance(data, dict):
+                    return None, None
+                self._last_judge_reason = ""
 
             def _idx(name):
                 out = []
@@ -4234,6 +4306,46 @@ class WeaverOrchestrator:
         # counted, not guessed: how many came back in the language the model
         # targeted, and what the rest are. Saying «the Arabic literature on this
         # subject is scarce, here is what exists» is an answer; silence is not.
+        # A FACET THAT CAME BACK EMPTY IS NEWS. Asking for «الإعجاز العلمي
+        # والأخلاقي» returned nine references and not one on the moral side, and
+        # nothing anywhere said so — the reader is left to discover it by
+        # reading all nine. The facets are the MODEL's own reading of the topic;
+        # counting how many gathered titles carry each one is arithmetic, and it
+        # decides nothing — it only reports. A facet nobody covered is named.
+        _fc = [f for f in (getattr(self, "_facets", []) or []) if len(f) >= 3]
+        if _fc and results:
+            def _flat(t):
+                # drop Arabic diacritics and punctuation: «الإِعْجَازُ» and
+                # «الإعجاز» are the same word to a reader and must be to us.
+                t = "".join(c for c in str(t or "")
+                            if not ("\u064b" <= c <= "\u0652"))
+                return " ".join("".join(
+                    c if (c.isalnum() or c.isspace()) else " "
+                    for c in t.lower()).split())
+            _blob = _flat(" ".join(str(r.get("title") or "") + " "
+                                   + str(r.get("content") or "")
+                                   for r in results))
+
+            def _covered(f):
+                # EVERY distinctive word of the facet must appear, not just one.
+                # «الإعجاز الأخلاقي» shares «الإعجاز» with «الإعجاز العلمي», so
+                # an any-word test called the moral facet covered by nine papers
+                # that never touched it. The longest words carry the meaning.
+                ws = sorted((w for w in _flat(f).split() if len(w) >= 4),
+                            key=len, reverse=True)[:3]
+                return all(w in _blob for w in ws) if ws else True
+            _missing = [f for f in _fc if not _covered(f)]
+            if _missing and len(_missing) < len(_fc):
+                self._skip_note(
+                    card, "تغطية جوانب الموضوع",
+                    "لم تُعِد قواعد البيانات مرجعاً يتناول: "
+                    + "، ".join(_missing[:3])
+                    + f" — والمراجع الـ{len(results)} تغطّي بقية الجوانب")
+            elif _missing:
+                self._skip_note(
+                    card, "تغطية جوانب الموضوع",
+                    "لم يُعثَر على مرجعٍ يتناول أيّاً من جوانب الموضوع كما "
+                    "حدّدها النموذج: " + "، ".join(_fc[:3]))
         _tl = str(card.get("refs_lang_target") or "").lower()
         if _tl and _tl not in ("any", "all", ""):
             _in = sum(1 for r in results
@@ -7627,33 +7739,89 @@ class WeaverOrchestrator:
         except Exception:
             return ""
 
+    @staticmethod
+    def _ref_keys(src):
+        """Identity keys for one source, strongest first: DOI, URL, then the
+        normalised title. Used to find a source INSIDE a rendered line."""
+        out = []
+        doi = str((src or {}).get("doi") or "").strip().lower()
+        doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+        if len(doi) >= 8:
+            out.append(("doi", doi))
+        url = str((src or {}).get("url") or "").strip().lower().rstrip("/")
+        if len(url) >= 12:
+            out.append(("url", url))
+        t = str((src or {}).get("title") or "")
+        t = "".join(c for c in t.lower() if c.isalnum() or c.isspace())
+        t = " ".join(t.split())
+        if len(t) >= 12:
+            out.append(("title", t))
+        return out
+
     @classmethod
     def _annotate_bibliography(cls, txt, items, lang="ar"):
-        """Append each source's annotation under its own numbered APA entry.
+        """Append each source's annotation under ITS OWN rendered entry.
 
-        The formatter returns a numbered list in the SAME order as `items`, so
-        the n-th entry belongs to the n-th source. Matching is by that order and
-        by the numbering the formatter emitted — never by searching the text for
-        a title, which would misfire on two papers sharing words. On any doubt
-        the text is returned untouched: an un-annotated list is the behaviour of
-        yesterday, a mis-annotated one would be a new lie."""
+        The first version matched by POSITION, on the assumption that the
+        formatter returns entries in the order it was given them. It does not:
+        build_bibliography de-duplicates and then calls sort_references, so the
+        list comes back alphabetised. Position matching therefore slid the
+        annotations along the list and printed one scholar's abstract under
+        another scholar's name — measured in a real document: Blīl's abstract
+        («الإعجاز التشريعي في الميراث») sat under al-Shāwī's entry. A missing
+        annotation is a gap; a shifted one is a false attribution, which is
+        worse than printing nothing.
+
+        So identity decides, never order: a line is annotated only when exactly
+        ONE source's DOI, URL or normalised title occurs in it, AND that source
+        matches no other line. Anything ambiguous is left bare, and if fewer
+        than half the entries resolve, the list is returned untouched — the
+        behaviour before annotations existed."""
         try:
             lines = (txt or "").split("\n")
             if not lines or not items:
                 return txt
-            import re
-            num = re.compile(r"^\s*(\d+)[.)]\s")
-            idx, out, used = 0, [], 0
-            for ln in lines:
+            import re as _re
+            num = _re.compile(r"^\s*(\d+)[.)]\s")
+            # normalised haystack per numbered line
+            idxs = [i for i, ln in enumerate(lines) if num.match(ln)]
+            if not idxs:
+                return txt
+            hay = {}
+            for i in idxs:
+                low = lines[i].lower()
+                flat = " ".join("".join(
+                    c for c in low if c.isalnum() or c.isspace()).split())
+                hay[i] = (low, flat)
+            # line -> matching source indexes
+            per_line = {i: set() for i in idxs}
+            per_src = {j: set() for j in range(len(items))}
+            for j, src in enumerate(items):
+                for kind, key in cls._ref_keys(src):
+                    for i in idxs:
+                        low, flat = hay[i]
+                        if (key in flat) if kind == "title" else (key in low):
+                            per_line[i].add(j)
+                            per_src[j].add(i)
+            pairs = {}
+            for i in idxs:
+                cand = per_line[i]
+                if len(cand) != 1:
+                    continue                 # ambiguous line → leave it bare
+                j = next(iter(cand))
+                if len(per_src[j]) != 1:
+                    continue                 # source seen on several lines
+                pairs[i] = j
+            if len(pairs) * 2 < len(idxs):
+                return txt                   # too little certainty → no notes
+            out = []
+            used = 0
+            for i, ln in enumerate(lines):
                 out.append(ln)
-                m = num.match(ln)
-                if not m:
+                j = pairs.get(i)
+                if j is None:
                     continue
-                n = int(m.group(1))
-                idx = n if 1 <= n <= len(items) else idx + 1
-                if not (1 <= idx <= len(items)):
-                    continue
-                note = cls._ref_annotation(items[idx - 1], lang)
+                note = cls._ref_annotation(items[j], lang)
                 if note:
                     out.append("   " + note)
                     used += 1
