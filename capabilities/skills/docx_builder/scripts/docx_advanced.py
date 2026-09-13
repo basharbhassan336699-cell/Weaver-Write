@@ -462,7 +462,8 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
     # fresh instance over the same abstract definition — same look, new count.
     _numbering = {"id": None, "open": False}
 
-    def _para(text, size=14, color=None, bold=False, style=None):
+    def _para(text, size=14, color=None, bold=False, style=None,
+              _cont=False):
         text = _strip_inline_md(text).strip()
         if not text:
             return None
@@ -472,13 +473,27 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         _set_run_font(run, font, size, color or pal["text"], bold=bold)
         if rtl:
             set_paragraph_rtl(p)
-        if style != "List Number":
+        # A LIST IS NOT ENDED BY ITS OWN ANNOTATION. The rule «any paragraph
+        # between two items ends the list» was right for a heading or a new
+        # section, and wrong for the note that belongs to the item above it:
+        # the verification line under each reference («◐ مُتحقَّق من سجلّ…»)
+        # sits between them, so every reference became a list of one and the
+        # numbering read 1. 1. 1. — worse than the document-wide counter this
+        # was built to fix. A continuation paragraph is marked by its caller
+        # and leaves the run open.
+        if style != "List Number" and not _cont:
             _numbering["open"] = False      # any other paragraph closes the run
         return p
 
     def _flush():
         if buf:
-            _para(" ".join(x.strip() for x in buf))
+            # An INDENTED line straight after a numbered item is that item's
+            # own continuation — the annotation line under a reference, for
+            # instance — not a new paragraph that ends the list. Anything
+            # flush-left is a real paragraph and does end it.
+            _cont = bool(_numbering.get("open")
+                         and buf[0][:1].isspace())
+            _para(" ".join(x.strip() for x in buf), _cont=_cont)
             buf.clear()
 
     i = 0

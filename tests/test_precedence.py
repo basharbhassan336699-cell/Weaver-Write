@@ -55,13 +55,27 @@ ok &= ("max_tokens=1200" in u)
 print(f"   الميزانية رُفعت للمخطّط الأوسع: {'✅' if 'max_tokens=1200' in u else '❌'}")
 
 print("\n" + "═"*66); print(" ٥) الكاشف اللفظيّ لم يعد يدوس على النموذج"); print("═"*66)
-for nm, pat in [("sourcing_mode", '_settle(task.task_card, "sourcing_mode"'),
-                ("action",        '_settle(task.task_card, "action"'),
-                ("citation_style",'_settle(task.task_card, "citation_style"'),
-                ("recency",       '_settle(card, "recency_intent"')]:
+# القرارات الأربعة انتقلت إلى موضعٍ واحد بعد دمج خطة النموذج — حيث تكون
+# البطاقة قد امتلأت فعلاً. فالمقياس هو أن تمرّ بالأسبقية، لا أن تُكتب بهجاءٍ
+# بعينه. وأهمّ من ذلك: أن الكاشف يقرأ الطلب الحاليّ وحده.
+for nm, pat in [("sourcing_mode", '_settle(c, "sourcing_mode"'),
+                ("action",        '_settle(c, "action"'),
+                ("citation_style",'_settle(c, "citation_style"'),
+                ("recency",       '_settle(c, "recency_intent"')]:
     g4 = pat in a
     ok &= g4
     print(f"   {nm:16s} يمرّ بالأسبقية: {'✅' if g4 else '❌'}")
+# لا يقرأ كاشفٌ تاريخَ المحادثة فيَنسب إلى المستخدم ما قاله في طلبٍ سابق
+_old = ['_sourcing_mode(task.description)',
+        '_requested_citation_style(task.description)']
+_leak = [x for x in _old if x in a]
+ok &= not _leak
+print(f"   لا كاشفَ يقرأ كلّ المحادثة: {'✅' if not _leak else '❌ ' + str(_leak)}")
+# والثلاثية محفوظة في مُحلِّل الخطة: null ليست False
+_u = inspect.getsource(sys.modules["pipeline.orchestrator"])
+g5 = 'out["wants_table"] = _tri("wants_table")' in _u
+ok &= g5
+print(f"   null ≠ False في مُحلِّل الخطة: {'✅' if g5 else '❌'}")
 
 print("\n" + "═"*66); print(" ٦) التمهيد يتبع المستند لا رقماً ثابتاً"); print("═"*66)
 for tw, np_, lo, hi in [(0, 0, 120, 120), (3000, 3, 200, 200),

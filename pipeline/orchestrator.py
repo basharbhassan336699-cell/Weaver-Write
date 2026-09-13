@@ -848,9 +848,23 @@ class WeaverOrchestrator:
         out["pages"] = _int(d.get("pages"))
         lang = str(d.get("language", "") or "").lower().strip()
         out["language"] = lang if lang in ("ar", "en") else None
-        out["wants_table"] = bool(d.get("wants_table"))
-        out["wants_chart"] = bool(d.get("wants_chart"))
+        # TRI-STATE, LIKE needs_sources BELOW. bool(None) is False, so a model
+        # that simply had no opinion about tables was recorded as having FORBIDDEN
+        # them — and once «no» became enforceable, that silence would have banned
+        # tables from every document. Only an explicit boolean is an answer.
+        def _tri(key):
+            v = d.get(key, None)
+            return v if isinstance(v, bool) else None
+        out["wants_table"] = _tri("wants_table")
+        out["wants_chart"] = _tri("wants_chart")
         out["wants_data"] = bool(d.get("wants_data"))
+        # the three decisions the plan now also carries
+        _sg = str(d.get("sourcing", "") or "").lower().strip()
+        out["sourcing"] = _sg if _sg in ("cited", "uncited", "none") else None
+        _cs = str(d.get("citation_style", "") or "").strip()
+        out["citation_style"] = (_cs if _cs and _cs.lower() not in
+                                 ("null", "none", "unspecified") else None)
+        out["recency"] = _tri("recency")
         # TRI-STATE (True / False / None): does the answer genuinely need EXTERNAL
         # sources (web/academic search)? None = the model didn't say, so behaviour
         # is unchanged (never coerce a missing key to False — that would strip
@@ -2724,29 +2738,12 @@ class WeaverOrchestrator:
         except Exception:
             pass
 
-        # How the user wants sourcing handled. The detector used to be WRITTEN
-        # STRAIGHT ONTO THE CARD — including the default it falls back to — so
-        # it overwrote the model's reading on every single request, opinion or
-        # no opinion. Now the model's answer leads and the detector backs it up.
-        _sm_model = task.task_card.get("sourcing")
-        if _sm_model in ("null", ""):
-            _sm_model = None
-        self._settle(task.task_card, "sourcing_mode", _sm_model,
-                     self._sourcing_mode(task.description), "فهم الطلب")
-
-        # documentation style named in the request (APA/MLA/…) — explicit wins.
-        # Without this the writer was handed a blank "Citation style:".
-        try:
-            _cs_model = task.task_card.get("citation_style")
-            if str(_cs_model or "").strip().lower() in ("null", "none", ""):
-                _cs_model = None
-            # naming a style in the request IS the user saying it outright, so
-            # it stays the top tier; the model fills the silence beneath it.
-            self._settle(task.task_card, "citation_style", _cs_model, None,
-                         "فهم الطلب",
-                         explicit=self._requested_citation_style(task.description))
-        except Exception:
-            pass
+        # Sourcing, citation style, action and the table flag are SETTLED LATER
+        # — after the model's own plan has been merged onto the card. Reading
+        # the card here meant reading it BEFORE the model had written anything
+        # into it, so every one of those decisions fell through to the keyword
+        # detector and the ledger said «قالب احتياطي» on three runs out of three.
+        # The precedence was right; it was being asked too early.
 
         # scope that LIMITS the task: references-only / outline-only / part-only.
         _cur_req = self._current_request(task.description)
@@ -2772,28 +2769,9 @@ class WeaverOrchestrator:
         # flags below. Absent → nothing set → behaviour unchanged.
         try:
             if isinstance(task.task_card, dict):
-                # The model already returns `action` in its plan. A verb list
-                # running afterwards used to overwrite it, so «اكتب بحثاً عن
-                # تحويل الطاقة» could be turned into a file-conversion task by
-                # one matching word. The model leads; the list is the backstop
-                # for when the model returned nothing.
-                _act_model = task.task_card.get("action")
-                if str(_act_model or "").strip().lower() in ("null", "chat", ""):
-                    _act_model = None
-                _act = self._settle(task.task_card, "action", _act_model,
-                                    self._task_action(_cur_req), "فهم الطلب")
-                # THREE-VALUED, SO «NO» IS SAYABLE. The flag could only ever be
-                # switched ON: nothing in the system — not the model, not the
-                # user — could ask for a document WITHOUT tables. False is now
-                # an answer that survives; None still means «no opinion».
-                _wt_model = task.task_card.get("wants_table")
-                if not isinstance(_wt_model, bool):
-                    _wt_model = None
-                _wt_det = True if self._wants_table(_cur_req) else None
-                _wt = self._settle(task.task_card, "want_table", _wt_model,
-                                   _wt_det, "فهم الطلب")
-                if _wt is False:
-                    task.task_card["tables_forbidden"] = True
+                # action and the table flag are settled after the plan merge,
+                # where the model's own answer is finally on the card.
+                _act = task.task_card.get("action")
                 if self._wants_chart(_cur_req):
                     task.task_card["want_chart"] = True
                 if self._wants_data(_cur_req):
@@ -2861,8 +2839,33 @@ class WeaverOrchestrator:
                 _iv = self._intent_router(_cur_req)     # keyword-model fallback
             if _iv and isinstance(task.task_card, dict):
                 c = task.task_card
-                if _iv.get("action"):
-                    c["action"] = _iv["action"]
+                # ── THE ONE PLACE WHERE THESE ARE DECIDED ──────────────
+                # Everything below settles user → model → detector, now that
+                # the model's plan is actually on the card. Each detector reads
+                # the CURRENT request only: reading task.description pulled in
+                # earlier turns, so a style named in a previous message came
+                # back stamped «المستخدم» on a request that never mentioned it,
+                # and sat next to «بلا مصادر» as «وثّق بنمط APA».
+                _cur_only = self._current_request(task.description)
+                _act_m = str(_iv.get("action") or "").strip().lower()
+                self._settle(c, "action",
+                             _act_m if _act_m not in ("", "null", "chat") else None,
+                             self._task_action(_cur_only), "فهم الطلب")
+                _sm_m = str(_iv.get("sourcing") or "").strip().lower()
+                self._settle(c, "sourcing_mode",
+                             _sm_m if _sm_m in ("cited", "uncited", "none") else None,
+                             self._sourcing_mode(_cur_only), "فهم الطلب")
+                _cs_m = str(_iv.get("citation_style")
+                            or c.get("citation_style") or "").strip()
+                if _cs_m.lower() in ("null", "none", "unspecified", ""):
+                    _cs_m = None
+                self._settle(c, "citation_style", _cs_m, None, "فهم الطلب",
+                             explicit=self._requested_citation_style(_cur_only))
+                _rc_m = _iv.get("recency")
+                self._settle(c, "recency_intent",
+                             _rc_m if isinstance(_rc_m, bool) else None,
+                             True if self._is_recency_query(_cur_only) else None,
+                             "فهم الطلب")
                 if _iv.get("scopes"):
                     # A keyword-detected LIMITING scope is EXPLICIT (an "فقط"/
                     # "only" cue) and authoritative — a weak on-device model must
@@ -2880,16 +2883,33 @@ class WeaverOrchestrator:
                     c["output_format"] = [_iv["format"].upper()]
                 if _iv.get("slide_count"):
                     c["slide_count"] = _iv["slide_count"]
+                # LENGTH, WITH ITS AUTHOR NAMED. «صفحة واحدة» and «لخّص» were
+                # both answered with 3000 words, and the ledger credited that
+                # number to «المستخدم» who had never said it. The model reads
+                # the request; whatever it returns is recorded as ITS reading,
+                # and a default is never dressed up as the user's instruction.
                 if _iv.get("words"):
-                    c["target_words"] = _iv["words"]
+                    self._settle(c, "target_words", _iv["words"], None,
+                                 "فهم الطلب")
                 if _iv.get("pages"):
-                    c["target_pages"] = _iv["pages"]
+                    self._settle(c, "target_pages", _iv["pages"], None,
+                                 "فهم الطلب")
                 if _iv.get("mabhath_count"):
                     c["mabhath_count"] = _iv["mabhath_count"]
                 if _iv.get("matlab_count"):
                     c["matlab_count"] = _iv["matlab_count"]
-                if _iv.get("wants_table"):
-                    c["want_table"] = True
+                # THREE-VALUED HERE TOO. This line survived the earlier fix and
+                # quietly restored the one-way flag: `False` — the model or the
+                # user saying «بلا جداول» — fell through it as if nothing had
+                # been said. That is why the prohibition was never recorded.
+                _wt_m = _iv.get("wants_table")
+                _wt = self._settle(c, "want_table",
+                                   _wt_m if isinstance(_wt_m, bool) else None,
+                                   True if self._wants_table(_cur_only) else None,
+                                   "فهم الطلب")
+                if _wt is False:
+                    c["tables_forbidden"] = True
+                    c.pop("want_table", None)
                 if _iv.get("wants_chart"):
                     c["want_chart"] = True
                 if _iv.get("wants_data"):
@@ -4853,6 +4873,10 @@ class WeaverOrchestrator:
                                    + str(r.get("content") or "")
                                    for r in results))
 
+            def _script(t):
+                return "ar" if any("\u0600" <= c <= "\u06ff" for c in str(t)) \
+                    else "la"
+
             def _covered(f):
                 # EVERY distinctive word of the facet must appear, not just one.
                 # «الإعجاز الأخلاقي» shares «الإعجاز» with «الإعجاز العلمي», so
@@ -4861,7 +4885,16 @@ class WeaverOrchestrator:
                 ws = sorted((w for w in _flat(f).split() if len(w) >= 4),
                             key=len, reverse=True)[:3]
                 return all(w in _blob for w in ws) if ws else True
-            _missing = [f for f in _fc if not _covered(f)]
+            # A WORD-MATCH CANNOT CROSS AN ALPHABET. The model names the facets
+            # in the REQUEST's language while the literature comes back in the
+            # language it is published in — so Arabic facets were hunted inside
+            # English titles and every one of them «went uncovered», printing
+            # «لم يُعثر على أيٍّ من جوانب الموضوع» under eight papers that were
+            # squarely about them. Counting is only honest within one script;
+            # across scripts this check says nothing and must stay silent.
+            _blob_scr = _script(_blob[:4000])
+            _fc = [f for f in _fc if _script(f) == _blob_scr]
+            _missing = [f for f in _fc if not _covered(f)] if _fc else []
             if _missing and len(_missing) < len(_fc):
                 self._skip_note(
                     card, "تغطية جوانب الموضوع",
