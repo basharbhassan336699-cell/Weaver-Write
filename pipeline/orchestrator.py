@@ -1090,6 +1090,42 @@ class WeaverOrchestrator:
         except Exception:
             return t, {}
 
+    @classmethod
+    def _settle(cls, card, key, model_value, detector_value, where="",
+                explicit=None):
+        """WHO DECIDES, IN ONE PLACE. Three tiers, in this order:
+
+          1. the user said it OUTRIGHT  (explicit)  — nothing overrides that
+          2. the MODEL judged it        (model_value) — it read the request
+          3. a deterministic detector   (detector_value) — a backstop only
+
+        Seven decisions used to skip tier 2 entirely: a keyword list ran over
+        the raw text and WROTE ITS ANSWER ON TOP of the model's, so a request
+        the model had understood as research became a rewrite because one verb
+        matched, and a sourcing mode was stamped on every card whether the
+        model had an opinion or not. The lists are not the problem — running
+        them ABOVE the model is.
+
+        None means «no opinion» at every tier, and is passed over; False is an
+        ANSWER and is honoured. That distinction is what lets the model finally
+        say NO — until now a flag could only ever be switched on, so nobody,
+        not even the user, could ask for a document with no tables.
+
+        Returns the settled value and records who decided it."""
+        for val, by in ((explicit, "user"), (model_value, "model"),
+                        (detector_value, "fallback")):
+            if val is None:
+                continue
+            if isinstance(val, str) and not val.strip():
+                continue
+            try:
+                card[key] = val
+                cls._record_decision(card, key, val, by, where)
+            except Exception:
+                pass
+            return val
+        return None
+
     @staticmethod
     def _record_decision(card, key, value, by, where=""):
         """One ledger of WHO decided WHAT: "user" (they said it), "measured"
@@ -2133,6 +2169,17 @@ class WeaverOrchestrator:
             task.skills = [s.name for s in self.caps.match_skills(text)]
         else:
             task.tools, task.skills = [], []
+        # Recency: the model now reports whether the answer changes with time.
+        # The word list («أحدث», «اليوم», «latest») stays underneath it as the
+        # backstop, where it belongs — it cannot see that «سعر الذهب» is a
+        # moving number while «تعريف الذهب» is not.
+        _rc_model = card.get("recency")
+        if not isinstance(_rc_model, bool):
+            _rc_model = None
+        self._settle(card, "recency_intent", _rc_model,
+                     True if self._is_recency_query(
+                         (card.get("topic") or "") + " "
+                         + (task.description or "")) else None, "فهم الطلب")
         # sourcing mode decides whether we gather and/or document sources
         mode = card.get("sourcing_mode", "cited")
         # always-on skills by task type
@@ -2648,17 +2695,27 @@ class WeaverOrchestrator:
         except Exception:
             pass
 
-        # how the user wants sourcing handled (cited / uncited / none). Detected
-        # from the RAW request so an explicit "بدون مصادر" / "دون توثيقها" is
-        # honoured even if the model didn't surface it in the card.
-        task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
+        # How the user wants sourcing handled. The detector used to be WRITTEN
+        # STRAIGHT ONTO THE CARD — including the default it falls back to — so
+        # it overwrote the model's reading on every single request, opinion or
+        # no opinion. Now the model's answer leads and the detector backs it up.
+        _sm_model = task.task_card.get("sourcing")
+        if _sm_model in ("null", ""):
+            _sm_model = None
+        self._settle(task.task_card, "sourcing_mode", _sm_model,
+                     self._sourcing_mode(task.description), "فهم الطلب")
 
         # documentation style named in the request (APA/MLA/…) — explicit wins.
         # Without this the writer was handed a blank "Citation style:".
         try:
-            _cs = self._requested_citation_style(task.description)
-            if _cs:
-                task.task_card["citation_style"] = _cs
+            _cs_model = task.task_card.get("citation_style")
+            if str(_cs_model or "").strip().lower() in ("null", "none", ""):
+                _cs_model = None
+            # naming a style in the request IS the user saying it outright, so
+            # it stays the top tier; the model fills the silence beneath it.
+            self._settle(task.task_card, "citation_style", _cs_model, None,
+                         "فهم الطلب",
+                         explicit=self._requested_citation_style(task.description))
         except Exception:
             pass
 
@@ -2686,11 +2743,28 @@ class WeaverOrchestrator:
         # flags below. Absent → nothing set → behaviour unchanged.
         try:
             if isinstance(task.task_card, dict):
-                _act = self._task_action(_cur_req)
-                if _act:
-                    task.task_card["action"] = _act
-                if self._wants_table(_cur_req):
-                    task.task_card["want_table"] = True
+                # The model already returns `action` in its plan. A verb list
+                # running afterwards used to overwrite it, so «اكتب بحثاً عن
+                # تحويل الطاقة» could be turned into a file-conversion task by
+                # one matching word. The model leads; the list is the backstop
+                # for when the model returned nothing.
+                _act_model = task.task_card.get("action")
+                if str(_act_model or "").strip().lower() in ("null", "chat", ""):
+                    _act_model = None
+                _act = self._settle(task.task_card, "action", _act_model,
+                                    self._task_action(_cur_req), "فهم الطلب")
+                # THREE-VALUED, SO «NO» IS SAYABLE. The flag could only ever be
+                # switched ON: nothing in the system — not the model, not the
+                # user — could ask for a document WITHOUT tables. False is now
+                # an answer that survives; None still means «no opinion».
+                _wt_model = task.task_card.get("wants_table")
+                if not isinstance(_wt_model, bool):
+                    _wt_model = None
+                _wt_det = True if self._wants_table(_cur_req) else None
+                _wt = self._settle(task.task_card, "want_table", _wt_model,
+                                   _wt_det, "فهم الطلب")
+                if _wt is False:
+                    task.task_card["tables_forbidden"] = True
                 if self._wants_chart(_cur_req):
                     task.task_card["want_chart"] = True
                 if self._wants_data(_cur_req):
@@ -4908,8 +4982,12 @@ class WeaverOrchestrator:
             return
 
         # news/recency intent → date-augmented query + time filter + recency sort
-        is_recency = self._is_recency_query(
-            (card.get("topic") or "") + " " + (task.description or ""))
+        # the settled decision if one was reached (model first), else detect
+        _ri = card.get("recency_intent")
+        is_recency = (bool(_ri) if isinstance(_ri, bool)
+                      else self._is_recency_query(
+                          (card.get("topic") or "") + " "
+                          + (task.description or "")))
         sx_time = ddg_df = None
         if is_recency:
             query = self._augment_query_with_date(query, lang)
@@ -5646,6 +5724,25 @@ class WeaverOrchestrator:
             cap = int(_os.environ.get("WEAVER_BRIDGE_MAXWORDS", "120") or 120)
         except Exception:
             cap = 120
+        # THE PLAN CARRIES THE STRUCTURE THE MODEL DESIGNED; THE CAP SHOULD FIT
+        # IT. 120 words was one number for every document — a fixed rule the
+        # model was never asked about, applied the same to a three-section
+        # summary and to a forty-page thesis. When a length IS known, the bridge
+        # is a proportion of what a parent section is actually worth, so the
+        # cap follows the document the model planned instead of a constant. The
+        # env var still overrides everything, and with no length known the old
+        # 120 stands unchanged.
+        if not _os.environ.get("WEAVER_BRIDGE_MAXWORDS"):
+            try:
+                _tw = int((card or {}).get("target_words")
+                          or (card or {}).get("max_words") or 0)
+                _np = int((card or {}).get("mabhath_count") or 0)
+                if _tw > 0 and _np > 0:
+                    # a bridge is an opening, not a section: a fifth of what one
+                    # parent is worth, never below 60 nor above 300 words.
+                    cap = max(60, min(300, int((_tw / max(_np, 1)) * 0.2)))
+            except Exception:
+                pass
         blob = " ".join([
             str(request or ""),
             " ".join(str(r.get("text", "")) for r in ((card or {}).get(
@@ -6443,7 +6540,17 @@ class WeaverOrchestrator:
         # no longer put one everywhere. None (no table asked for) = unchanged.
         _tbl_budget = _tbl_used = None
         try:
-            if card.get("want_table") or any(
+            if card.get("tables_forbidden"):
+                # «NO» IS NOW ENFORCED, NOT MERELY RECORDED. A budget of zero
+                # is a different thing from None: None means nobody asked, zero
+                # means somebody said not to.
+                _tbl_budget, _tbl_used = 0, 0
+                card["table_budget"] = 0
+                self._record_decision(card, "الجداول", "ممنوعة", "user"
+                                      if card.get("want_table") is False
+                                      else "model", "طبقة ٦")
+                mem.set_status(6, "لا جداول — بناءً على قرارٍ صريح")
+            elif card.get("want_table") or any(
                     isinstance(r, dict) and r.get("kind") == "insert"
                     and any(w in str(r.get("text", "")).lower()
                             for w in ("جدول", "جداول", "table"))
@@ -9507,9 +9614,20 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
             '"target_file":"اسم|null","on_previous":true|false,'
             '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
             '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
-            '"wants_table":true|false,"wants_chart":true|false,'
-            '"wants_data":true|false,"needs_sources":true|false}]}\n\n'
+            '"wants_table":true|false|null,"wants_chart":true|false|null,'
+            '"wants_data":true|false,"needs_sources":true|false,'
+            '"sourcing":"cited|uncited|none|null",'
+            '"citation_style":"APA|MLA|Chicago|Harvard|IEEE|null",'
+            '"recency":true|false|null}]}\n\n'
             "قواعد مهمة:\n"
+            "- null تعني «لا رأي لي»: لا تخترع قراراً لم يطلبه المستخدم ولم "
+            "يقتضِه الموضوع. وfalse تعني «لا» صريحةً — فإن قال المستخدم «بلا "
+            "جداول» فاجعل wants_table=false لا null.\n"
+            "- sourcing: cited = يريد مصادر موثّقة · uncited = يريد محتوًى بلا "
+            "توثيق · none = نهى عن المصادر أصلاً · null = لم يُحدِّد.\n"
+            "- citation_style: فقط إن سمّى المستخدم نمطاً، وإلا null.\n"
+            "- recency: true إن كان الجواب يتغيّر بمرور الوقت (سعر، منصب "
+            "حاليّ، خبر، إصدار)، false إن كان ثابتاً، null إن لم يتبيّن.\n"
             "- استعمل المحادثة كاملةً لتحديد الموضوع: إن كان الطلب الحالي تعليمةَ "
             "تنسيق (مثل «اجعلها 3 مباحث») دون ذكر الموضوع، فخذ الموضوع من الرسائل "
             "السابقة ولا تسأل عنه.\n"
@@ -9530,8 +9648,10 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
         except Exception:
             _to = 45
         try:
+            # the schema grew; a reasoning model that runs out mid-object
+            # returns nothing usable, and this one call decides the whole route.
             raw = llm_fn(prompt, system=system, temperature=0.0,
-                         max_tokens=700, timeout=_to) or ""
+                         max_tokens=1200, timeout=_to) or ""
         except TypeError:
             raw = llm_fn(prompt, system=system, temperature=0.0) or ""
         try:
