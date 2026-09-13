@@ -8606,6 +8606,93 @@ class WeaverOrchestrator:
         return head, "\n\n".join(parts)
 
     @classmethod
+    def _bib_sources(cls, sources, card, lang="ar"):
+        """WHICH sources belong in a DOCUMENTED reference list.
+
+        A refereed list is the standing requirement, and a «ثانياً: المواقع
+        الإلكترونية» group placed popular health and content sites beside
+        peer-reviewed studies — a section nobody asked for, carrying sources the
+        quality ladder itself rates «supplementary only, never a primary
+        citation». A reader cannot tell, from one numbered list, which entries
+        were refereed and which were a page found by a search engine.
+
+        So: when refereed work is present, the bibliography is refereed work.
+        General pages stay in the writer's context — they informed the prose,
+        and nothing is deleted — but they are not presented as references. When
+        NO refereed source exists, the list falls back to what there is and the
+        card is marked so the reader is told plainly.
+
+        Returns (chosen, dropped). Never raises."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items:
+            return sources, []
+        try:
+            wr = cls._wr()
+            acad, general = [], []
+            for s_ in items:
+                _t = wr.quality_tier(s_) if wr else 0
+                _is_acad = bool(s_.get("academic") or s_.get("doi")
+                                or (_t and _t >= 3))
+                (acad if _is_acad else general).append(s_)
+            if acad:
+                try:
+                    card["refs_general_dropped"] = len(general)
+                except Exception:
+                    pass
+                return acad, general
+            try:
+                card["refs_no_academic"] = True
+            except Exception:
+                pass
+            return items, []
+        except Exception:
+            return sources, []
+
+    @staticmethod
+    def _citation_coverage(draft, sources):
+        """Every (Author, Year) in the text must be findable in the list.
+
+        The text cited Van Dongen 2003, Alhola 2007 and Killgore 2010 while the
+        printed list held seven popular web pages — so every in-text citation
+        pointed at nothing and every listed entry was uncited. Neither the
+        writer nor the formatter can see that on its own: one produces the
+        prose, the other the list. Counting the overlap is the only way to know.
+
+        Returns the in-text citations that no listed source accounts for."""
+        try:
+            import re
+            txt = str(draft or "")
+            cits = re.findall(r"\(([^()]{3,70}?)[،,]\s*((?:19|20)\d{2})\)", txt)
+            if not cits:
+                return []
+            hay = []
+            for s_ in (sources or []):
+                if not isinstance(s_, dict):
+                    continue
+                a = s_.get("authors") or s_.get("author") or []
+                if isinstance(a, (list, tuple)):
+                    a = " ".join(str(x) for x in a)
+                hay.append((" ".join([str(a), str(s_.get("title") or ""),
+                                      str(s_.get("year") or "")])).lower())
+            blob = " || ".join(hay)
+            missing = []
+            for name, yr in cits:
+                n = " ".join(str(name).split())
+                # the surname carries the match; «وآخرون» and initials do not
+                parts = [w for w in n.replace("،", " ").split()
+                         if len(w) > 2 and w not in ("وآخرون", "et", "al.")]
+                key = (parts[-1] if parts else n).lower()
+                if not key or len(key) < 3:
+                    continue
+                if key not in blob:
+                    label = f"{n}، {yr}"
+                    if label not in missing:
+                        missing.append(label)
+            return missing[:8]
+        except Exception:
+            return []
+
+    @classmethod
     def _cited_sources(cls, draft, sources):
         """Keep only the sources the text ACTUALLY cites — the rule APA itself
         states (a reference list lists what was cited, nothing more). The list
@@ -8687,6 +8774,35 @@ class WeaverOrchestrator:
         # to the full list when citations can't be matched).
         try:
             sources = self._cited_sources(task.draft, sources)
+        except Exception:
+            pass
+        # A DOCUMENTED LIST IS A REFEREED LIST. General pages keep informing the
+        # prose; they stop being presented as references.
+        _drop = []
+        try:
+            sources, _drop = self._bib_sources(sources, card, lang)
+        except Exception:
+            _drop = []
+        if _drop:
+            self._skip_note(
+                card, "قائمة المراجع",
+                f"استُبعد {len(_drop)} مصدراً عامّاً (مواقع غير محكّمة) من "
+                "قائمة التوثيق، وبقيت في سياق الكتابة — القائمة للمحكَّم وحده")
+        if card.get("refs_no_academic"):
+            self._skip_note(
+                card, "قائمة المراجع",
+                "لم يُعثر على مصدرٍ محكَّم، فالقائمة من مصادر عامة ولا تصلح "
+                "توثيقاً أكاديمياً")
+        try:
+            _miss = self._citation_coverage(task.draft, sources)
+            if _miss:
+                self._skip_note(
+                    card, "تطابق الاستشهادات",
+                    "استشهاداتٌ في النصّ لا تقابلها مداخل في القائمة: "
+                    + "؛ ".join(_miss[:4])
+                    + (f" (و{len(_miss) - 4} غيرها)" if len(_miss) > 4 else ""))
+                self._record_decision(card, "استشهادات بلا مرجع", len(_miss),
+                                      "measured", "طبقة ٨")
         except Exception:
             pass
         pq_refs = (card.get("paperqa_result") or {}).get("references")
