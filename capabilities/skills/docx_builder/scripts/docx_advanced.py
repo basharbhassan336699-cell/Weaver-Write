@@ -47,6 +47,102 @@ def load_palette(theme_id="academic_navy"):
 
 
 # ── direction helpers ────────────────────────────────────────
+def _list_abstract_id(doc, style_name="List Number"):
+    """The abstractNumId that the given list STYLE points at, or None.
+
+    Every paragraph given style "List Number" inherits ONE numbering instance
+    from styles.xml, so Word keeps a single counter running for the whole
+    document: a list in one section ends at 5 and the next section's list
+    starts at 6. Restarting means pointing each list at its OWN w:num instance
+    over the SAME abstract definition — which keeps the numbering FORMAT
+    identical (same shape, same indents) and changes only where the count
+    begins. Never raises."""
+    try:
+        st = doc.styles[style_name].element
+        numId = None
+        pPr = st.find(qn("w:pPr"))
+        if pPr is not None:
+            numPr = pPr.find(qn("w:numPr"))
+            if numPr is not None:
+                nid = numPr.find(qn("w:numId"))
+                if nid is not None:
+                    numId = nid.get(qn("w:val"))
+        if numId is None:
+            return None
+        numbering = doc.part.numbering_part.element
+        for num in numbering.findall(qn("w:num")):
+            if num.get(qn("w:numId")) == str(numId):
+                a = num.find(qn("w:abstractNumId"))
+                if a is not None:
+                    return a.get(qn("w:val"))
+    except Exception:
+        return None
+    return None
+
+
+def new_list_numbering(doc, style_name="List Number"):
+    """Create a FRESH numbering instance over the list style's own abstract
+    definition and return its numId as a string, or None when the document has
+    no numbering part (then the caller simply keeps today's behaviour).
+
+    One call per list — not per item — so the items of one list share a counter
+    and the next list starts again at 1."""
+    try:
+        abs_id = _list_abstract_id(doc, style_name)
+        if abs_id is None:
+            return None
+        numbering = doc.part.numbering_part.element
+        used = set()
+        for num in numbering.findall(qn("w:num")):
+            v = num.get(qn("w:numId"))
+            try:
+                used.add(int(v))
+            except (TypeError, ValueError):
+                pass
+        new_id = (max(used) + 1) if used else 1
+        el = OxmlElement("w:num")
+        el.set(qn("w:numId"), str(new_id))
+        a = OxmlElement("w:abstractNumId")
+        a.set(qn("w:val"), str(abs_id))
+        el.append(a)
+        # A fresh w:num over the same abstract definition restarts the count in
+        # most Word builds, but only an explicit startOverride makes it certain
+        # across versions and across LibreOffice. Levels 0-2 cover the depths a
+        # generated document actually uses.
+        for _lvl in range(3):
+            ov = OxmlElement("w:lvlOverride")
+            ov.set(qn("w:ilvl"), str(_lvl))
+            so = OxmlElement("w:startOverride")
+            so.set(qn("w:val"), "1")
+            ov.append(so)
+            el.append(ov)
+        numbering.append(el)
+        return str(new_id)
+    except Exception:
+        return None
+
+
+def apply_list_numbering(par, num_id, level=0):
+    """Point ONE paragraph at a specific numbering instance. No-op on None, so
+    every call site degrades to the shared style numbering it used before."""
+    if not num_id:
+        return
+    try:
+        pPr = par._p.get_or_add_pPr()
+        numPr = pPr.find(qn("w:numPr"))
+        if numPr is None:
+            numPr = OxmlElement("w:numPr")
+            pPr.append(numPr)
+        for tag, val in (("w:ilvl", str(level)), ("w:numId", str(num_id))):
+            el = numPr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                numPr.append(el)
+            el.set(qn("w:val"), val)
+    except Exception:
+        pass
+
+
 def set_paragraph_rtl(paragraph):
     pPr = paragraph._p.get_or_add_pPr()
     if pPr.find(qn("w:bidi")) is None:
@@ -357,16 +453,28 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
     n = len(lines)
     buf = []
 
+    # ONE COUNTER PER LIST, NOT PER DOCUMENT. Every "List Number" paragraph used
+    # to inherit the single numbering instance named by the style, so Word ran
+    # one counter from the first list to the last: five items in one section,
+    # then the next section's list opening at 6, and the one after at 10. A list
+    # RUN here is a stretch of consecutive numbered lines; anything else between
+    # them (a heading, a paragraph, a table) ends it, and the next run gets a
+    # fresh instance over the same abstract definition — same look, new count.
+    _numbering = {"id": None, "open": False}
+
     def _para(text, size=14, color=None, bold=False, style=None):
         text = _strip_inline_md(text).strip()
         if not text:
-            return
+            return None
         p = doc.add_paragraph(style=style) if style else doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
         run = p.add_run(text)
         _set_run_font(run, font, size, color or pal["text"], bold=bold)
         if rtl:
             set_paragraph_rtl(p)
+        if style != "List Number":
+            _numbering["open"] = False      # any other paragraph closes the run
+        return p
 
     def _flush():
         if buf:
@@ -428,7 +536,13 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         mn = re.match(r"^\s*\d{1,3}[.)]\s+(.*)$", line)
         if mn:
             _flush()
-            _para(mn.group(1), style="List Number")
+            if not _numbering["open"]:
+                _numbering["id"] = new_list_numbering(doc)
+                _numbering["open"] = True
+            _np = _para(mn.group(1), style="List Number")
+            _numbering["open"] = True       # _para closes it only for others
+            if _np is not None:
+                apply_list_numbering(_np, _numbering["id"])
             i += 1
             continue
         # a whole table glued onto ONE line (rows joined by '||') → un-glue it
@@ -597,8 +711,10 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     if references:
         add_colored_heading(doc, "المراجع" if rtl else "References", 1,
                             lang, theme_id, font)
+        _ref_num = new_list_numbering(doc)
         for ref in references:
             rp = doc.add_paragraph(style="List Number")
+            apply_list_numbering(rp, _ref_num)
             rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
             rrun = rp.add_run(ref)
             _set_run_font(rrun, font, 12, load_palette(theme_id)["text"])
