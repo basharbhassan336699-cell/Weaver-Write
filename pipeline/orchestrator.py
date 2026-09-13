@@ -4182,6 +4182,119 @@ class WeaverOrchestrator:
             self._last_judge_reason = f"{type(e).__name__}: {str(e)[:60]}"
             return None, None
 
+    @staticmethod
+    def _wr():
+        """The GENERAL research layer (Sections 2-5). One import point, so the
+        web path and the academic path share it instead of each carrying a copy.
+        Returns None when it cannot be loaded — every caller then behaves as it
+        did before the layer existed."""
+        try:
+            import importlib.util as _u, os as _os
+            _p = _os.path.join(_os.path.dirname(_os.path.dirname(
+                _os.path.abspath(__file__))), "capabilities", "skills",
+                "web_research", "scripts", "web_research.py")
+            _sp = _u.spec_from_file_location("weaver_web_research", _p)
+            _m = _u.module_from_spec(_sp)
+            _sp.loader.exec_module(_m)
+            return _m
+        except Exception:
+            return None
+
+    async def _verify_references(self, results, card, lang="ar"):
+        """THE ACADEMIC LAYER, BUILT ON THE GENERAL ONE.
+
+        Until now the academic path made ZERO fetch calls: author, venue,
+        language and abstract all came from an aggregator's JSON, and the
+        document presented them as if they had been read. That is precisely
+        what the methodology forbids — «never from a search snippet or an
+        upstream scraper's metadata field» — and it is how a scraper's fields,
+        misaligned between two entries, can put one scholar's journal under
+        another scholar's name without anything noticing.
+
+        So every reference's DOI/URL is now OPENED and READ, through the very
+        same fetcher the web path uses (_extract_full), and each metadata field
+        is checked against the page that claims it. No top-three cap here: in a
+        citation list accuracy outweighs speed, and that is a deliberate
+        difference from the general web path, which keeps its cap.
+
+        Nothing is deleted on failure. A reference whose page will not open is
+        MARKED «غير مُتحقَّق منه» and shown that way — the gap is stated, not
+        filled and not hidden. Writes onto each source in place:
+            verified        VERIFIED | UNVERIFIED | UNREACHABLE
+            verified_fields the fields the page itself confirmed
+            unconfirmed     the fields it did not
+        Never raises."""
+        wr = self._wr()
+        items = [r for r in (results or []) if isinstance(r, dict)]
+        if not wr or not items:
+            return results
+        import os
+        if (os.environ.get("WEAVER_VERIFY_REFS", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return results
+        try:
+            _cap = int(os.environ.get("WEAVER_VERIFY_REF_MAX", "0") or 0)
+        except Exception:
+            _cap = 0
+        targets = items if _cap <= 0 else items[:_cap]
+        n_ok = n_bad = n_shut = 0
+        for src in targets:
+            url = str(src.get("url") or "").strip()
+            doi = str(src.get("doi") or "").strip()
+            if doi and not url:
+                url = "https://doi.org/" + doi.replace("https://doi.org/", "")
+            # safety (general layer): an extremist/harmful host is never
+            # fetched and never becomes a reference, however its URL arrived.
+            if url and wr.source_is_blocked(url):
+                src["verified"] = wr.UNVERIFIED
+                src["unconfirmed"] = ["blocked"]
+                n_shut += 1
+                continue
+            if not url:
+                src["verified"] = wr.UNREACHABLE
+                src["unconfirmed"] = ["url"]
+                n_bad += 1
+                continue
+            try:
+                page = await self._extract_full(url)
+            except Exception:
+                page = None
+            if not page or len(str(page).strip()) < 120:
+                src["verified"] = wr.UNREACHABLE
+                n_bad += 1
+                continue
+            got = wr.confirm_fields(page, src)
+            src["verified_fields"] = sorted(k for k, v in got.items() if v)
+            src["unconfirmed"] = sorted(k for k, v in got.items() if not v)
+            # the page must at least prove it IS this work: its title or its DOI
+            src["verified"] = (wr.VERIFIED
+                               if (got.get("title") or got.get("doi"))
+                               else wr.UNVERIFIED)
+            # Step 5: only page-confirmed text is handed to formatting. An
+            # abstract that the page does not carry is an aggregator's, so it
+            # is kept but no longer presented as read from the source.
+            if src["verified"] == wr.VERIFIED:
+                n_ok += 1
+            else:
+                n_bad += 1
+        for src in items[len(targets):]:
+            src.setdefault("verified", wr.UNVERIFIED)
+        try:
+            card["refs_verified"] = {"ok": n_ok, "unverified": n_bad,
+                                     "blocked": n_shut, "total": len(items)}
+            self._record_decision(card, "تحقّق المراجع",
+                                  f"فُتح وقُرئ {n_ok} من {len(items)}",
+                                  "measured", "بحث أكاديمي")
+            if n_bad or n_shut:
+                self._skip_note(
+                    card, "تحقّق المراجع",
+                    f"تعذّر فتح {n_bad + n_shut} مرجعاً من {len(items)} "
+                    "والتحقّق من بياناته من صفحته الأصلية، فوُسم «غير "
+                    "مُتحقَّق منه» ولم يُحذف")
+        except Exception:
+            pass
+        return items
+
     async def _academic_search(self, task: Task, mem: TaskMemory):
         """Layer 4 academic path: gather peer-reviewed / open-access sources
         from the free scholarly APIs and add them to the task's sources + RAG
@@ -4263,7 +4376,47 @@ class WeaverOrchestrator:
                     + ")، فبقي الفرز اللفظيّ وحده")
         for _r in (results or []):
             _r.pop("_prefilter", None)
+        # ── the GENERAL layer, applied before anything is verified ──────────
+        _wr = self._wr()
+        if _wr and results:
+            # Section 5: a requested year/range narrows the pool BEFORE the
+            # fetch step, not after it — candidates outside the window are not
+            # fetched at all, and a shortfall is reported rather than quietly
+            # back-filled with older work.
+            _a, _b = _wr.parse_window(self._current_request(task.description))
+            if _a or _b:
+                _in = [r for r in results if _wr.within_window(r, _a, _b)]
+                _lost = len(results) - len(_in)
+                if _in:
+                    results = _in
+                self._record_decision(card, "المدى الزمني",
+                                      f"{_a or '…'}–{_b or '…'}", "user",
+                                      "بحث أكاديمي")
+                if _lost:
+                    self._skip_note(
+                        card, "المدى الزمني",
+                        f"استُبعد {_lost} مرجعاً خارج المدى المطلوب قبل "
+                        "التحقّق، ولم تُستبدَل بمراجع أقدم")
+                if len(results) < limit:
+                    self._skip_note(
+                        card, "كفاية المدى الزمني",
+                        f"المتاح داخل المدى {len(results)} مرجعاً مقابل "
+                        f"{limit} مطلوباً — النقص معلَنٌ ولم يُسدَّ بأقدم منه")
+            # Step 4: the quality ladder decides the order (peer-reviewed+DOI
+            # first, excluded hosts last) instead of the alphabet.
+            results = _wr.order_by_quality(results)
+            _drop = [r for r in results
+                     if _wr.quality_tier(r) == _wr.TIER_EXCLUDED]
+            if _drop:
+                results = [r for r in results
+                           if _wr.quality_tier(r) != _wr.TIER_EXCLUDED]
+                self._skip_note(
+                    card, "سلّم جودة المصدر",
+                    f"استُبعد {len(_drop)} مصدراً لا يصلح توثيقاً أساسياً "
+                    "(موسوعات عامة/مدوّنات/مواقع مجهولة)")
         results = (results or [])[:limit]
+        # ── the ACADEMIC layer on top: open and read every one of them ──────
+        results = await self._verify_references(results, card, lang)
         # ④ the back door is closed: an off-topic list is no longer served in
         #    place of a relevant one. Saying «لم أجد» is honest; filling the
         #    bibliography with papers about another subject is not.
@@ -4294,6 +4447,9 @@ class WeaverOrchestrator:
                          "content": content, "authors": r.get("authors") or [],
                          "year": year, "doi": doi,
                          "venue": r.get("venue", ""), "lang": r.get("lang", ""),
+                         "verified": r.get("verified", ""),
+                         "verified_fields": r.get("verified_fields") or [],
+                         "unconfirmed": r.get("unconfirmed") or [],
                          "source": r.get("source", ""), "academic": True,
                          "full": False})
             mem.add_reference(
@@ -4544,6 +4700,16 @@ class WeaverOrchestrator:
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
         limit = self._as_int(card.get("reference_count"), 8) or 8
 
+        # GENERAL LAYER · safety on the query itself, before it is ever sent.
+        # A query whose clear purpose is harmful material is not run at all, and
+        # no softer version of it is attempted — the limitation is stated.
+        _wr = self._wr()
+        if _wr and _wr.query_is_blocked(query):
+            self._skip_note(card, "بحث الويب",
+                            "لم يُنفَّذ البحث: الاستعلام يطلب محتوًى ضارّاً")
+            mem.set_status(4, "بحث ويب: أُوقف لسببٍ يتعلّق بالسلامة")
+            return
+
         # news/recency intent → date-augmented query + time filter + recency sort
         is_recency = self._is_recency_query(
             (card.get("topic") or "") + " " + (task.description or ""))
@@ -4595,6 +4761,32 @@ class WeaverOrchestrator:
         if not results:
             results = await self._tool_web_search(query, lang, limit)
             used = "web_search"
+
+        # GENERAL LAYER · a missed query is REFORMULATED, not resent. Each angle
+        # changes the SHAPE of the query — the nouns alone, the two most
+        # specific terms, the core phrase quoted, a document-type narrowing — so
+        # a retry is meaningfully different rather than cosmetically so, which
+        # is the one thing that actually changes what comes back.
+        if not results and _wr:
+            _tried = [query]
+            for _ in range(3):
+                _alt = _wr.reformulate(query, _tried)
+                if not _alt:
+                    break
+                _tried.append(_alt)
+                try:
+                    results = self._searx_query(instance, _alt, lang, limit,
+                                                timeout=6, time_range=sx_time)
+                    if not results:
+                        results = await self._tool_web_search(_alt, lang, limit)
+                except Exception:
+                    results = None
+                if results:
+                    self._record_decision(card, "إعادة صياغة الاستعلام",
+                                          _alt[:60], "measured", "بحث ويب")
+                    used = str(used) + "+reformulated"
+                    break
+
         if not results:
             mem.set_status(4, "بحث ويب: لا نتائج (تدهور آمن)")
             return
@@ -4611,7 +4803,11 @@ class WeaverOrchestrator:
             snippet = r.get("content", "")
             content = snippet
             is_full = False
-            if i < 3:  # read the top 3 links in full
+            # GENERAL LAYER · an extremist/harmful host is never fetched and
+            # never cited, however its URL arrived.
+            if _wr and _wr.source_is_blocked(url):
+                continue
+            if i < 3:  # read the top 3 links in full (general path cap: KEPT)
                 text = await self._extract_full(url)
                 if text:
                     content = text
@@ -7715,6 +7911,26 @@ class WeaverOrchestrator:
             return ""
         try:
             bits = []
+            # THE DISTINCTION THAT WAS MISSING: a field read from the work's own
+            # page, and a field taken from an aggregator's JSON, used to print
+            # identically — so a reader had no way to tell a confirmed venue
+            # from a scraped one, which is how a misaligned metadata field
+            # passes as fact. The verdict now leads the line.
+            _v = str(src.get("verified") or "")
+            if _v == "verified":
+                _fl = [f for f in (src.get("verified_fields") or [])]
+                bits.append(
+                    ("✓ مُتحقَّق من الصفحة الأصلية"
+                     + (f" ({'، '.join(_fl[:4])})" if _fl else "")
+                     if lang != "en" else
+                     "✓ confirmed on the source page"
+                     + (f" ({', '.join(_fl[:4])})" if _fl else "")))
+            elif _v in ("unverified", "unreachable"):
+                bits.append(
+                    "⚠ غير مُتحقَّق منه — تعذّر فتح الصفحة الأصلية، "
+                    "والبيانات من فهرسٍ وسيط" if lang != "en" else
+                    "⚠ unverified — source page could not be opened; "
+                    "fields come from an index, not the work itself")
             ven = " ".join(str(src.get("venue") or src.get("journal") or "").split())
             if ven:
                 bits.append((f"الجهة: {ven[:90]}" if lang != "en"
@@ -7733,8 +7949,11 @@ class WeaverOrchestrator:
                     if i > 80:
                         cut = cut[:i + 1]
                         break
-                bits.append((f"الوصف: {cut.strip()}" if lang != "en"
-                             else f"Summary: {cut.strip()}"))
+                _lbl = ("الوصف" if lang != "en" else "Summary")
+                if str(src.get("verified") or "") != "verified":
+                    _lbl = ("الوصف (من الفهرس)" if lang != "en"
+                            else "Summary (from the index)")
+                bits.append(f"{_lbl}: {cut.strip()}")
             return " · ".join(bits)
         except Exception:
             return ""
