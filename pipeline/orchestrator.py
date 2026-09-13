@@ -4347,6 +4347,15 @@ class WeaverOrchestrator:
             except Exception:
                 page = None
             _walled = _verdict in ("paywall", "loop")
+            # remember WHICH body this source got, so the FIRST user of a
+            # shared page can be corrected once the sharing becomes visible.
+            _pk = None
+            if page:
+                _t = " ".join(str(page).split())
+                if len(_t) >= 30:
+                    _pk = (len(_t), _t[:120])
+                    src["_page_key"] = _pk
+                    src["_chain_end"] = (_fin or "") if _chain else ""
             if page and wr.same_page_across_sources(page, _seen_pages):
                 # one page body served for two different works is a site page
                 _walled = True
@@ -4391,6 +4400,30 @@ class WeaverOrchestrator:
             if _walled:
                 n_wall += 1
             n_bad += 1
+        # RETROACTIVE: the first source to receive a shared page could not be
+        # known as sharing it — nothing had come before it. Once the pass is
+        # over the tally is visible, so the first user is corrected too. Without
+        # this, one reference out of a whole blocked aggregator went unlabelled
+        # purely because it happened to be fetched first.
+        _counts = {}
+        for src in targets:
+            k = src.get("_page_key")
+            if k:
+                _counts[k] = _counts.get(k, 0) + 1
+        for src in targets:
+            k = src.pop("_page_key", None)
+            _ce = src.pop("_chain_end", "")
+            if not k or _counts.get(k, 0) < 2:
+                continue
+            if str(src.get("verified") or "") == wr.VERIFIED:
+                continue                    # its own fields confirmed: leave it
+            if not src.get("blocked_at") and _ce:
+                src["blocked_at"] = _ce[:120]
+            if str(src.get("verified") or "") in (wr.UNREACHABLE, wr.UNVERIFIED):
+                src["verified"] = "paywalled"
+        n_wall = sum(1 for x in targets
+                     if x.get("blocked_at")
+                     or str(x.get("verified") or "") == "paywalled")
         for src in items[len(targets):]:
             src.setdefault("verified", wr.UNVERIFIED)
         try:
@@ -4402,11 +4435,17 @@ class WeaverOrchestrator:
                 f"من الصفحة {n_ok}، من سجلّ الـDOI {n_reg}، بلا تحقّق "
                 f"{n_bad} — من {len(items)}", "measured", "بحث أكاديمي")
             if n_wall:
+                # how many of the WALLED ones the registry actually rescued —
+                # n_reg counts every registry hit, walled or merely unreachable,
+                # so quoting it here produced «8 of the 6».
+                _saved = sum(1 for x in targets
+                             if str(x.get("verified") or "") == "registry"
+                             and x.get("blocked_at"))
                 self._skip_note(
                     card, "مراجع محجوبة باشتراك",
                     f"{n_wall} مرجعاً صفحتُه خلف تسجيل دخول، فلم تُقرأ؛ "
-                    + (f"وأُخذت بيانات {n_reg} منها من سجلّ الـDOI الذي "
-                       "أودعه الناشر" if n_reg else
+                    + (f"وأُخذت بيانات {_saved} منها من سجلّ الـDOI الذي "
+                       "أودعه الناشر" if _saved else
                        "ولم يُعوَّض ذلك بسجلّ الـDOI"))
             if n_bad or n_shut:
                 self._skip_note(

@@ -113,5 +113,36 @@ print(f"   منفذٌ ميّت ⟶ يُعيد الرابط كما هو بلا ا
       f"{'✅' if ch == [] else '❌'}")
 print(f"   crossref على doi فاسد ⟶ {W2._crossref_record('لا-شيء')!r}  ✅")
 
+print("\n" + "═"*66)
+print(" ٦) الظهور الأول لصفحةٍ مشتركة يُصحَّح بأثرٍ رجعيّ")
+print("═"*66)
+# ثلاث أوراق، كلّها تهبط على قائمة المنظومة نفسها. الأولى لا يمكن أن
+# تُعرف مكرّرةً وقت جلبها — ولا يجوز أن تبقى وحدها بلا وسم.
+o3 = W.__new__(W); o3.llm_fn = None; o3.system_main = ""
+async def all_menu(url): return MENU
+o3._extract_full = all_menu
+W._resolve_chain = staticmethod(lambda u, timeout=20: (
+    "https://search.mandumah.com/MyResearch/Home", MAND))
+W._crossref_record = classmethod(lambda cls, doi, timeout=15: None)
+TRIO = [{"title": f"ورقة {i}", "doi": f"10.36047/{i}",
+         "url": f"https://doi.org/10.36047/{i}", "venue": "", "year": "",
+         "authors": [], "content": ""} for i in (1, 2, 3)]
+c3 = {}
+r3 = asyncio.run(o3._verify_references([dict(x) for x in TRIO], c3, "ar"))
+for r in r3:
+    print(f"   {str(r.get('verified')):11s} | حاجب: {r.get('blocked_at') or '—'}")
+g6 = all(str(r.get("verified")) == "paywalled" and r.get("blocked_at")
+         for r in r3)
+ok &= g6
+print(f"   ⟵ الثلاث موسومة والحاجب مُسمّى، الأولى منها: {'✅' if g6 else '❌'}")
+print(f"   العدّاد: محجوب={(c3.get('refs_verified') or {}).get('paywalled')}")
+for n in (c3.get("skipped_steps") or []):
+    print(f"   • {n.get('step')} — {n.get('reason')}")
+# «٨ من ٦» لا تتكرّر: العدد المُنقَذ لا يتجاوز المحجوب
+_n = (c3.get("refs_verified") or {})
+ok &= (_n.get("paywalled", 0) == 3)
+# ولا تُمسّ ورقةٌ تحقّقت من صفحتها
+print(f"   ⟵ حسابُ الملاحظة متّسق: {'✅' if _n.get('paywalled') == 3 else '❌'}")
+
 print("\n" + ("PASS ✅" if ok else "FAIL ❌"))
 sys.exit(0 if ok else 1)
