@@ -2894,6 +2894,24 @@ class WeaverOrchestrator:
                 if _iv.get("pages"):
                     self._settle(c, "target_pages", _iv["pages"], None,
                                  "فهم الطلب")
+                    # PAGES MUST BECOME WORDS OR THEY MEAN NOTHING. Every
+                    # length consumer downstream reads target_words; the budget
+                    # line is literally `base = total or mx or 0`, so a request
+                    # given ONLY in pages produced a budget of zero and the
+                    # writer wrote until it stopped — «10 إلى 12 صفحة» came back
+                    # as 18.3. The conversion is one multiplication, and the
+                    # ceiling is what the user actually said.
+                    try:
+                        import os as _o
+                        _wpp = int(_o.environ.get("WEAVER_WORDS_PER_PAGE",
+                                                  "300") or 300)
+                        _pg = int(_iv["pages"])
+                        if _pg > 0 and not c.get("target_words"):
+                            self._settle(c, "target_words", _pg * _wpp, None,
+                                         f"{_pg} صفحة × {_wpp}")
+                            c.setdefault("max_words", _pg * _wpp)
+                    except Exception:
+                        pass
                 if _iv.get("mabhath_count"):
                     c["mabhath_count"] = _iv["mabhath_count"]
                 if _iv.get("matlab_count"):
@@ -4699,6 +4717,41 @@ class WeaverOrchestrator:
             # the topic — it already named them in the same call that composed the
             # query, so this costs no extra model call — and the number of searches
             # is scaled to how many parts there actually are.
+            # THE REQUEST'S LANGUAGE IS A SEARCH INSTRUCTION, NOT A PREFERENCE.
+            # An Arabic request came back with an English-only query and an
+            # English-only corpus, and the Arabic literature that does exist was
+            # never asked for. The topic is searched in the language the user
+            # wrote in as well, as its own query, so both bodies of work get a
+            # chance — and the ranking below puts the requested language first.
+            _want_lang = (str(card.get("refs_lang_target") or "").lower()[:2]
+                          or lang)
+            if (_want_lang and _wr and query
+                    and (os.environ.get("WEAVER_LANG_QUERY", "1")
+                         or "1").strip() not in ("0", "false", "no")):
+                _native = query if _want_lang == lang else None
+                if _native and _native.strip() != (_q or "").strip():
+                    try:
+                        _more = self._scholarly_search(
+                            _native, _want_lang, limit,
+                            wide=bool(self.llm_fn)) or []
+                    except Exception:
+                        _more = []
+                    _seen0 = {(r.get("doi") or r.get("url") or r.get("title") or "")
+                              for r in (results or [])}
+                    _n = 0
+                    for _m in _more:
+                        _k = (_m.get("doi") or _m.get("url")
+                              or _m.get("title") or "")
+                        if _k and _k not in _seen0:
+                            _seen0.add(_k)
+                            if results is None:
+                                results = []
+                            results.append(_m)
+                            _n += 1
+                    if _n:
+                        self._record_decision(
+                            card, "استعلام بلغة الطلب", f"+{_n} مرشّحاً",
+                            "measured", "بحث أكاديمي")
             _fx = [f for f in (getattr(self, "_facets", []) or []) if len(f) >= 3]
             if _wr and len(_fx) >= 2 and (os.environ.get(
                     "WEAVER_MULTI_QUERY", "1") or "1").strip() not in (
@@ -4794,6 +4847,22 @@ class WeaverOrchestrator:
             # Step 4: the quality ladder decides the order (peer-reviewed+DOI
             # first, excluded hosts last) instead of the alphabet.
             results = _wr.order_by_quality(results)
+            # AND THE REQUESTED LANGUAGE LEADS. Quality decides the ladder;
+            # within it, a work in the language the user asked for comes first,
+            # so a nine-item list is filled with Arabic work before it reaches
+            # for English — «قدر الإمكان» made mechanical instead of hoped for.
+            _wl = str(card.get("refs_lang_target") or "").lower()[:2]
+            if _wl and _wl not in ("an", "al"):
+                _idx = {id(r): i for i, r in enumerate(results)}
+                results = sorted(
+                    results,
+                    key=lambda r: (0 if str(r.get("lang") or "").lower()
+                                   .startswith(_wl) else 1, _idx.get(id(r), 0)))
+                _n_in = sum(1 for r in results
+                            if str(r.get("lang") or "").lower().startswith(_wl))
+                self._record_decision(card, "ترتيب لغة المراجع",
+                                      f"{_n_in} من {len(results)} بـ{_wl} أولاً",
+                                      "measured", "بحث أكاديمي")
             _drop = [r for r in results
                      if _wr.quality_tier(r) == _wr.TIER_EXCLUDED]
             if _drop:
@@ -4877,14 +4946,41 @@ class WeaverOrchestrator:
                 return "ar" if any("\u0600" <= c <= "\u06ff" for c in str(t)) \
                     else "la"
 
+            def _stem(w):
+                # Arabic words appear with prefixes and suffixes a literal test
+                # cannot cross: «الأطفال» vs «للأطفال» vs «أطفال»; «المراهقون»
+                # vs «المراهقين». Trimming the common affixes is not a keyword
+                # list — it is the alphabet's own morphology, and it applies to
+                # every Arabic word alike.
+                for pre in ("وال", "فال", "بال", "كال", "لل", "ال", "و", "ف",
+                            "ب", "ك", "ل"):
+                    if len(w) > len(pre) + 3 and w.startswith(pre):
+                        w = w[len(pre):]
+                        break
+                for suf in ("ات", "ون", "ين", "ان", "ية", "ها", "هم", "تي",
+                            "ه", "ي", "ة"):
+                    if len(w) > len(suf) + 3 and w.endswith(suf):
+                        w = w[:-len(suf)]
+                        break
+                return w
+
+            _blob_stems = {_stem(w) for w in _blob.split() if len(w) >= 4}
+
             def _covered(f):
                 # EVERY distinctive word of the facet must appear, not just one.
                 # «الإعجاز الأخلاقي» shares «الإعجاز» with «الإعجاز العلمي», so
                 # an any-word test called the moral facet covered by nine papers
                 # that never touched it. The longest words carry the meaning.
+                # MEASURED: a facet «الأطفال والمراهقون» was declared uncovered
+                # by nine papers whose titles say «الأطفال» and «المراهقين» —
+                # the literal test could not see past a prefix. Comparing stems
+                # is what makes the count mean what it claims to mean.
                 ws = sorted((w for w in _flat(f).split() if len(w) >= 4),
                             key=len, reverse=True)[:3]
-                return all(w in _blob for w in ws) if ws else True
+                if not ws:
+                    return True
+                return all((w in _blob) or (_stem(w) in _blob_stems)
+                           for w in ws)
             # A WORD-MATCH CANNOT CROSS AN ALPHABET. The model names the facets
             # in the REQUEST's language while the literature comes back in the
             # language it is published in — so Arabic facets were hunted inside
@@ -5748,6 +5844,13 @@ class WeaverOrchestrator:
         if not total and not pages and not mx:
             return ""
         n = max(1, int(n_sections or 1))
+        if not total and pages:
+            try:
+                import os as _o
+                total = int(pages) * int(_o.environ.get(
+                    "WEAVER_WORDS_PER_PAGE", "300") or 300)
+            except Exception:
+                total = 0
         base = total or mx or 0
         # `share` comes from _section_budgets when the caller computed one per
         # ROLE; the flat division is only the fallback for callers that did not
@@ -8438,7 +8541,14 @@ class WeaverOrchestrator:
                 bits.append((f"اللغة: {nm}" if lang != "en"
                              else f"Language: {nm}"))
             # a sentence of substance from the abstract the index returned
-            abx = " ".join(str(src.get("content") or "").split())
+            # A SCRAPED PAGE CARRIES ITS MARKUP. «###### الفرق بين قصر النظر»
+            # printed the page's own heading marks inside a reference summary.
+            # Strip the markers, keep the words.
+            _raw = str(src.get("content") or "")
+            for _m in ("######", "#####", "####", "###", "##", "#", "**", "__",
+                       "`", ">", "|"):
+                _raw = _raw.replace(_m, " ")
+            abx = " ".join(_raw.split())
             if len(abx) >= 60:
                 cut = abx[:240]
                 for stop in (". ", "؟ ", "! ", "، "):
@@ -8546,6 +8656,33 @@ class WeaverOrchestrator:
         except Exception:
             return txt
 
+    @staticmethod
+    def _ref_notes_wanted(card):
+        """Should each reference carry its provenance line inside the document?
+
+        Off by default: nobody asked for an annotated bibliography. On when the
+        REQUEST itself asks for descriptions/annotation, or when the env flag is
+        set. The provenance is never lost either way — it is summarised in the
+        decisions ledger and the honest notes."""
+        try:
+            import os
+            v = (os.environ.get("WEAVER_REF_NOTES", "") or "").strip().lower()
+            if v in ("1", "true", "yes", "on"):
+                return True
+            if v in ("0", "false", "no", "off"):
+                return False
+            req = str((card or {}).get("_request_text") or "")
+            for r in ((card or {}).get("requirements") or []):
+                if isinstance(r, dict):
+                    req += " " + str(r.get("text") or "")
+            req = req.lower()
+            return any(k in req for k in (
+                "شرح المراجع", "وصف المراجع", "مع شرح لكل مرجع",
+                "قائمة مشروحة", "ببليوغرافيا مشروحة", "annotated bibliograph",
+                "describe each reference", "with annotations"))
+        except Exception:
+            return False
+
     def _grouped_refs_body(self, sources, lang, skill, module, pq_refs, card):
         """Build ONE bibliography body with the types separated by internal
         sub-headings (the «قائمة المصادر والمراجع» layout of Arabic theses).
@@ -8553,6 +8690,17 @@ class WeaverOrchestrator:
         with a «الدراسات السابقة» chapter in the body and with the ref-heading
         cleanup. Returns (heading, body) or None to fall back to the flat list."""
         items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items:
+            return None
+        # THE FILTER HAS TO SIT HERE TOO. _bib_sources runs on the flat path,
+        # but the grouped path — the one that actually produced «ثالثاً:
+        # المواقع الإلكترونية» — read the card's sources directly and never saw
+        # it. One filter, applied wherever the list is built, or it is not a
+        # filter at all.
+        try:
+            items, _dropped_general = self._bib_sources(items, card, lang)
+        except Exception:
+            _dropped_general = []
         if not items:
             return None
         _how = "model"
@@ -8591,7 +8739,17 @@ class WeaverOrchestrator:
                 txt = "\n".join(
                     f"{i}. {(x.get('title') or '')} {(x.get('url') or '')}".strip()
                     for i, x in enumerate(groups[t], 1))
-            txt = self._annotate_bibliography(txt, groups[t], lang)
+            # A BIBLIOGRAPHY IS A LIST, NOT A COMMENTARY. The verification line
+            # under every entry («◐ مُتحقَّق من سجلّ الـDOI… · الجهة… · الوصف…»)
+            # was never asked for: it doubled the length of the list, turned an
+            # APA page into an annotated one, and broke the numbering because a
+            # paragraph sat between each pair of items. The information itself
+            # is worth keeping — it now lives in the decision ledger and the
+            # honest notes, where a reader looks for provenance, and the
+            # document keeps the clean list a reader asked for.
+            # WEAVER_REF_NOTES=1 puts it back inline for anyone who wants it.
+            if self._ref_notes_wanted(card):
+                txt = self._annotate_bibliography(txt, groups[t], lang)
             if (txt or "").strip():
                 _label = names[t]
                 if lang != "en" and _n < len(self._REF_ORDINALS_AR):

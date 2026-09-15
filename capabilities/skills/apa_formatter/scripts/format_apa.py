@@ -10,9 +10,18 @@ from __future__ import annotations
 import argparse
 
 
+def _year(y):
+    """APA's own marker for an undated work. A missing year arrived as the
+    Python object None and was printed literally — «Mobile Phone Effects
+    (None).» — which reads as a data leak, not a citation."""
+    t = str(y if y is not None else "").strip()
+    return t if t and t.lower() not in ("none", "null", "n/a", "") else "n.d."
+
+
 def format_apa_article(author, year, title, journal,
                        volume=None, issue=None, pages=None, doi=None):
     """Build an APA citation for a journal article."""
+    year = _year(year)
     parts = [f"{author} ({year}). {title}. "]
     journal_part = f"*{journal}*"
     if volume:
@@ -30,7 +39,7 @@ def format_apa_article(author, year, title, journal,
 
 def format_apa_book(author, year, title, publisher):
     """Build an APA citation for a book."""
-    return f"{author} ({year}). *{title}*. {publisher}."
+    return f"{author} ({_year(year)}). *{title}*. {publisher}."
 
 
 def _readable_url(url):
@@ -73,7 +82,7 @@ def format_apa_website(title, url="", year=None, site=None, author=None):
     APA 7th: Author, A. A. (Year). Title. Site. URL
     """
     a = (str(author).strip() if author else "")
-    y = f" ({year})." if year else " (n.d.)."
+    y = f" ({_year(year)})."
     # NEVER a bare «Title. URL». Without a site name and a date an entry is a
     # cropped search result, not a reference. The host is derivable from the
     # link itself, and n.d. is APA's own marker for an undated source — both

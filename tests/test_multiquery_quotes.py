@@ -52,12 +52,22 @@ ok &= bool(d)
 print(f"  القرار مسجَّل: {d}  {'✅' if d else '❌'}")
 
 print("\n  الإيقاف والحدود:")
+# استعلام لغة الطلب آليةٌ مستقلّة ببوّابتها الخاصة: إطفاء استعلامات
+# الجوانب لا يُطفئها، وهو المقصود — لغة المستخدم مطلبٌ قائمٌ بذاته.
 os.environ["WEAVER_MULTI_QUERY"] = "0"; calls.clear()
 asyncio.run(o._academic_search(T("اكتب", {"topic": "أ ب", "language": "ar",
                                           "reference_count": 9}), M()))
+_no_facets = not any(c in ("الإعجاز العلمي", "الإعجاز الأخلاقي") for c in calls)
+ok &= _no_facets
+print(f"   WEAVER_MULTI_QUERY=0 ⟶ {len(calls)} استعلام، بلا جوانب "
+      f"{'✅' if _no_facets else '❌'} {calls}")
+os.environ["WEAVER_LANG_QUERY"] = "0"; calls.clear()
+asyncio.run(o._academic_search(T("اكتب", {"topic": "أ ب", "language": "ar",
+                                          "reference_count": 9}), M()))
 ok &= (len(calls) == 1)
-print(f"   WEAVER_MULTI_QUERY=0 ⟶ {len(calls)} استعلام {'✅' if len(calls)==1 else '❌'}")
-os.environ.pop("WEAVER_MULTI_QUERY")
+print(f"   وبإطفاء الاثنتين      ⟶ {len(calls)} استعلام "
+      f"{'✅' if len(calls)==1 else '❌'}")
+os.environ.pop("WEAVER_LANG_QUERY"); os.environ.pop("WEAVER_MULTI_QUERY")
 def model1(p, **k):
     if "facets" in p:
         return json.dumps({"query": "س", "refs_lang": "ar",
