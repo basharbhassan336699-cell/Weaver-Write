@@ -4723,12 +4723,29 @@ class WeaverOrchestrator:
             # never asked for. The topic is searched in the language the user
             # wrote in as well, as its own query, so both bodies of work get a
             # chance — and the ranking below puts the requested language first.
-            _want_lang = (str(card.get("refs_lang_target") or "").lower()[:2]
-                          or lang)
+            # THREE READINGS OF ONE FIELD, NOT TWO. «ar»/«en» name a language;
+            # «any» used to switch the whole preference OFF — but a reader who
+            # asks for «مراجع عربية وإنجليزية» is asking for BOTH to be present,
+            # which is the opposite of not caring. And when the model says
+            # nothing at all, the document's own language is the only sensible
+            # reading — the extra query already assumed that; the ranking did
+            # not, so half the mechanism ran.
+            _rl_raw = str(card.get("refs_lang_target") or "").strip().lower()
+            _other = "en" if lang == "ar" else "ar"
+            if _rl_raw in ("any", "all", "both", "mixed", "ar+en", "en+ar"):
+                _want_langs = [lang, _other]          # both, in turn
+            elif _rl_raw[:2] in ("ar", "en"):
+                _want_langs = [_rl_raw[:2]]
+            else:
+                _want_langs = [lang]                  # silent → the document's
+            card["refs_lang_plan"] = list(_want_langs)
+            _want_lang = _want_langs[0]
             if (_want_lang and _wr and query
                     and (os.environ.get("WEAVER_LANG_QUERY", "1")
                          or "1").strip() not in ("0", "false", "no")):
-                _native = query if _want_lang == lang else None
+                # search in the user's own words whenever their language is one
+                # of the targets — for «both» that is always true.
+                _native = query if lang in _want_langs else None
                 if _native and _native.strip() != (_q or "").strip():
                     try:
                         _more = self._scholarly_search(
@@ -4851,8 +4868,20 @@ class WeaverOrchestrator:
             # within it, a work in the language the user asked for comes first,
             # so a nine-item list is filled with Arabic work before it reaches
             # for English — «قدر الإمكان» made mechanical instead of hoped for.
-            _wl = str(card.get("refs_lang_target") or "").lower()[:2]
-            if _wl and _wl not in ("an", "al"):
+            _plan = list(card.get("refs_lang_plan") or [])
+            if len(_plan) >= 2:
+                # BOTH: take turns, so a nine-item list cannot come back in one
+                # language because that language happened to rank higher.
+                results = _wr.interleave_by_lang(results, _plan)
+                _cnt = {w: sum(1 for r in results
+                               if str(r.get("lang") or "").lower().startswith(w))
+                        for w in _plan}
+                self._record_decision(
+                    card, "ترتيب لغة المراجع",
+                    "تناوبٌ بين " + "، ".join(f"{w}={_cnt[w]}" for w in _plan),
+                    "measured", "بحث أكاديمي")
+            elif _plan:
+                _wl = _plan[0]
                 _idx = {id(r): i for i, r in enumerate(results)}
                 results = sorted(
                     results,
@@ -5002,7 +5031,9 @@ class WeaverOrchestrator:
                     card, "تغطية جوانب الموضوع",
                     "لم يُعثَر على مرجعٍ يتناول أيّاً من جوانب الموضوع كما "
                     "حدّدها النموذج: " + "، ".join(_fc[:3]))
-        _tl = str(card.get("refs_lang_target") or "").lower()
+        _tl = str((card.get("refs_lang_plan") or [""])[0]
+                  if len(card.get("refs_lang_plan") or []) == 1
+                  else "").lower()
         if _tl and _tl not in ("any", "all", ""):
             _in = sum(1 for r in results
                       if str(r.get("lang") or "").lower().startswith(_tl))

@@ -302,3 +302,36 @@ def same_page_across_sources(text, seen):
     if seen is not None:
         seen[key] = True
     return False
+
+
+# ── «بالعربية والإنجليزية» يعني الاثنتين، لا «لا يهمّني» ───────────────────
+def interleave_by_lang(items, langs, key="lang"):
+    """Round-robin the list across the requested languages.
+
+    A request for references «in Arabic AND English» used to be read as «any
+    language», which switched the preference OFF: the list then held whatever
+    the databases happened to rank highest, and a nine-item bibliography could
+    come back entirely in one language. «Both» is a guarantee of presence, not
+    an absence of preference — so the buckets take turns, each keeping its own
+    quality order, and a language with fewer works simply runs out later
+    instead of being crowded out at the start.
+
+    Anything whose language is unknown, or in neither bucket, follows at the
+    end in its original order — never dropped."""
+    items = list(items or [])
+    want = [str(l).lower()[:2] for l in (langs or []) if str(l).strip()]
+    if len(want) < 2 or not items:
+        return items
+    buckets = {w: [] for w in want}
+    rest = []
+    for it in items:
+        lg = str((it or {}).get(key) or "").lower()[:2]
+        (buckets[lg] if lg in buckets else rest).append(it)
+    out = []
+    i = 0
+    while any(buckets[w] for w in want):
+        w = want[i % len(want)]
+        if buckets[w]:
+            out.append(buckets[w].pop(0))
+        i += 1
+    return out + rest
