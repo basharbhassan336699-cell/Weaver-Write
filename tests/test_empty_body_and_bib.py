@@ -161,6 +161,38 @@ chk("والأقسام الفارغة تُعدّ وتُسجَّل", "_empty_secs"
 chk("وعدد الكلمات يُعلَن مع عدد الأقسام", "كلمة" in _src6 and "صياغة:" in _src6)
 
 print("\n" + "═" * 70)
+print(" ٧) حين يرفض المزوّد: يُقال بصوتٍ عالٍ، لا يُخرَج هيكلٌ ويُقال «تمّ»")
+print("═" * 70)
+# التشغيل: «فشل النداء: صياغة استعلام البحث — HTTPError: HTTP Error 403:
+# Forbidden»، و«فرز المراجع — 403»، و14 قسماً بلا نص، و28 كلمة متن.
+# كلُّ طبقةٍ ابتلعت فشلها وتراجعت إلى بديلٍ، فمشى المسار كلُّه بلا نموذج.
+from core.llm import (record_provider_error, provider_refusal_summary,
+                      clear_provider_errors, PROVIDER_REFUSAL_CODES)
+clear_provider_errors()
+chk("بلا رفضٍ ⟶ لا شيء يُقال", provider_refusal_summary() == "")
+for _ in range(14):
+    record_provider_error(403, "Forbidden", "call")
+_sum = provider_refusal_summary()
+chk("وبعد 403 ⟶ سببٌ صريحٌ وعددٌ", "403" in _sum and "14" in _sum, _sum)
+chk("ويُسمّى الرصيد حين 402",
+    (clear_provider_errors() or record_provider_error(402, "", "call")
+     or "الرصيد" in provider_refusal_summary()))
+clear_provider_errors()
+record_provider_error(429, "", "call")
+chk("وحدُّ النداءات حين 429", "429" in provider_refusal_summary())
+chk("و400 ليست رفضاً من المزوّد", 400 not in PROVIDER_REFUSAL_CODES)
+clear_provider_errors()
+chk("والمسح يُعيد الحالة نظيفة", provider_refusal_summary() == "")
+
+_src6 = inspect.getsource(W._layer_6)
+chk("والمسار يقرأ الرفض", "_provider_refusal()" in _src6)
+chk("ويضع لافتةً في أوّل المستند", "لم يُكتب محتوى هذا المستند" in _src6)
+chk("ويتوقّف عن النداءات المرفوضة بدل إضاعة الدقائق",
+    "_refused_now" in _src6)
+_src3 = inspect.getsource(W._layer_3)
+chk("وكلُّ تشغيلٍ يبدأ بسجلٍّ نظيف", "clear_provider_errors" in _src3)
+
+print("\n" + "═" * 70)
 print(" النتيجة: " + ("PASS ✅" if ok else "FAIL ❌"))
 print("═" * 70)
 sys.exit(0 if ok else 1)

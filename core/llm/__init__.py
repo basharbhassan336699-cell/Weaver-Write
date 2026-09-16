@@ -28,6 +28,64 @@ except Exception:  # pragma: no cover - fallback when run in-dir
     from config import keysync
 
 
+# ── WHEN THE PROVIDER ITSELF REFUSES ────────────────────────────────────────
+# A run came back with fourteen headings and 28 words of body. The cause was
+# not in any layer: every model call was returning «HTTP Error 403: Forbidden»
+# — an expired key, a spent balance, a model the account may not use. Each
+# call site caught the exception on its own and carried on with a fallback, so
+# the pipeline walked the whole way down with no model at all and exported a
+# shell with a green tick on every step. A refusal by the provider is not a
+# per-call hiccup to absorb; it is a fact about the WHOLE run, and something
+# has to remember it across call sites. This list is that memory: the layers
+# read it and say plainly that the document could not be written, instead of
+# each of them quietly degrading in its own corner.
+PROVIDER_REFUSAL_CODES = (401, 402, 403, 407, 429)
+_PROVIDER_ERRORS: list = []
+
+
+def record_provider_error(code, reason="", where=""):
+    """Remember a provider-level refusal. Bounded; never raises."""
+    try:
+        e = {"code": int(code), "reason": str(reason)[:200],
+             "where": str(where)[:80]}
+        _PROVIDER_ERRORS.append(e)
+        del _PROVIDER_ERRORS[:-50]
+    except Exception:
+        pass
+
+
+def provider_errors():
+    """The refusals seen so far in this process (oldest first)."""
+    return list(_PROVIDER_ERRORS)
+
+
+def clear_provider_errors():
+    """Start a fresh run with a clean slate."""
+    try:
+        _PROVIDER_ERRORS.clear()
+    except Exception:
+        pass
+
+
+def provider_refusal_summary():
+    """One short Arabic line naming the refusal, or "" when there was none."""
+    try:
+        errs = [e for e in _PROVIDER_ERRORS
+                if e.get("code") in PROVIDER_REFUSAL_CODES]
+        if not errs:
+            return ""
+        last = errs[-1]
+        c = last.get("code")
+        why = {401: "مفتاحٌ غير مقبول أو منتهٍ",
+               402: "الرصيد نفد",
+               403: "المزوّد رفض الطلب (مفتاح، أو رصيد، أو نموذجٌ غير متاح للحساب)",
+               407: "الوسيط يطلب استيثاقاً",
+               429: "تجاوزت حدّ النداءات"}.get(c, "رفضٌ من المزوّد")
+        return f"HTTP {c} — {why} ({len(errs)} نداءً مرفوضاً)"
+    except Exception:
+        return ""
+
+
 def _is_anthropic(provider: str, base: str) -> bool:
     """Anthropic uses /messages; detect from the provider name or base URL."""
     p = (provider or "").strip().lower()
@@ -388,6 +446,9 @@ def get_llm_fn():
                 try:
                     _r0 = urllib.request.urlopen(_req, timeout=_to)
                 except urllib.error.HTTPError as _he:
+                    if _he.code in PROVIDER_REFUSAL_CODES:
+                        record_provider_error(_he.code, getattr(_he, "reason", ""),
+                                              "stream")
                     if _he.code not in (400, 422):
                         raise
                     _nb = _drop_reasoning_and_retry()
@@ -476,6 +537,9 @@ def get_llm_fn():
             try:
                 _resp = urllib.request.urlopen(req, timeout=_to)
             except urllib.error.HTTPError as _he:
+                if _he.code in PROVIDER_REFUSAL_CODES:
+                    record_provider_error(_he.code, getattr(_he, "reason", ""),
+                                          "call")
                 if _he.code not in (400, 422):
                     raise
                 _nb = _drop_reasoning_and_retry()

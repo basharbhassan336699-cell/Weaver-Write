@@ -2729,6 +2729,13 @@ class WeaverOrchestrator:
         """٣: الفهم — تحليل المهمة وبناء بطاقتها ثم توجيه الأدوات/المهارات."""
         task.status = TaskStatus.LAYER_3
         mem.set_status(3, "تحليل المهمة")
+        # a refusal belongs to THIS run: start counting from zero, or a 403 from
+        # an earlier task in the same process would be blamed on this one
+        try:
+            from core.llm import clear_provider_errors
+            clear_provider_errors()
+        except Exception:
+            pass
 
         # ── YouTube link → dedicated transcript path, BEFORE the model. Builds a
         #    minimal card and returns early, so the video is summarized/
@@ -7264,6 +7271,26 @@ class WeaverOrchestrator:
                     mem.set_status(6, f"مهارة قسم (تخطّي: {e})")
                 if _spec:
                     body = _spec
+            # DO NOT SPEND MINUTES ON CALLS THAT ARE ALREADY BEING REFUSED.
+            # Once the provider has answered 403 and two sections have come
+            # back empty because of it, the remaining twelve calls will be
+            # refused too — they only cost the user time and make the failure
+            # look like slowness. The headings still ship, the refusal is
+            # reported once below, and the run ends in seconds instead of
+            # minutes. Any other kind of empty section is unaffected.
+            _refused_now = ""
+            if len(_empty_secs) >= 2:
+                _refused_now = self._provider_refusal()
+            if _refused_now:
+                if not card.get("_refusal_announced"):
+                    card["_refusal_announced"] = True
+                    mem.set_status(6, f"⛔ توقّف النداء: {_refused_now}")
+                out_sections.append({"heading": title, "body": "",
+                                     "level": max(1, min(int(
+                                         sec.get("level", 1) or 1), 4))})
+                parts.append(f"## {title}" if title else "")
+                _empty_secs.append(title)
+                continue
             if self.llm_fn and not body:
                 from pipeline import prompts as _p
                 _topic = card.get("topic", "") or task.description
@@ -7647,6 +7674,33 @@ class WeaverOrchestrator:
                     card, "كتابة المحتوى",
                     f"المتن {_wrote} كلمة لـ{len(_body_secs)} قسماً — أقلّ بكثير من "
                     f"أيّ مستندٍ مكتوب؛ النموذج لم يكتب المحتوى المطلوب")
+            # AND NAME THE REAL CAUSE WHEN IT IS THE PROVIDER. Fourteen empty
+            # sections and 28 words of body were not a writing problem: every
+            # model call was coming back «HTTP 403 Forbidden». Each layer
+            # absorbed its own failure and fell back, and the run finished with
+            # a tick on every step. A refusal by the provider is the headline,
+            # not a footnote — it goes on the card, into the note, and onto the
+            # first page of the document itself.
+            _ref = self._provider_refusal()
+            if _ref and (_empty_secs or (_body_secs
+                                         and _wrote < 60 * len(_body_secs))):
+                card["provider_refused"] = _ref
+                mem.set_status(6, f"⛔ المزوّد رفض النداءات: {_ref}")
+                self._skip_note(
+                    card, "اتّصال النموذج",
+                    f"{_ref} — ولهذا لم يُكتب المحتوى. الخلل في "
+                    "المفتاح أو الرصيد أو إتاحة النموذج للحساب، لا في الطلب "
+                    "ولا في النظام — أصلحه ثمّ أعد التشغيل")
+                # the document must SAY it, not look finished
+                _ban = ("> ⛔ **لم يُكتب محتوى هذا المستند.** رفض مزوّد "
+                        f"النموذج النداءات: {_ref}. "
+                        "العناوين وقائمة المراجع أدناه صحيحة، أمّا المتن فلم "
+                        "يُكتب لأن النموذج لم يستجب. تفقّدِ المفتاح والرصيد ثمّ "
+                        "أعد التشغيل.")
+                task.draft = _ban + "\n\n" + (task.draft or "")
+                out_sections.insert(0, {"heading": "", "body": _ban,
+                                        "level": 1})
+                task.sections = out_sections
             card["body_words"] = _wrote
             card["empty_sections"] = list(_empty_secs)
         except Exception:
@@ -9299,6 +9353,20 @@ class WeaverOrchestrator:
             return items, []
         except Exception:
             return sources, []
+
+    @staticmethod
+    def _provider_refusal():
+        """The provider-level refusal seen in this run, or "".
+
+        Reads the memory kept in core.llm: a 401/402/403/407/429 is a fact
+        about the WHOLE run, not a per-call hiccup each layer absorbs on its
+        own. Lazy and guarded — an older core.llm without it simply reports
+        nothing and behaviour is unchanged."""
+        try:
+            from core.llm import provider_refusal_summary
+            return provider_refusal_summary() or ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _requested_source_count(card):
