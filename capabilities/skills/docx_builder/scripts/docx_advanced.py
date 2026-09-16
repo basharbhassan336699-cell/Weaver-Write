@@ -47,6 +47,102 @@ def load_palette(theme_id="academic_navy"):
 
 
 # ── direction helpers ────────────────────────────────────────
+def _list_abstract_id(doc, style_name="List Number"):
+    """The abstractNumId that the given list STYLE points at, or None.
+
+    Every paragraph given style "List Number" inherits ONE numbering instance
+    from styles.xml, so Word keeps a single counter running for the whole
+    document: a list in one section ends at 5 and the next section's list
+    starts at 6. Restarting means pointing each list at its OWN w:num instance
+    over the SAME abstract definition — which keeps the numbering FORMAT
+    identical (same shape, same indents) and changes only where the count
+    begins. Never raises."""
+    try:
+        st = doc.styles[style_name].element
+        numId = None
+        pPr = st.find(qn("w:pPr"))
+        if pPr is not None:
+            numPr = pPr.find(qn("w:numPr"))
+            if numPr is not None:
+                nid = numPr.find(qn("w:numId"))
+                if nid is not None:
+                    numId = nid.get(qn("w:val"))
+        if numId is None:
+            return None
+        numbering = doc.part.numbering_part.element
+        for num in numbering.findall(qn("w:num")):
+            if num.get(qn("w:numId")) == str(numId):
+                a = num.find(qn("w:abstractNumId"))
+                if a is not None:
+                    return a.get(qn("w:val"))
+    except Exception:
+        return None
+    return None
+
+
+def new_list_numbering(doc, style_name="List Number"):
+    """Create a FRESH numbering instance over the list style's own abstract
+    definition and return its numId as a string, or None when the document has
+    no numbering part (then the caller simply keeps today's behaviour).
+
+    One call per list — not per item — so the items of one list share a counter
+    and the next list starts again at 1."""
+    try:
+        abs_id = _list_abstract_id(doc, style_name)
+        if abs_id is None:
+            return None
+        numbering = doc.part.numbering_part.element
+        used = set()
+        for num in numbering.findall(qn("w:num")):
+            v = num.get(qn("w:numId"))
+            try:
+                used.add(int(v))
+            except (TypeError, ValueError):
+                pass
+        new_id = (max(used) + 1) if used else 1
+        el = OxmlElement("w:num")
+        el.set(qn("w:numId"), str(new_id))
+        a = OxmlElement("w:abstractNumId")
+        a.set(qn("w:val"), str(abs_id))
+        el.append(a)
+        # A fresh w:num over the same abstract definition restarts the count in
+        # most Word builds, but only an explicit startOverride makes it certain
+        # across versions and across LibreOffice. Levels 0-2 cover the depths a
+        # generated document actually uses.
+        for _lvl in range(3):
+            ov = OxmlElement("w:lvlOverride")
+            ov.set(qn("w:ilvl"), str(_lvl))
+            so = OxmlElement("w:startOverride")
+            so.set(qn("w:val"), "1")
+            ov.append(so)
+            el.append(ov)
+        numbering.append(el)
+        return str(new_id)
+    except Exception:
+        return None
+
+
+def apply_list_numbering(par, num_id, level=0):
+    """Point ONE paragraph at a specific numbering instance. No-op on None, so
+    every call site degrades to the shared style numbering it used before."""
+    if not num_id:
+        return
+    try:
+        pPr = par._p.get_or_add_pPr()
+        numPr = pPr.find(qn("w:numPr"))
+        if numPr is None:
+            numPr = OxmlElement("w:numPr")
+            pPr.append(numPr)
+        for tag, val in (("w:ilvl", str(level)), ("w:numId", str(num_id))):
+            el = numPr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                numPr.append(el)
+            el.set(qn("w:val"), val)
+    except Exception:
+        pass
+
+
 def set_paragraph_rtl(paragraph):
     pPr = paragraph._p.get_or_add_pPr()
     if pPr.find(qn("w:bidi")) is None:
@@ -191,11 +287,21 @@ def add_page_numbers(section, lang="ar", text=""):
         p.add_run(text + "   ")
     # PAGE field
     run = p.add_run()
-    fldBegin = OxmlElement("w:fldChar"); fldBegin.set(qn("w:fldCharType"), "begin")
+    # A well-formed field: begin → instruction → separate → result → end, with
+    # dirty="true" so Word/LibreOffice recompute it on open. The field used to
+    # be written WITHOUT the separate/result region, which leaves a viewer with
+    # nothing to fall back on — some then render a literal "1" on every page
+    # instead of the real number.
+    fldBegin = OxmlElement("w:fldChar")
+    fldBegin.set(qn("w:fldCharType"), "begin")
+    fldBegin.set(qn("w:dirty"), "true")
     instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve")
-    instr.text = "PAGE"
+    instr.text = " PAGE   \\* MERGEFORMAT "
+    fldSep = OxmlElement("w:fldChar"); fldSep.set(qn("w:fldCharType"), "separate")
+    res = OxmlElement("w:t"); res.text = "1"
     fldEnd = OxmlElement("w:fldChar"); fldEnd.set(qn("w:fldCharType"), "end")
-    run._r.append(fldBegin); run._r.append(instr); run._r.append(fldEnd)
+    for _el in (fldBegin, instr, fldSep, res, fldEnd):
+        run._r.append(_el)
     if lang == "ar":
         set_paragraph_rtl(p)
 
@@ -250,7 +356,7 @@ def add_colored_heading(doc, text, level=1, lang="ar", theme_id="academic_navy",
     h = doc.add_heading("", level=level)
     h.alignment = WD_ALIGN_PARAGRAPH.RIGHT if lang == "ar" else WD_ALIGN_PARAGRAPH.LEFT
     run = h.add_run(text)
-    size = 18 if level == 1 else 15
+    size = {1: 18, 2: 15, 3: 13}.get(level, 12)
     _set_run_font(run, font or ("Kufyan Arabic" if lang == "ar" else "Times New Roman"),
                   size, pal["primary"], bold=True)
     if lang == "ar":
@@ -347,20 +453,47 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
     n = len(lines)
     buf = []
 
-    def _para(text, size=14, color=None, bold=False, style=None):
+    # ONE COUNTER PER LIST, NOT PER DOCUMENT. Every "List Number" paragraph used
+    # to inherit the single numbering instance named by the style, so Word ran
+    # one counter from the first list to the last: five items in one section,
+    # then the next section's list opening at 6, and the one after at 10. A list
+    # RUN here is a stretch of consecutive numbered lines; anything else between
+    # them (a heading, a paragraph, a table) ends it, and the next run gets a
+    # fresh instance over the same abstract definition — same look, new count.
+    _numbering = {"id": None, "open": False}
+
+    def _para(text, size=14, color=None, bold=False, style=None,
+              _cont=False):
         text = _strip_inline_md(text).strip()
         if not text:
-            return
+            return None
         p = doc.add_paragraph(style=style) if style else doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
         run = p.add_run(text)
         _set_run_font(run, font, size, color or pal["text"], bold=bold)
         if rtl:
             set_paragraph_rtl(p)
+        # A LIST IS NOT ENDED BY ITS OWN ANNOTATION. The rule «any paragraph
+        # between two items ends the list» was right for a heading or a new
+        # section, and wrong for the note that belongs to the item above it:
+        # the verification line under each reference («◐ مُتحقَّق من سجلّ…»)
+        # sits between them, so every reference became a list of one and the
+        # numbering read 1. 1. 1. — worse than the document-wide counter this
+        # was built to fix. A continuation paragraph is marked by its caller
+        # and leaves the run open.
+        if style != "List Number" and not _cont:
+            _numbering["open"] = False      # any other paragraph closes the run
+        return p
 
     def _flush():
         if buf:
-            _para(" ".join(x.strip() for x in buf))
+            # An INDENTED line straight after a numbered item is that item's
+            # own continuation — the annotation line under a reference, for
+            # instance — not a new paragraph that ends the list. Anything
+            # flush-left is a real paragraph and does end it.
+            _cont = bool(_numbering.get("open")
+                         and buf[0][:1].isspace())
+            _para(" ".join(x.strip() for x in buf), _cont=_cont)
             buf.clear()
 
     i = 0
@@ -370,6 +503,15 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         if "|" in line and i + 1 < n and _md_table_sep(lines[i + 1]):
             _flush()
             headers = _md_cells(line)
+            # A writer that starts the table on the SAME line as the prose above
+            # it turns that prose into the first header cell: a مبحث's 60-word
+            # bridge shipped as a table heading beside «المصطلح التقني», and the
+            # bridge vanished from the body. A header cell is a label — measured
+            # across a real run, genuine ones ran 2–4 words — so a leading cell
+            # carrying a sentence is prose that belongs above the table, and is
+            # emitted as its own paragraph instead of being swallowed.
+            while len(headers) > 1 and len(headers[0].split()) >= 12:
+                _para(headers.pop(0))
             ncol = len(headers)
             i += 2
             rows = []
@@ -400,6 +542,22 @@ def _add_body_markdown(doc, body, lang, theme_id, font):
         if mb:
             _flush()
             _para(mb.group(1), style="List Bullet")
+            i += 1
+            continue
+        # NUMBERED list item ("1. …"). Without this, consecutive numbered lines
+        # were treated as Markdown soft-wrap and joined into ONE paragraph —
+        # which is what glued a whole 9-entry reference list into a single
+        # unreadable block.
+        mn = re.match(r"^\s*\d{1,3}[.)]\s+(.*)$", line)
+        if mn:
+            _flush()
+            if not _numbering["open"]:
+                _numbering["id"] = new_list_numbering(doc)
+                _numbering["open"] = True
+            _np = _para(mn.group(1), style="List Number")
+            _numbering["open"] = True       # _para closes it only for others
+            if _np is not None:
+                apply_list_numbering(_np, _numbering["id"])
             i += 1
             continue
         # a whole table glued onto ONE line (rows joined by '||') → un-glue it
@@ -445,6 +603,11 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     sec = doc.sections[0]
 
     # ── cover page (mandatory unless suppressed) + TOC placement ──
+    # Track what the front-matter path adds, so the LEGACY title/TOC blocks
+    # below don't add a SECOND cover and a SECOND table of contents (which is
+    # what produced a duplicated cover plus blank pages after it).
+    _fm_cover = False
+    _fm_toc = False
     try:
         import sys, os
         here = os.path.dirname(os.path.abspath(__file__))
@@ -454,6 +617,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                                       should_add_cover, resolve_toc_position)
         _card = {"no_cover": (not cover) if cover is not None else False}
         if cover and should_add_cover(_card):
+            _fm_cover = True
             cinfo = cover if isinstance(cover, dict) else {}
             add_cover_page(doc, title, lang=lang, theme_id=theme_id, font=font,
                            institution=cinfo.get("institution", ""),
@@ -465,7 +629,20 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         _toc_pos = resolve_toc_position({"toc": toc,
                                          "toc_position": toc_position})
         if _toc_pos == "after_cover":
-            add_toc_page(doc, lang=lang, theme_id=theme_id, font=font)
+            # estimate where each heading lands and bake it into the field's
+            # cached result, so the contents page is readable in viewers that
+            # never compute Word fields
+            _entries = None
+            try:
+                from docx_frontmatter import estimate_toc_entries
+                _fm_pages = 1 + (1 if cover else 0)
+                _entries, _ = estimate_toc_entries(sections, lang,
+                                                   start_page=_fm_pages + 1)
+            except Exception:
+                _entries = None
+            add_toc_page(doc, lang=lang, theme_id=theme_id, font=font,
+                         entries=_entries)
+            _fm_toc = True
     except Exception:
         pass
 
@@ -474,14 +651,19 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     if page_numbers:
         add_page_numbers(sec, lang, "صفحة " if rtl else "Page ")
 
-    # title
-    tp = doc.add_paragraph()
-    tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    trun = tp.add_run(title)
-    _set_run_font(trun, font, 24, load_palette(theme_id)["primary"], bold=True)
-    if rtl:
-        set_paragraph_rtl(tp)
-    if subtitle:
+    # title — skipped when a cover page already carries it (otherwise the
+    # title printed twice and read as a second cover page)
+    if _fm_cover:
+        tp = None
+    else:
+        tp = doc.add_paragraph()
+        tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        trun = tp.add_run(title)
+        _set_run_font(trun, font, 24, load_palette(theme_id)["primary"],
+                      bold=True)
+        if rtl:
+            set_paragraph_rtl(tp)
+    if subtitle and not _fm_cover:
         sp = doc.add_paragraph()
         sp.alignment = WD_ALIGN_PARAGRAPH.CENTER
         srun = sp.add_run(subtitle)
@@ -489,7 +671,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         if rtl:
             set_paragraph_rtl(sp)
 
-    if toc:
+    if toc and not _fm_toc:
         doc.add_page_break()
         add_toc(doc, lang, font)
         doc.add_page_break()
@@ -501,7 +683,16 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     # sections
     for s in sections:
         if s.get("heading"):
-            add_colored_heading(doc, s["heading"], 1, lang, theme_id, font)
+            # Honour the section's own LEVEL (1=مبحث, 2=مطلب, 3=تقسيم) so the
+            # document shows a real hierarchy. Previously every heading was
+            # forced to Heading1, which made a مطلب look identical to the
+            # مبحث above it and flattened the whole outline (and the TOC).
+            try:
+                _lv = int(s.get("level", 1) or 1)
+            except Exception:
+                _lv = 1
+            add_colored_heading(doc, s["heading"], max(1, min(_lv, 4)),
+                                lang, theme_id, font)
         if s.get("body"):
             # Render the body as real paragraphs + native tables (not one glued
             # run). This is what makes a Markdown table in the body show as a
@@ -535,8 +726,10 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
     if references:
         add_colored_heading(doc, "المراجع" if rtl else "References", 1,
                             lang, theme_id, font)
+        _ref_num = new_list_numbering(doc)
         for ref in references:
             rp = doc.add_paragraph(style="List Number")
+            apply_list_numbering(rp, _ref_num)
             rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT if rtl else WD_ALIGN_PARAGRAPH.LEFT
             rrun = rp.add_run(ref)
             _set_run_font(rrun, font, 12, load_palette(theme_id)["text"])
@@ -552,6 +745,21 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
                         page_break_after=False)
     except Exception:
         pass
+
+    # A Word TOC is a FIELD: it renders blank until the fields are refreshed,
+    # which is why the contents page looked like an empty page. Ask Word to
+    # update fields when the document is opened so it fills itself in.
+    if toc:
+        try:
+            from docx.oxml.ns import qn
+            from docx.oxml import OxmlElement
+            _st = doc.settings.element
+            if _st.find(qn("w:updateFields")) is None:
+                _uf = OxmlElement("w:updateFields")
+                _uf.set(qn("w:val"), "true")
+                _st.append(_uf)
+        except Exception:
+            pass
 
     doc.save(output_path)
     return output_path

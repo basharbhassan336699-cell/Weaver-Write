@@ -335,7 +335,88 @@ class WeaverOrchestrator:
         "اكتب موضوع", "اعمل بحث", "أعد بحث", "اعد بحث", "حضّر بحث", "حضر بحث",
         "جهّز بحث", "بحثاً كاملاً", "بحث كامل", "بحثا كاملا",
         "write a research", "write an essay", "write a report", "write a paper",
-        "full research", "research paper")
+        "full research", "research paper",
+        # «بالكامل» IS NOT «كاملاً». The list held the second and the user
+        # wrote the first, so a request that says «أريد بحثاً بالكامل» in
+        # plain Arabic was not recognised as a request to write one — the same
+        # letter-for-letter miss as «جدول» against «جداول». Added here for the
+        # exact phrasings; the structural reading below is what stops the NEXT
+        # phrasing nobody thought of.
+        "بحثاً بالكامل", "بحثا بالكامل", "بحث بالكامل",
+        "البحث بالكامل", "بحثاً كاملا", "بحثا كاملاً",
+        "بحثاً متكاملاً", "بحثا متكاملا", "بحث متكامل",
+        "دراسة كاملة", "دراسة بالكامل", "مقال كامل", "تقرير كامل",
+        "full paper", "complete research", "complete paper", "entire research",
+        "whole research", "in full")
+
+    @staticmethod
+    def _full_document_marks(text):
+        """The EVIDENCE in a request that only a WHOLE DOCUMENT can carry.
+
+        `_WRITE_FULL_MARK` is a phrase list, and a phrase list holds only the
+        phrasings somebody thought of. It held «بحثاً كاملاً»; the user wrote
+        «بحثاً بالكامل» — not the same letters — so `writing` came back
+        False, the SOFT cue «هيكلة» went unopposed, and a request for a full
+        piece of research became an outline: one section written, the academic
+        search never run, nothing verified, and thirteen references recalled
+        from the model's own memory in place of the nine that were asked to be
+        fetched and checked. One gate, and the whole chain behind it fell.
+
+        The phrasing of a verb is the weakest signal there is. What a request
+        CANNOT be is far more certain: nobody asks for a headings-only outline
+        AND «10 إلى 12 صفحة» AND «9 مراجع بأسلوب APA» AND a cover page AND an
+        index. This reads those structural asks — the same reasoning
+        `_deliverable_contradicted` applies to the model's typed checklist,
+        applied here to the USER'S OWN WORDS, so it stands even when the model
+        says nothing at all. Last time the model's `full_document` judgement
+        rescued this request; a safeguard that depends on the model having an
+        opinion is not a safeguard.
+
+        Deliberately conservative: a substantial length ALONE never counts — an
+        outline may legitimately be asked for «في ثلاث صفحات» — and neither
+        does one lone ask. It must be a real length JOINED by something an
+        outline never carries. Returns the reasons found, empty when the
+        evidence does not reach that bar. Never raises."""
+        try:
+            _W = WeaverOrchestrator
+            t = " " + (text or "").lower() + " "
+            marks = []
+            lt = _W.extract_length_target(text) or {}
+            _pg = int(lt.get("pages") or lt.get("max_pages") or 0)
+            _wd = int(lt.get("words") or lt.get("max_words") or 0)
+            _long = _pg >= 5 or _wd >= 1500
+            import re as _re
+            if _re.search(r"\d{1,3}\s*(?:مراجع|مرجعاً|مرجعا|مرجع|مصادر|"
+                          r"مصدراً|مصدرا|مصدر|دراسات|references?|sources?)", t):
+                marks.append("عددُ مراجعٍ مطلوب")
+            try:
+                if _W._requested_citation_style(text):
+                    marks.append("نمطُ توثيقٍ مطلوب")
+            except Exception:
+                pass
+            if any(k in t for k in ("صفحة غلاف", "غلاف", "cover page",
+                                    "title page")):
+                marks.append("صفحةُ غلاف")
+            try:
+                if _W._wants_toc(text):
+                    marks.append("فهرس")
+            except Exception:
+                pass
+            try:
+                if _W._wants_table(text):
+                    marks.append("جداول")
+            except Exception:
+                pass
+            if any(k in t for k in ("خاتمة", "توصيات", "نتائج وتوصيات",
+                                    "conclusion", "recommendations")):
+                marks.append("خاتمةٌ أو توصيات")
+            if not _long or len(marks) < 2:
+                return []
+            marks.insert(0, (f"طولٌ مطلوب: {_pg} صفحة" if _pg
+                             else f"طولٌ مطلوب: {_wd} كلمة"))
+            return marks
+        except Exception:
+            return []
 
     @staticmethod
     def _task_scopes(text):
@@ -347,7 +428,17 @@ class WeaverOrchestrator:
         request is NOT a full-document write (so composites like "مراجع وهيكلة
         فقط" work, and "اكتب بحثاً + مراجع" stays a full research)."""
         t = " " + (text or "").lower() + " "
-        writing = any(k in t for k in WeaverOrchestrator._WRITE_FULL_MARK)
+        # A LIMITING SCOPE IS A CLAIM ABOUT WHAT THE USER DOES **NOT** WANT, and
+        # the soft cues make it from a single descriptive word. «الهيكلة مكونة
+        # من ثلاثة مباحث» DESCRIBES the structure the document must have; it
+        # does not ask for a structure INSTEAD of a document. The phrase list
+        # was the only thing standing against it, and it missed «بالكامل».
+        # Now the request's own structural asks answer it too — see
+        # _full_document_marks — so the next unlisted phrasing costs nothing.
+        # The «فقط»/"only" forms below are untouched: they fire unconditionally,
+        # because there the user HAS said what they do not want.
+        writing = any(k in t for k in WeaverOrchestrator._WRITE_FULL_MARK) \
+            or bool(WeaverOrchestrator._full_document_marks(text))
         scopes = set()
 
         # ── references / sources / prior studies ──
@@ -427,6 +518,74 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
+    def _deliverable_contradicted(requirements, deliverable=None):
+        """Is a LIMITING deliverable (outline/references/plan/part) contradicted
+        by the model's own requirements checklist? Returns a short Arabic reason
+        or None.
+
+        This is not keyword matching: it reads the TYPED fields the model itself
+        produced (`kind` + numeric `target`) and asks whether they can coexist
+        with a headings-only / sources-only deliverable. A real outline request
+        carries no page target, no word target and no source count — so when any
+        of those is present as a MUST, the limiting judgement is inconsistent with
+        the very checklist that accompanies it. Used in ONE safe direction only:
+        toward the fuller deliverable. Never raises."""
+        try:
+            _dv = str(deliverable or "").lower()
+            # A SOURCE COUNT CONTRADICTS AN OUTLINE, NOT A REFERENCE LIST.
+            # «أوجد ٩ مراجع لموضوع كذا» carries kind=source target=9 — which is
+            # the request itself, not evidence against it. Counting it as a
+            # contradiction turned a nine-line bibliography into a fifteen-
+            # section document: work the user never asked for, paid for by the
+            # token. The same reading also tends to echo that 9 back as a length
+            # target, so for a reference list a length equal to the source count
+            # is the same number read twice, not a second independent signal.
+            _refs = (_dv == "references")
+            _src_targets = set()
+            if _refs:
+                for r in (requirements or []):
+                    if isinstance(r, dict) and str(r.get("kind") or "").lower() \
+                            == "source":
+                        _t = r.get("target")
+                        if isinstance(_t, int) and not isinstance(_t, bool):
+                            _src_targets.add(_t)
+            hits = []
+            for r in (requirements or []):
+                if not isinstance(r, dict) or not r.get("must", True):
+                    continue
+                kind = str(r.get("kind") or "").lower()
+                tgt = r.get("target")
+                num = tgt if isinstance(tgt, int) and not isinstance(tgt, bool) \
+                    else None
+                # a length ask (pages/words) is impossible for a bare outline
+                if kind == "length" and (num or 0) >= 3:
+                    if _refs and num in _src_targets:
+                        continue          # the source count read twice
+                    hits.append(f"طول مطلوب: {num}")
+                # several sources to document belong to a written document —
+                # unless the deliverable IS the source list
+                elif kind == "source" and (num or 0) >= 3:
+                    if _refs:
+                        continue
+                    hits.append(f"مصادر مطلوبة: {num}")
+                # depth of structure: sub-sections under sections (e.g. مطالب
+                # inside مباحث) describe a document's body, not a heading list
+                elif kind == "structure" and (num or 0) >= 2:
+                    hits.append(f"بنية مفصّلة: {num}")
+            # one signal alone can be a coincidence; two independent ones cannot
+            uniq = {h.split(":")[0] for h in hits}
+            if len(uniq) >= 2:
+                return "، ".join(hits[:3])
+            # a length ask on its own is already decisive: an outline has no
+            # page count, so this single signal settles it
+            for h in hits:
+                if h.startswith("طول مطلوب"):
+                    return h
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
     def _task_action(text):
         """Detect an ACTION performed on EXISTING/PREVIOUS content rather than a
         fresh research: 'rewrite' | 'summarize' | 'translate' | 'convert' |
@@ -458,10 +617,32 @@ class WeaverOrchestrator:
                    "بصياغة أفضل", "بأسلوب أكاديمي", "بلغة أبسط", "أعد صياغة الملف",
                    "reword", "rephrase", "rewrite", "paraphrase", "humanize",
                    "improve wording", "improve the writing")
+        # A LANGUAGE IS NOT A VERB, AND A STYLE IS NOT AN ORDER TO REDO.
+        # «بالعربي» sits inside «بالعربية» letter for letter, so «بالعربية
+        # وبأسلوب أكاديمي» — a statement of which language to WRITE IN — came
+        # back as "translate" on a request to write a new piece of research;
+        # and «بأسلوب أكاديمي» in the rewrite list read a style for new
+        # writing as an order to rewrite something. Both entries describe the
+        # OUTPUT of fresh writing, while this detector's whole subject, by its
+        # own docstring, is an action on content that ALREADY EXISTS. So those
+        # bare ones now count only when the sentence actually points at existing
+        # content — a translation or rewriting VERB, or a demonstrative
+        # reference to a text or file already in hand. Every other entry in the
+        # lists behaves exactly as before.
+        _bare = ("بالإنجليزي", "بالانجليزي", "بالعربي", "in english",
+                 "into english", "into arabic", "to arabic", "to english",
+                 "بأسلوب أكاديمي")
+        _onhand = ("ترجم", "translate", "هذا النص", "هذا الملف", "النص التالي",
+                   "الملف المرفق", "المرفق", "الناتج السابق", "ما سبق",
+                   "أعد صياغة", "اعد صياغة", "أعد كتابة", "اعد كتابة",
+                   "this text", "this file", "the attached", "rewrite",
+                   "reword", "rephrase", "paraphrase")
+        _has_onhand = any(v in t for v in _onhand)
         for name, kws in (("edit", edit), ("convert", convert),
                           ("translate", translate), ("summarize", summarize),
                           ("rewrite", rewrite)):
-            if any(k in t for k in kws):
+            if any(k in t for k in kws
+                   if (k not in _bare or _has_onhand)):
                 return name
         return None
 
@@ -470,12 +651,46 @@ class WeaverOrchestrator:
         """True when the user wants a TABLE inserted into the document (distinct
         from an Excel FILE, which is a format)."""
         t = " " + (text or "").lower() + " "
-        return any(k in t for k in (
-            "أدرج جدول", "ادرج جدول", "أضف جدول", "اضف جدول", "اعمل جدول",
-            "ضع جدولاً", "ضع جدول", "رتّبه في جدول", "رتبه في جدول",
-            "في جدول", "على شكل جدول", "بشكل جدول", "جدول يوضّح", "جدول مقارنة",
-            "جدولاً", "insert a table", "add a table", "in a table",
-            "as a table", "tabulate", "comparison table"))
+        if any(k in t for k in (
+                "أدرج جدول", "ادرج جدول", "أضف جدول", "اضف جدول", "اعمل جدول",
+                "ضع جدولاً", "ضع جدول", "رتّبه في جدول", "رتبه في جدول",
+                "في جدول", "على شكل جدول", "بشكل جدول", "جدول يوضّح", "جدول مقارنة",
+                "جدولاً", "insert a table", "add a table", "in a table",
+                "as a table", "tabulate", "comparison table")):
+            return True
+        # THE PLURAL IS NOT A SUBSTRING OF THE SINGULAR. The list held «أدرج
+        # جدول» and the user wrote «أدرج جداول للمصطلحات التقنية» — and
+        # «جدول» is not inside «جداول» letter for letter, so the fallback
+        # answered False to a sentence that says «insert tables» in plain Arabic.
+        # When the model then said nothing either, the whole table chain died at
+        # its first gate: want_table unset, table_budget unset, no directive, no
+        # table — for a request that named them outright. A phrase list can only
+        # ever hold the phrasings somebody thought of, so this reads the SENTENCE
+        # instead: the WORD for a table, in any of its forms and with any of its
+        # prefixes, standing next to an instruction to put one in. «جدول
+        # المحتويات» is the index and «جدول زمني» is a schedule — neither is a
+        # data table — so both are removed before the reading, and the Excel
+        # FILE sense stays where it was, a format and not an insertion.
+        try:
+            import re as _re
+            _s = t
+            for _n in ("جدول المحتويات", "جدول محتويات",
+                       "جدول الأعمال", "جدول أعمال", "جدول زمني",
+                       "جدولاً زمنياً", "table of contents", "timetable"):
+                _s = _s.replace(_n, " ")
+            _noun = _re.search(
+                r"(?:\A|\s|\W)(?:ال|بال|وال|كال|فال|لل|ب|و|ف|ل)?"
+                r"(?:جداول|جدولين|جدولاً|جدولا|جدول|tables|table)\b", _s)
+            if _noun and any(v in _s for v in (
+                    "أدرج", "ادرج", "أضف", "اضف", "ضع", "اعمل", "أنشئ",
+                    "انشئ", "اصنع", "قدّم", "قدم", "اعرض", "رتّب", "رتب",
+                    "مع ", "تتضمن", "يتضمن", "تشمل", "يشمل", "بها ",
+                    "فيها ", "insert", "add ", "include", "provide", "present",
+                    "with ", "show ")):
+                return True
+        except Exception:
+            pass
+        return False
 
     @staticmethod
     def _wants_chart(text):
@@ -501,6 +716,100 @@ class WeaverOrchestrator:
             "find data", "gather data", "data about", "statistics about",
             "numbers about", "extract data", "data from"))
 
+    # documentation styles the pipeline can actually format. These are proper
+    # NOUNS the user types literally ("APA"), not something to be inferred, so
+    # matching them by name is exact — not the keyword-guessing we removed.
+    _CITATION_STYLES = {
+        "APA": ("apa", "أيه بي أيه", "ابا"),
+        "MLA": ("mla", "إم إل إيه"),
+        "CHICAGO": ("chicago", "شيكاغو"),
+        "HARVARD": ("harvard", "هارفارد"),
+        "IEEE": ("ieee", "آي تريبل إي"),
+        "VANCOUVER": ("vancouver", "فانكوفر"),
+    }
+
+    @classmethod
+    def _enrich_sources_for_citation(cls, sources, timeout=8, cap=10):
+        """Fill in real authors/year/journal for sources that carry a DOI, by
+        asking Crossref. Runs ONLY when the user asked for a documentation
+        style — a proper APA/MLA entry cannot be built from {title, url}, which
+        is all a web result carries. Bounded (cap + short timeout), fully
+        guarded, and it never overwrites a field that is already known.
+        Returns how many sources were enriched."""
+        import json as _json
+        done = 0
+        for s in (sources or []):
+            if done >= cap:
+                break
+            if not isinstance(s, dict) or s.get("authors") or s.get("author"):
+                continue
+            doi = str(s.get("doi") or "").strip()
+            if not doi:
+                continue
+            try:
+                raw = cls._http_get(
+                    "https://api.crossref.org/works/"
+                    + doi.replace(" ", ""),
+                    {"User-Agent": cls._ACAD_UA, "Accept": "application/json"},
+                    timeout)
+                msg = (_json.loads(raw) or {}).get("message") or {} if raw else {}
+            except Exception:
+                continue
+            if not msg:
+                continue
+            auths = []
+            for a in (msg.get("author") or [])[:6]:
+                nm = " ".join(x for x in (a.get("family"), a.get("given")) if x)
+                if nm.strip():
+                    auths.append(nm.strip())
+            if auths:
+                s["authors"] = auths
+            yr = ((msg.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+            if yr and not s.get("year"):
+                s["year"] = str(yr)
+            ct = msg.get("container-title") or []
+            if ct and not s.get("venue"):
+                s["venue"] = ct[0]
+            done += 1
+        return done
+
+    @staticmethod
+    def _enrich_source(s):
+        """Mine a gathered source for the metadata a citation style needs.
+        Deterministic and offline: pulls a DOI out of the URL (…/10.21608/…),
+        a 4-digit year out of the DOI/URL/title, and leaves everything else
+        untouched. Never raises; unknown fields are simply absent."""
+        import re
+        if not isinstance(s, dict):
+            return s
+        url = str(s.get("url") or "")
+        title = str(s.get("title") or "")
+        if not s.get("doi"):
+            m = re.search(r'(10\.\d{4,9}/[^\s"\'<>?#]+)', url)
+            if m:
+                s["doi"] = m.group(1).rstrip('.,);')
+        if not s.get("year"):
+            # a year inside the DOI path ("…/mjaf.2024.259661") or the URL/title
+            for cand in (str(s.get("doi") or ""), url, title):
+                m = re.search(r'(?<!\d)(19[5-9]\d|20[0-4]\d)(?!\d)', cand)
+                if m:
+                    s["year"] = m.group(1)
+                    break
+        return s
+
+    @classmethod
+    def _requested_citation_style(cls, text):
+        """The documentation style the user asked for by NAME, or None.
+        Nothing ever extracted this from the request: citation_style was only
+        set by the layer-3 card (when the model happened to fill it in), so the
+        writing prompt received an EMPTY "Citation style:" line and the writer
+        invented its own citation format."""
+        t = " " + (text or "").lower() + " "
+        for style, names in cls._CITATION_STYLES.items():
+            if any(n in t for n in names):
+                return style
+        return None
+
     @staticmethod
     def _wants_cover(text):
         """True when the user explicitly asks for a cover / title page."""
@@ -518,6 +827,160 @@ class WeaverOrchestrator:
             "فهرس", "صفحة فهرس", "صفحة الفهرس", "فهرست", "جدول المحتويات",
             "قائمة المحتويات", "صفحة المحتويات", "جدول محتويات",
             "table of contents", " toc ", "with a toc", "index page"))
+
+    @staticmethod
+    def _requirements_directive(card=None, section_name: str = "",
+                                lang: str = "ar", tables_left=None) -> str:
+        """STAGE (ب) — turn the requirements checklist (from extract_requirements)
+        into a SHORT directive appended to a section's writing prompt, so every
+        section is written with the user's whole plan in view. Like the style
+        director, it is guidance the model APPLIES WHERE IT FITS — never forced,
+        and never imposed on a references list. Returns "" when there is no
+        checklist or nothing writing-relevant. Pure logic; never raises.
+
+        `tables_left` (optional) is how many tables the WHOLE document still has
+        room for. The table line used to be handed to every section
+        independently — with 43 sections that is 43 separate invitations, and a
+        run came back with 31 tables for one request for «جداول». The writer
+        cannot see the other sections, so "as needed" has to be told to it as a
+        document-level budget: how many remain, and to add one only when this
+        section's content is genuinely tabular. At 0 the invitation is dropped
+        entirely. None keeps the old unbounded wording (old callers unchanged)."""
+        reqs = (card or {}).get("requirements") or []
+        # THE RULE THE WRITER NEVER SAW. Fetched pages are other people's
+        # writing, and the writer was handed their full text as context with
+        # nothing said about reproducing it. The measurement in layer 6.6 counts
+        # the longest verbatim run afterwards; this is the instruction meant to
+        # make that count come back zero. It stands on its own: sources can be
+        # present with no requirements checklist at all, so it must survive the
+        # early returns below — but never on a references list, which is not
+        # prose and is generated, not written.
+        _copy_rule = ""
+        try:
+            if (card or {}).get("sources"):
+                _copy_rule = (
+                    "- ما تنقله من المصادر أعِد صياغته بأسلوبك أنت؛ ولا "
+                    "تقتبس حرفياً إلا نادراً وفي حدود خمس عشرة كلمة، "
+                    "ومرّةً واحدة من المصدر الواحد."
+                    if lang != "en" else
+                    "- Reword anything you take from the sources in your own "
+                    "words; quote verbatim only rarely, under fifteen words, "
+                    "and at most once from any one source.")
+        except Exception:
+            _copy_rule = ""
+        n = (section_name or "").lower()
+        if any(k in n for k in ("مراجع", "مصادر", "references", "bibliography")):
+            return ""
+        if not isinstance(reqs, list):
+            reqs = []
+        styles, contents, want_table = [], [], False
+        for r in reqs:
+            if not isinstance(r, dict):
+                continue
+            k = r.get("kind")
+            t = (r.get("text") or "").strip()
+            if not t:
+                continue
+            if k == "style":
+                styles.append(t)
+            elif k == "content":
+                contents.append(t)
+            elif k == "insert" and any(w in t.lower() for w in (
+                    "جدول", "جداول", "table")):   # match the plural «جداول» too
+                # keep the requirement's OWN wording: it says what the table must
+                # CONTAIN. Only the flag used to survive, and the writer then got
+                # a generic "a comparison or a set of terms" line — so a request
+                # for «جداول تحتوي المصطلحات التقنية وشرحها» came back as
+                # classification tables, exactly as that generic line asked.
+                want_table = t
+        # THE DECISION AND THE INSTRUCTION READ FROM TWO DIFFERENT PLACES, AND
+        # ONLY ONE OF THEM REACHED THE WRITER. `card["want_table"]` is what the
+        # model (or the user) decided, and layer 6 computes `table_budget` from
+        # it — but this directive, the ONLY line that ever tells a section to
+        # build a table, was read exclusively from a requirement filed under
+        # kind == "insert". A run asking for «أدرج جداول للمصطلحات التقنية
+        # وشرحها» came back with want_table=True, table_budget=3 and ZERO tables,
+        # because that one sentence had been filed as "content". A decision that
+        # does not reach its executor is not a decision: fall back to the flag,
+        # and recover the user's OWN wording from any requirement that mentions a
+        # table — whatever kind it was filed under — so the columns still match
+        # what was actually asked for.
+        if not want_table and (card or {}).get("want_table") \
+                and not (card or {}).get("tables_forbidden"):
+            for r in reqs:
+                if not isinstance(r, dict):
+                    continue
+                t = (r.get("text") or "").strip()
+                if t and any(w in t.lower()
+                             for w in ("جدول", "جداول", "table")):
+                    want_table = t
+                    break
+            else:
+                want_table = True
+        # «NO» IS ENFORCED HERE TOO, not merely recorded on the card.
+        if (card or {}).get("tables_forbidden"):
+            want_table = False
+        # the document's table budget is spent → stop inviting tables at all
+        if want_table and isinstance(tables_left, int) and tables_left <= 0:
+            want_table = False
+        if not (styles or contents or want_table):
+            return _copy_rule
+        if lang == "en":
+            lines = ["Request requirements to honour in THIS section (apply "
+                     "where they fit — never force):"]
+            if styles:
+                lines.append("- Keep to the requested style: "
+                             + "؛ ".join(styles) + ".")
+            if contents:
+                lines.append("- Make sure to cover, where relevant: "
+                             + "؛ ".join(contents) + ".")
+            if want_table:
+                _budget = ("" if not isinstance(tables_left, int) else
+                           f" The document has room for about {tables_left} "
+                           "more table(s) IN TOTAL — most sections need none, so "
+                           "add one here only if this section's content is "
+                           "genuinely tabular; otherwise write prose.")
+                lines.append(
+                    "- Tables were requested as: “" + str(want_table) + "”. "
+                    "Where this section's content fits THAT description, present "
+                    "it as a Markdown table (| … | … |) whose columns match what "
+                    "was asked for, instead of prose." + _budget
+                    if isinstance(want_table, str) else
+                    "- Where this section's content is a comparison or a set of "
+                    "terms/values, present it as a Markdown table (| … | … |) "
+                    "instead of prose." + _budget)
+            lines.append(_copy_rule)
+            return "\n".join(x for x in lines if x)
+        lines = ["متطلّبات الطلب التي تُراعى في هذا القسم (طبّقها حيث تناسب، "
+                 "دون إقحام):"]
+        if styles:
+            lines.append("- التزم بالأسلوب المطلوب: " + "؛ ".join(styles) + ".")
+        if contents:
+            lines.append("- احرص على تغطية ما يناسب هذا القسم مِن: "
+                         + "؛ ".join(contents) + ".")
+        if want_table:
+            _budget = ("" if not isinstance(tables_left, int) else
+                       f" وللمستند كله متّسعٌ لنحو {tables_left} جدولٍ إضافيّ "
+                       "فقط — ومعظم الأقسام لا تحتاج جدولاً أصلاً، فلا تضع "
+                       "جدولاً هنا إلا إذا كان محتوى هذا القسم جدوليّاً بطبعه؛ "
+                       "وإلا فاكتب نصّاً.")
+            lines.append(
+                "- الجداول مطلوبةٌ بنصّ المستخدم: «" + str(want_table) + "». "
+                "فحيث يناسب محتوى هذا القسم هذا الوصف بالتحديد، اعرضه في جدولٍ "
+                "بصيغة ماركداون (| … | … |) تكون أعمدته مطابقةً لما طُلب "
+                "(لا جدول تصنيفٍ أو مقارنةٍ عامّاً بدلاً منه)." + _budget
+                if isinstance(want_table, str) else
+                "- حين يكون محتوى هذا القسم مقارنةً أو مجموعةَ مصطلحاتٍ/قيَم، "
+                "اعرضه في جدولٍ بصيغة ماركداون (| … | … |) بدل السرد." + _budget)
+        # THE RULE THE WRITER NEVER SAW. Fetched pages are other people's
+        # writing, and the writer was handed their full text as context with
+        # nothing said about reproducing it. The measurement in layer 6.6 counts
+        # the longest verbatim run afterwards; this is the instruction that
+        # should make the count come back zero. Only when fetched sources are
+        # actually in play — a document written from the model's own knowledge
+        # has nothing to copy from.
+        lines.append(_copy_rule)
+        return "\n".join(x for x in lines if x)
 
     def _intent_router(self, request):
         """UNDERSTANDING FIRST: ask the connected model to read the user's own
@@ -560,9 +1023,23 @@ class WeaverOrchestrator:
         out["pages"] = _int(d.get("pages"))
         lang = str(d.get("language", "") or "").lower().strip()
         out["language"] = lang if lang in ("ar", "en") else None
-        out["wants_table"] = bool(d.get("wants_table"))
-        out["wants_chart"] = bool(d.get("wants_chart"))
+        # TRI-STATE, LIKE needs_sources BELOW. bool(None) is False, so a model
+        # that simply had no opinion about tables was recorded as having FORBIDDEN
+        # them — and once «no» became enforceable, that silence would have banned
+        # tables from every document. Only an explicit boolean is an answer.
+        def _tri(key):
+            v = d.get(key, None)
+            return v if isinstance(v, bool) else None
+        out["wants_table"] = _tri("wants_table")
+        out["wants_chart"] = _tri("wants_chart")
         out["wants_data"] = bool(d.get("wants_data"))
+        # the three decisions the plan now also carries
+        _sg = str(d.get("sourcing", "") or "").lower().strip()
+        out["sourcing"] = _sg if _sg in ("cited", "uncited", "none") else None
+        _cs = str(d.get("citation_style", "") or "").strip()
+        out["citation_style"] = (_cs if _cs and _cs.lower() not in
+                                 ("null", "none", "unspecified") else None)
+        out["recency"] = _tri("recency")
         # TRI-STATE (True / False / None): does the answer genuinely need EXTERNAL
         # sources (web/academic search)? None = the model didn't say, so behaviour
         # is unchanged (never coerce a missing key to False — that would strip
@@ -596,23 +1073,443 @@ class WeaverOrchestrator:
         except Exception:
             return default
 
+    def _deepen_structure(self, sections_plan, request, topic, unit, lang="ar"):
+        """Let the MODEL add a third level under each level-2 section, deciding
+        per section how many (possibly none) — which is exactly what «وكل مطلب
+        تقسيمات حسب ما يلزم» asks for. A fixed count cannot express «as needed»,
+        so this is the only honest way to honour it.
+
+        Returns a NEW plan with level-3 entries inserted, or the original plan
+        unchanged on any miss. Never raises, never removes a section."""
+        if not self.llm_fn or not sections_plan:
+            return sections_plan
+        try:
+            import os, json
+            from core.llm import extract_json
+            parents = [s for s in sections_plan
+                       if int(s.get("level", 1) or 1) == 2]
+            if not parents:
+                return sections_plan
+            titles = [str(s.get("title") or s.get("heading") or "")
+                      for s in parents]
+            listing = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(titles))
+            if lang == "en":
+                prompt = (
+                    "For each subsection below, propose the sub-subsections it "
+                    "genuinely needs — AS NEEDED: give an empty list for a "
+                    "subsection that reads better undivided. Return JSON only:\n"
+                    '{"subs":[{"index":1,"titles":["…","…"]}]}\n'
+                    f"Topic: {topic}\nRequest: {(request or '')[:500]}\n"
+                    f"Subsections:\n{listing}\n"
+                    "At most 4 per subsection; specific topical titles, never "
+                    "empty labels; no numbering in the titles.")
+            else:
+                prompt = (
+                    f"لكل قسمٍ فرعيّ أدناه، اقترح «{unit}» التي يحتاجها فعلاً — "
+                    "حسب ما يلزم: أعطِ قائمةً فارغة للقسم الذي يُقرأ أفضل بلا "
+                    "تقسيم. أعِد JSON فقط:\n"
+                    '{"subs":[{"index":1,"titles":["…","…"]}]}\n'
+                    f"الموضوع: {topic}\nالطلب: {(request or '')[:500]}\n"
+                    f"الأقسام الفرعية:\n{listing}\n"
+                    "بحدٍّ أقصى ٤ لكل قسم؛ عناوين موضوعية محدّدة لا تسميات "
+                    "فارغة؛ وبلا ترقيمٍ في العنوان.")
+            try:
+                _to = int(os.environ.get("WEAVER_STRUCT_TIMEOUT", "60") or 60)
+            except Exception:
+                _to = 60
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.3,
+                              max_tokens=1400, timeout=_to) or ""
+            data = extract_json(raw)
+            subs = (data or {}).get("subs") if isinstance(data, dict) else None
+            if not isinstance(subs, list) or not subs:
+                return sections_plan
+            by_idx = {}
+            for e in subs:
+                if not isinstance(e, dict):
+                    continue
+                try:
+                    i = int(e.get("index"))
+                except (TypeError, ValueError):
+                    continue
+                ts = [str(x).strip()[:200] for x in (e.get("titles") or [])
+                      if str(x).strip()]
+                if 1 <= i <= len(parents) and ts:
+                    by_idx[i] = ts[:4]
+            if not by_idx:
+                return sections_plan
+            out, seen_parent = [], 0
+            for s in sections_plan:
+                out.append(s)
+                if int(s.get("level", 1) or 1) == 2:
+                    seen_parent += 1
+                    for t in by_idx.get(seen_parent, []):
+                        out.append({"key": "body", "title": t, "level": 3})
+            return out
+        except Exception:
+            return sections_plan
+
     @staticmethod
-    def _counted_structure(lang, n_mabhath, m_matlab):
-        """Build a plan of EXACTLY n مباحث, each with m مطالب, plus intro /
-        conclusion / references. Abstract labels here get descriptive names
-        later by _descriptive_titles. Honors an explicit "N مباحث × M مطالب"."""
+    def _counts_match(plan, units, mabhath_count, card=None):
+        """Does a structure the MODEL designed already satisfy the counts the
+        user asked for? Returns (bool, evidence).
+
+        Counting is all the code needs to do here. The model reads «أربعة أبواب،
+        كل باب ثلاثة أجزاء» perfectly well; taking its design away and rebuilding
+        empty slots was what produced «الباب 1» with no title. Intro / conclusion
+        / references are not body sections and are not counted. A level named
+        with NO count («تقسيمات حسب ما يلزم») is the model's to decide, so it is
+        satisfied by ANY amount, including none."""
+        try:
+            secs = [s for s in (plan or []) if isinstance(s, dict)]
+            if not secs:
+                return False, "لا بنية"
+
+            def _skip(t):
+                t = str(t or "")
+                return (WeaverOrchestrator._is_ref_heading(t)
+                        or any(w in t for w in ("المقدمة", "الخاتمة",
+                                                "Introduction", "Conclusion")))
+            tops = [s for s in secs if int(s.get("level", 1) or 1) == 1
+                    and not _skip(s.get("title") or s.get("heading"))]
+            subs = [s for s in secs if int(s.get("level", 1) or 1) == 2]
+            want = list(units or [])
+            if not want and mabhath_count:
+                want = [("مبحث", WeaverOrchestrator._as_int(mabhath_count, 0)),
+                        ("مطلب", WeaverOrchestrator._as_int(
+                            (card or {}).get("matlab_count"), 0))]
+                want = [(u, n) for u, n in want if n]
+            if not want:
+                return True, "بلا عددٍ مطلوب"
+            ev = f"{len(tops)} رئيسي · {len(subs)} فرعي"
+            if want[0][1] and len(tops) != want[0][1]:
+                return False, ev
+            if len(want) > 1 and want[1][1]:
+                if len(subs) != want[0][1] * want[1][1]:
+                    return False, ev
+            return True, ev
+        except Exception as e:
+            return False, f"{type(e).__name__}"
+
+    def _restructure_to_counts(self, request, topic, units, mabhath_count,
+                               card, lang="ar"):
+        """Hand the count mismatch BACK to the model and let it redesign, with
+        real topical titles. Only when this also fails does the code build a
+        skeleton. Returns a plan or None. Never raises."""
+        if not self.llm_fn:
+            return None
+        try:
+            import os
+            from core.llm import extract_json
+            shape = "، ".join(
+                f"{n} {u}" + ("" if n else " (بالعدد الذي تراه مناسباً)")
+                for u, n in (units or []) if u)
+            if not shape and mabhath_count:
+                shape = f"{mabhath_count} مبحث"
+            if lang == "en":
+                prompt = (
+                    "Redesign the document structure so it matches the counts "
+                    "the request states EXACTLY, keeping real topical titles "
+                    "(never empty labels like \"Chapter 1\"). Return JSON only:\n"
+                    '{"sections":[{"title":"…","level":1|2|3|4}]}\n'
+                    f"Required shape: {shape}\n"
+                    f"Topic: {topic}\nRequest: {(request or '')[:700]}\n"
+                    "Use the request's OWN unit words in the titles, add an "
+                    "introduction, a conclusion and a references section, and "
+                    "give every section a title that states its actual subject.")
+            else:
+                prompt = (
+                    "أعِد تصميم بنية المستند بحيث تطابق الأعداد المذكورة في "
+                    "الطلب بالضبط، مع عناوين موضوعية حقيقية (لا تسميات فارغة "
+                    "مثل «الباب 1»). أعِد JSON فقط:\n"
+                    '{"sections":[{"title":"…","level":1|2|3|4}]}\n'
+                    f"الشكل المطلوب: {shape}\n"
+                    f"الموضوع: {topic}\nالطلب: {(request or '')[:700]}\n"
+                    "استعمل مصطلحات الطلب نفسها في العناوين (الباب/الجزء/"
+                    "المبحث… كما قالها المستخدم)، وأضِف مقدمةً وخاتمةً وقائمة "
+                    "مراجع، واجعل لكل قسمٍ عنواناً يذكر موضوعه الفعليّ.")
+            try:
+                _to = int(os.environ.get("WEAVER_STRUCT_TIMEOUT", "60") or 60)
+            except Exception:
+                _to = 60
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.2,
+                              max_tokens=1600, timeout=_to) or ""
+            data = extract_json(raw)
+            secs = (data or {}).get("sections") if isinstance(data, dict) else None
+            if not isinstance(secs, list) or not secs:
+                return None
+            out = []
+            for s in secs:
+                if not isinstance(s, dict):
+                    continue
+                t = str(s.get("title", "")).strip()
+                if not t:
+                    continue
+                try:
+                    lv = int(s.get("level", 1))
+                except (TypeError, ValueError):
+                    lv = 1
+                out.append({"title": t[:200], "level": max(1, min(lv, 4))})
+            return out or None
+        except Exception:
+            return None
+
+    # ── the return channel: a decision line the WRITER appends to its section ──
+    # Every constraint the system used to impose was INJECTED into the prompt as
+    # silent text with no way back: the writer could not say "this section needs
+    # no table", and the system could not tell refusal from forgetting. Silence
+    # was read as consent, so flags could only ever be turned ON.
+    #
+    # The channel costs NOTHING: no extra call, no extra round trip. The writer
+    # is asked to end its reply with one JSON line, which is cut off here before
+    # anything else sees the text. If the line is absent, malformed, or the model
+    # ignored the instruction entirely, the caller behaves EXACTLY as it does
+    # today — absence is the current behaviour, never an error.
+    _DECISION_HEAD = ("### القرارات", "### DECISIONS", "###القرارات")
+
+    @classmethod
+    def _split_decisions(cls, text):
+        """Return (text_without_the_decision_line, decisions_dict).
+
+        The document must never contain the line, so the split happens the
+        moment the reply arrives. Returns ({} ) for decisions whenever anything
+        is missing or unreadable. Never raises."""
+        t = text or ""
+        try:
+            import json as _json
+            import re as _re
+            low = t
+            idx = -1
+            for h in cls._DECISION_HEAD:
+                j = low.rfind(h)
+                if j > idx:
+                    idx = j
+            if idx < 0:
+                return t, {}
+            head, tail = t[:idx], t[idx:]
+            m = _re.search(r"\{.*\}", tail, _re.S)
+            if not m:
+                return head.rstrip(), {}
+            try:
+                data = _json.loads(m.group(0))
+            except Exception:
+                return head.rstrip(), {}
+            if not isinstance(data, dict):
+                return head.rstrip(), {}
+            out = {}
+            for k, v in data.items():
+                k = str(k)[:40]
+                if isinstance(v, bool) or v is None:
+                    out[k] = v
+                elif isinstance(v, (int, float)):
+                    out[k] = v
+                elif isinstance(v, str):
+                    out[k] = v[:200]
+            return head.rstrip(), out
+        except Exception:
+            return t, {}
+
+    @classmethod
+    def _settle(cls, card, key, model_value, detector_value, where="",
+                explicit=None):
+        """WHO DECIDES, IN ONE PLACE. Three tiers, in this order:
+
+          1. the user said it OUTRIGHT  (explicit)  — nothing overrides that
+          2. the MODEL judged it        (model_value) — it read the request
+          3. a deterministic detector   (detector_value) — a backstop only
+
+        Seven decisions used to skip tier 2 entirely: a keyword list ran over
+        the raw text and WROTE ITS ANSWER ON TOP of the model's, so a request
+        the model had understood as research became a rewrite because one verb
+        matched, and a sourcing mode was stamped on every card whether the
+        model had an opinion or not. The lists are not the problem — running
+        them ABOVE the model is.
+
+        None means «no opinion» at every tier, and is passed over; False is an
+        ANSWER and is honoured. That distinction is what lets the model finally
+        say NO — until now a flag could only ever be switched on, so nobody,
+        not even the user, could ask for a document with no tables.
+
+        Returns the settled value and records who decided it."""
+        for val, by in ((explicit, "user"), (model_value, "model"),
+                        (detector_value, "fallback")):
+            if val is None:
+                continue
+            if isinstance(val, str) and not val.strip():
+                continue
+            try:
+                card[key] = val
+                cls._record_decision(card, key, val, by, where)
+            except Exception:
+                pass
+            return val
+        return None
+
+    @staticmethod
+    def _record_decision(card, key, value, by, where=""):
+        """One ledger of WHO decided WHAT: "user" (they said it), "measured"
+        (counted), "model" (it judged), "fallback" (a template was used because
+        nothing else was available). Surfaced at the end so no decision is
+        anonymous. Never raises."""
+        try:
+            if not isinstance(card, dict):
+                return
+            d = card.setdefault("decisions", {})
+            d[str(key)[:40]] = {"value": value, "by": str(by)[:20],
+                                "where": str(where)[:60]}
+        except Exception:
+            pass
+
+    @staticmethod
+    def _skip_note(card, step, reason):
+        """RULE 2 — NO step cancels itself in silence.
+
+        Eleven enrichment steps used to `return` the moment an input was
+        missing: statistics with no data file, the table/chart enricher with no
+        model, the web and academic searches with no query, the reference
+        appender with no references… The user then received a document missing
+        what they asked for, with nothing anywhere saying why. Asking for
+        «إحصائيات» without attaching a spreadsheet produced no analysis AND no
+        explanation.
+
+        Every such step now records itself HERE, in one list on the card, which
+        the honest note reads at the end. One mechanism covers all of them — and
+        any step added later — instead of a message written by hand at each
+        site. Never raises; a failure to record must never break the step."""
+        try:
+            if not isinstance(card, dict):
+                return
+            lst = card.setdefault("skipped_steps", [])
+            entry = {"step": str(step)[:80], "reason": str(reason)[:200]}
+            if entry not in lst:
+                lst.append(entry)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _structure_units(text, lang="ar"):
+        """Read the STRUCTURAL UNITS the user named, in the order they named
+        them, from patterns of «<count> <unit>» in their own words — e.g.
+        «خمسة فصول، كل فصل ثلاثة مباحث، وكل مبحث مطلبين» →
+        [("الفصل", 5), ("المبحث", 3), ("المطلب", 2)].
+
+        RULE 1 — the system used to carry only two fields, `mabhath_count` and
+        `matlab_count`, so any other unit the user named (فصل، باب، جزء،
+        chapter) was either lost or renamed «المبحث». This reads whatever word
+        FOLLOWS a count instead of looking words up in a list, so a term nobody
+        anticipated still works. Returns [] when nothing matches. Never raises."""
+        import re as _re
+        try:
+            t = " " + " ".join(str(text or "").split()) + " "
+            nums = {}
+            for w, n in _VR_AR_NUM.items():
+                nums[w] = n
+            # «<number word|digits> <unit word>» — the unit is simply the token
+            # that follows the count; no vocabulary is assumed.
+            pat = _re.compile(
+                r"(?:^|\s)((?:[0-9]{1,3})|(?:[٠-٩]{1,3})|"
+                + "|".join(_re.escape(k) for k in sorted(nums, key=len,
+                                                         reverse=True))
+                + r")\s+([^\W\d_]{3,20})", _re.UNICODE)
+            out, seen = [], set()
+            for m in pat.finditer(t):
+                raw, unit = m.group(1), m.group(2)
+                if raw[0].isdigit() or "٠" <= raw[0] <= "٩":
+                    n = int(raw.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩",
+                                                        "0123456789")))
+                else:
+                    n = nums.get(raw)
+                if not n or not 1 <= n <= 60:
+                    continue
+                u = unit.strip("ًٌٍَُِّْ")
+                # skip units that are plainly not structural (pages, words,
+                # references…) — measured by what they are, via the singular the
+                # caller already understands; keep everything else.
+                if any(k in u for k in ("صفح", "كلم", "مرجع", "مراجع", "مصدر",
+                                        "مصادر", "دراس", "جدول", "جداول",
+                                        "شريح", "page", "word", "ref",
+                                        "source", "slide", "table")):
+                    continue
+                key = WeaverOrchestrator._unit_singular(u)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((key, n))
+            # «وكل مطلب تقسيمات حسب ما يلزم» — a DEEPER unit named with NO
+            # count. It used to be invisible, so «تقسيمات» never happened. The
+            # shape «كل <a unit already counted> <another noun>» identifies it,
+            # and its count is None, meaning: the MODEL decides how many, per
+            # section, and may decide none — which is what «حسب ما يلزم» says.
+            if out:
+                _known = "|".join(_re.escape(k) for k, _ in out)
+                for m in _re.finditer(
+                        r"كل\s+(?:" + _known + r")\w{0,3}\s+([^\W\d_]{3,20})",
+                        t, _re.UNICODE):
+                    _w = m.group(1).strip("ًٌٍَُِّْ")
+                    if _w in nums:        # «كل فصل ثلاثة مباحث» — a COUNT, not
+                        continue          # a unit; the count form is handled above
+                    cand = WeaverOrchestrator._unit_singular(_w)
+                    if (cand and cand not in seen and cand not in nums
+                            and not any(k in cand for k in
+                                        ("في", "فيه", "من", "على", "حسب",
+                                         "يلزم", "يحتاج", "عن", "الى", "إلى"))):
+                        seen.add(cand)
+                        out.append((cand, None))
+                        break
+            return out[:3]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _unit_singular(word):
+        """Best-effort singular of an Arabic structural unit so «مباحث» and
+        «مبحث» are one unit. Pattern-based (broken-plural shapes), not a lookup
+        table, with the input returned unchanged when nothing applies."""
+        w = str(word or "").strip()
+        for pre, post in (("مبا", "مبحث"), ("مطا", "مطلب"), ("فصو", "فصل"),
+                          ("أبو", "باب"), ("ابو", "باب"), ("أجز", "جزء"),
+                          ("اجز", "جزء"), ("أقس", "قسم"), ("اقس", "قسم"),
+                          ("فرو", "فرع"), ("تقس", "تقسيم")):
+            if w.startswith(pre):
+                return post
+        if w.endswith("ات") and len(w) > 4:
+            return w[:-2]
+        if w.endswith("ون") or w.endswith("ين"):
+            return w[:-2]
+        return w
+
+    @staticmethod
+    def _counted_structure(lang, n_mabhath, m_matlab, units=None, n_sub=0):
+        """Build a plan of EXACTLY n top sections, each with m sub-sections (and
+        optionally n_sub sub-sub-sections), plus intro / conclusion / references.
+        Abstract labels here get descriptive names later by _descriptive_titles.
+
+        RULE 1 — the UNIT NAMES come from the user. «المبحث»/«المطلب» used to be
+        hardcoded here, so «خمسة فصول» came out as «المبحث 1..5»: the user's own
+        word was discarded and replaced. `units` is an ordered list of the terms
+        the user actually used, e.g. ["الفصل", "المبحث", "المطلب"]; missing
+        entries fall back to the previous defaults, so old callers are
+        unchanged."""
         n_mabhath = max(1, min(WeaverOrchestrator._as_int(n_mabhath, 1) or 1, 30))
         m_matlab = max(0, min(WeaverOrchestrator._as_int(m_matlab, 0) or 0, 20))
-        mab = "المبحث" if lang == "ar" else "Section"
-        mat = "المطلب" if lang == "ar" else "Subsection"
+        n_sub = max(0, min(WeaverOrchestrator._as_int(n_sub, 0) or 0, 20))
+        _d = (["المبحث", "المطلب", "الفرع"] if lang == "ar"
+              else ["Section", "Subsection", "Sub-subsection"])
+        u = list(units or [])
+        u = [(str(u[i]).strip() if i < len(u) and str(u[i] or "").strip()
+              else _d[i]) for i in range(3)]
+        if lang == "ar":      # «فصل 1» reads wrong; «الفصل 1» is the usual form
+            u = [(x if x.startswith("ال") else "ال" + x) for x in u]
         secs = [{"key": "intro",
                  "title": "المقدمة" if lang == "ar" else "Introduction",
                  "level": 1}]
         for i in range(1, n_mabhath + 1):
-            secs.append({"key": "body", "title": f"{mab} {i}", "level": 1})
+            secs.append({"key": "body", "title": f"{u[0]} {i}", "level": 1})
             for j in range(1, m_matlab + 1):
-                secs.append({"key": "body", "title": f"{mat} {i}.{j}",
+                secs.append({"key": "body", "title": f"{u[1]} {i}.{j}",
                              "level": 2})
+                for k in range(1, n_sub + 1):
+                    secs.append({"key": "body",
+                                 "title": f"{u[2]} {i}.{j}.{k}", "level": 3})
         secs.append({"key": "conclusion",
                      "title": "الخاتمة" if lang == "ar" else "Conclusion",
                      "level": 1})
@@ -849,8 +1746,19 @@ class WeaverOrchestrator:
         small_kw = ("flash", "mini", "nano", "lite", "tiny", "small", "0.5b",
                     "1b", "1.5b", "2b", "3b", "4b", "7b", "8b", "9b", "haiku")
         # a small/flash/mini variant is small even inside a large family
-        # (e.g. gpt-4o-mini, gemini-flash) → check the small hints first
+        # (e.g. gpt-4o-mini, gemini-flash) → check the small hints first.
+        # BUT a "flash"/"mini" of a CURRENT generation is not a weak model:
+        # deepseek-v4-flash was being told "النموذج محدود الطاقة… الدقّة أهمّ من
+        # الطول" on every section, capping the quality of a capable model. A
+        # small hint carried by a modern version marker means "fast variant",
+        # not "weak", so it lands on medium rather than small.
         if any(k in name for k in small_kw):
+            import re as _re
+            _modern = _re.search(r'(?:^|[^0-9a-z])v?([4-9])(?:[._-]|$)', name)
+            _param = any(k in name for k in ("0.5b", "1b", "1.5b", "2b", "3b",
+                                             "4b", "7b", "8b", "9b"))
+            if _modern and not _param:
+                return "medium"
             return "small"
         if any(k in name for k in large_kw):
             return "large"
@@ -858,42 +1766,86 @@ class WeaverOrchestrator:
 
     @staticmethod
     def _strength_profile(strength: str) -> dict:
-        """Per-strength writing profile: model temperature, target words for a
-        specialized intro, and a depth directive appended to the generic section
-        prompt. Adapts OUTPUT to the model ceiling — never fabricates capability
-        a small model lacks; it raises the reliable floor and unlocks depth on a
-        capable model. Returns a dict always usable (unknown → medium)."""
+        """Writing profile: temperature, target words for a specialized intro,
+        and a depth directive appended to the generic section prompt.
+
+        These directives describe THE WRITING THAT IS WANTED — never the model
+        that is doing it. They used to open with a verdict: "النموذج محدود
+        الطاقة" / "استغلّ طاقة النموذج الكاملة". That verdict came from matching
+        the model's NAME against a word list, it was appended to EVERY section
+        prompt, and a model told it is weak writes like a weak one — which is
+        exactly what happened to `deepseek-v4-flash`, capped on every section
+        because its name contains "flash". A depth instruction is legitimate;
+        a judgement about the model reading this prompt is not, so it is gone.
+        Returns a dict always usable (unknown → medium)."""
         s = (strength or "medium").lower()
         if s == "small":
             return {
                 "temp": 0.35,
                 "intro_words": 220,
                 "depth": (
-                    "النموذج محدود الطاقة: اكتب بجُملٍ قصيرة واضحة ومباشرة، وركّز "
-                    "على النقاط الجوهرية دون حشوٍ أو استطراد، ورتّب الأفكار في "
-                    "فقراتٍ قصيرة. الدقّة والوضوح والالتزام بالمصادر أهمّ من الطول "
+                    "اكتب بجُملٍ قصيرة واضحة ومباشرة، وركّز على النقاط الجوهرية "
+                    "دون حشوٍ أو استطراد، ورتّب الأفكار في فقراتٍ قصيرة. الدقّة "
+                    "والوضوح والالتزام بالمصادر أهمّ من الطول "
                     "(استهدف نحو 180–260 كلمة لهذا القسم)."),
                 "depth_en": (
-                    "The model has limited capacity: write short, clear, direct "
-                    "sentences; focus on the essential points with no padding; "
-                    "keep paragraphs short. Accuracy, clarity and staying on "
-                    "sources matter more than length (aim ~180–260 words)."),
+                    "Write short, clear, direct sentences; focus on the "
+                    "essential points with no padding; keep paragraphs short. "
+                    "Accuracy, clarity and staying on sources matter more than "
+                    "length (aim ~180–260 words)."),
             }
         if s == "large":
             return {
                 "temp": 0.6,
                 "intro_words": 650,
                 "depth": (
-                    "استغلّ طاقة النموذج الكاملة: حلّل بعمق، واعرض وجهات النظر "
-                    "المختلفة، واربط الأفكار ببعضها بنقدٍ علميّ وأمثلةٍ دقيقة، مع "
-                    "التزامٍ صارمٍ بالمصادر (استهدف نحو 500–800 كلمة لهذا القسم)."),
+                    "حلّل بعمق، واعرض وجهات النظر المختلفة، واربط الأفكار ببعضها "
+                    "بنقدٍ علميّ وأمثلةٍ دقيقة، مع التزامٍ صارمٍ بالمصادر "
+                    "(استهدف نحو 500–800 كلمة لهذا القسم)."),
                 "depth_en": (
-                    "Use the model's full capacity: analyze in depth, present "
-                    "differing viewpoints, and connect ideas with scholarly "
-                    "critique and precise examples, strictly grounded in the "
-                    "sources (aim ~500–800 words)."),
+                    "Analyze in depth, present differing viewpoints, and connect "
+                    "ideas with scholarly critique and precise examples, strictly "
+                    "grounded in the sources (aim ~500–800 words)."),
             }
         return {"temp": 0.5, "intro_words": 400, "depth": "", "depth_en": ""}
+
+    @staticmethod
+    def _measured_strength(bodies, current):
+        """Replace the NAME guess with a MEASUREMENT of what the model actually
+        wrote, once enough sections exist to measure.
+
+        The name guess ("flash" → weak, "opus" → strong) decides the per-section
+        word band, the temperature and the depth directive for the WHOLE
+        document, from before the first word is written. A model that writes
+        450-word sections is not small whatever its name says, and one that
+        writes 90-word sections is not large.
+
+        Read-only and additive by design: it returns a strength label for the
+        directive given to the NEXT sections. It never edits, shortens or
+        rewrites a section that was already produced, so a wrong measurement can
+        only change future guidance — never damage existing text. Returns
+        `current` unchanged when there is not enough evidence. Never raises."""
+        try:
+            lens = [len((b or "").split()) for b in (bodies or [])]
+            lens = [n for n in lens if n >= 60]      # ignore stubs/bridges
+            if not lens:
+                return current, None
+            # The FIRST unbiased section is already evidence — waiting for three
+            # means three sections written on a guess. The median is re-taken on
+            # every section, so one odd opening self-corrects immediately.
+            lens.sort()
+            med = lens[len(lens) // 2]
+            if med >= 380:
+                out = "large"
+            elif med <= 170:
+                out = "small"
+            else:
+                out = "medium"
+            if out == current:
+                return current, None
+            return out, f"{med} كلمة (وسيط {len(lens)} أقسام)"
+        except Exception:
+            return current, None
 
     @staticmethod
     def _section_kind(title: str):
@@ -915,6 +1867,68 @@ class WeaverOrchestrator:
         if any(k in t for k in res_kw):
             return "results"
         return None
+
+    @staticmethod
+    def _apa_key(s):
+        """An APA-style in-text key for a source: "المؤلف، 2024". Falls back to
+        a SHORT title fragment (never the full title) and finally to the year
+        alone. This is what the section writers put between brackets, so a bad
+        key turns into a citation that swallows a whole sentence."""
+        if not isinstance(s, dict):
+            return str(s)[:40]
+        year = str(s.get("year") or "").strip()
+        a = s.get("author") or s.get("authors")
+        _many = False
+        if isinstance(a, (list, tuple)):
+            a = [str(x).strip() for x in a if str(x).strip()]
+            _many = len(a) > 1
+            a = a[0] if a else ""
+        a = (str(a).strip() if a else "")
+        if a:
+            # APA cites the SURNAME only. Sources store "اللقب، الاسم الأول",
+            # so passing the whole field produced "(المطيري، علياء زيد، 2022)" —
+            # three commas and a given name inside an in-text citation.
+            _sur = a.replace("،", ",").split(",")[0].strip() or a
+            if _many:
+                _sur += " وآخرون"
+            return f"{_sur}، {year}" if year else _sur
+        t = (s.get("title") or s.get("key") or "").strip()
+        t = " ".join(t.split()[:4])            # keep it short, never a full title
+        if t:
+            return f"{t}، {year}" if year else t
+        return year or "مصدر"
+
+    @staticmethod
+    def _conclusion_parts(card, lang="ar"):
+        """Which conclusion sub-sections to write. Reads the REQUIREMENTS
+        checklist the model extracted (plus the request text) and returns the
+        headings to keep, or None to keep the default four. A summary and an
+        answer to the research question always belong in a conclusion;
+        recommendations and future-research are added ONLY when asked for."""
+        base_ar = ["ملخص النتائج", "الإجابة على سؤال البحث"]
+        base_en = ["Summary of Findings", "Answer to the Research Question"]
+        rec_ar, fut_ar = "التوصيات", "مقترحات للبحوث المستقبلية"
+        rec_en, fut_en = "Recommendations", "Future Research"
+        card = card or {}
+        blob = " ".join([
+            str(card.get("topic") or ""),
+            " ".join(str(r.get("text", "")) for r in (card.get("requirements")
+                                                      or [])
+                     if isinstance(r, dict)),
+        ]).lower()
+        if not blob.strip():
+            return None                    # no signal → unchanged behaviour
+        want_rec = any(k in blob for k in ("توصيات", "توصية",
+                                           "recommend"))
+        want_fut = any(k in blob for k in ("مقترحات", "بحوث مستقبلية",
+                                           "دراسات مستقبلية", "future research",
+                                           "further research"))
+        keep = list(base_en if lang == "en" else base_ar)
+        if want_rec:
+            keep.append(rec_en if lang == "en" else rec_ar)
+        if want_fut:
+            keep.append(fut_en if lang == "en" else fut_ar)
+        return keep
 
     def _write_section_specialized(self, title, card, lang, mode, no_ctx,
                                    prior_sections, prof):
@@ -939,12 +1953,24 @@ class WeaverOrchestrator:
             for s in (card.get("sources") or [])[:12]:
                 if isinstance(s, dict):
                     refs.append({
-                        "key": s.get("key") or (s.get("title", "") or "")[:40],
+                        "key": self._apa_key(s),
                         "text": (s.get("content") or s.get("title", "") or "")[:160],
                         "page": s.get("page", "")})
+            # the USER'S length wins over the name guess: an introduction's share
+            # of a requested total is a fact, `intro_words` is only an estimate
+            _iw = int(prof.get("intro_words", 400))
+            try:
+                _tw = card.get("target_words")
+                _ns = len(card.get("sections") or []) or 0
+                if _tw and _ns:
+                    _share = int(int(_tw) / max(1, _ns))
+                    # an intro is denser than an average section, not double it
+                    _iw = max(120, min(int(_share * 1.4), 900))
+            except Exception:
+                pass
             out = self._skill_call(
                 "research_intro", "build_intro", "build_intro",
-                topic, refs, int(prof.get("intro_words", 400)), lang, self.llm_fn)
+                topic, refs, _iw, lang, self.llm_fn)
             return (out or {}).get("text") or None
         if kind == "conclusion" and mode != "none":
             findings = []
@@ -966,9 +1992,18 @@ class WeaverOrchestrator:
                         "conclusion_directive", lang)
                 except Exception:
                     _hint = None
+            # Only write the conclusion parts the user actually asked for.
+            # All four ("ملخص النتائج"/"الإجابة"/"التوصيات"/"مقترحات") used to be
+            # imposed on every document, which is why recommendations and future
+            # research showed up unrequested (and twice).
+            _inc = None
+            try:
+                _inc = self._conclusion_parts(card, lang)
+            except Exception:
+                _inc = None
             out = self._skill_call(
                 "conclusion_writer", "build_conclusion", "build_conclusion",
-                topic, findings, lang, self.llm_fn, _hint)
+                topic, findings, lang, self.llm_fn, _hint, _inc)
             return (out or {}).get("text") or None
         if kind == "results" and mode != "none":
             out = self._skill_call(
@@ -1124,6 +2159,12 @@ class WeaverOrchestrator:
         Additive and fully guarded."""
         files = self._data_files(task)
         if not files:
+            # RULE 2 — say so instead of vanishing: a request for statistics
+            # with no spreadsheet attached used to produce neither analysis
+            # nor any explanation.
+            if card.get("want_data") or card.get("needs_statistics"):
+                self._skip_note(card, "التحليل الإحصائي",
+                                "لم يُرفَق ملف بيانات (csv/xlsx) لتحليله")
             return
         path = files[0]
         try:
@@ -1346,6 +2387,17 @@ class WeaverOrchestrator:
             task.skills = [s.name for s in self.caps.match_skills(text)]
         else:
             task.tools, task.skills = [], []
+        # Recency: the model now reports whether the answer changes with time.
+        # The word list («أحدث», «اليوم», «latest») stays underneath it as the
+        # backstop, where it belongs — it cannot see that «سعر الذهب» is a
+        # moving number while «تعريف الذهب» is not.
+        _rc_model = card.get("recency")
+        if not isinstance(_rc_model, bool):
+            _rc_model = None
+        self._settle(card, "recency_intent", _rc_model,
+                     True if self._is_recency_query(
+                         (card.get("topic") or "") + " "
+                         + (task.description or "")) else None, "فهم الطلب")
         # sourcing mode decides whether we gather and/or document sources
         mode = card.get("sourcing_mode", "cited")
         # always-on skills by task type
@@ -1523,9 +2575,14 @@ class WeaverOrchestrator:
         """→ {'words': int|None, 'pages': int|None} from the request; None if
         unstated. Pages → estimated words (~500 words/academic page) when the
         word count itself isn't given. (tested)"""
-        import re
+        import os as _os, re
         if not text:
-            return {"words": None, "pages": None}
+            return {"words": None, "pages": None,
+                    "max_words": None, "max_pages": None}
+        try:
+            wpp = int(_os.environ.get("WEAVER_WORDS_PER_PAGE", "300") or 300)
+        except Exception:
+            wpp = 300
         words = pages = None
         m = re.search(r'(\d{2,6})\s*(?:كلمة|كلمات|words?|word)', text, re.I)
         if m:
@@ -1533,9 +2590,34 @@ class WeaverOrchestrator:
         m = re.search(r'(\d{1,4})\s*(?:صفحة|صفحات|pages?|page)', text, re.I)
         if m:
             pages = int(m.group(1))
+        # An explicit CEILING ("ولا يزيد عن 12 صفحة" / "at most 12 pages" /
+        # a "10-12" range) was never captured, so nothing ever stopped the
+        # expansion loop from overshooting it.
+        max_pages = max_words = None
+        mx = re.search(r'(?:لا\s*يزيد\s*(?:عن|على)|بحد\s*أقصى|حد\s*أقصى|'
+                       r'no\s*more\s*than|at\s*most|up\s*to|maximum\s*of)'
+                       r'\s*(\d{1,6})\s*(صفحة|صفحات|pages?|page|كلمة|كلمات|words?)?',
+                       text, re.I)
+        if mx:
+            n = int(mx.group(1))
+            unit = (mx.group(2) or "").lower()
+            if unit.startswith(("كلم", "word")):
+                max_words = n
+            else:
+                max_pages = n
+        if max_pages is None and max_words is None:
+            rng = re.search(r'(\d{1,4})\s*(?:-|–|إلى|الى|to)\s*(\d{1,4})\s*'
+                            r'(?:صفحة|صفحات|pages?|page)', text, re.I)
+            if rng:
+                pages = int(rng.group(1))       # the LOW end is the minimum
+                max_pages = int(rng.group(2))
+                words = None                    # recomputed from the low end
         if words is None and pages:
-            words = pages * 500
-        return {"words": words, "pages": pages}
+            words = pages * wpp
+        if max_words is None and max_pages:
+            max_words = max_pages * wpp
+        return {"words": words, "pages": pages,
+                "max_words": max_words, "max_pages": max_pages}
 
     @staticmethod
     def count_words(text):
@@ -1831,10 +2913,12 @@ class WeaverOrchestrator:
         except Exception:
             pass
 
-        # how the user wants sourcing handled (cited / uncited / none). Detected
-        # from the RAW request so an explicit "بدون مصادر" / "دون توثيقها" is
-        # honoured even if the model didn't surface it in the card.
-        task.task_card["sourcing_mode"] = self._sourcing_mode(task.description)
+        # Sourcing, citation style, action and the table flag are SETTLED LATER
+        # — after the model's own plan has been merged onto the card. Reading
+        # the card here meant reading it BEFORE the model had written anything
+        # into it, so every one of those decisions fell through to the keyword
+        # detector and the ledger said «قالب احتياطي» on three runs out of three.
+        # The precedence was right; it was being asked too early.
 
         # scope that LIMITS the task: references-only / outline-only / part-only.
         _cur_req = self._current_request(task.description)
@@ -1860,11 +2944,9 @@ class WeaverOrchestrator:
         # flags below. Absent → nothing set → behaviour unchanged.
         try:
             if isinstance(task.task_card, dict):
-                _act = self._task_action(_cur_req)
-                if _act:
-                    task.task_card["action"] = _act
-                if self._wants_table(_cur_req):
-                    task.task_card["want_table"] = True
+                # action and the table flag are settled after the plan merge,
+                # where the model's own answer is finally on the card.
+                _act = task.task_card.get("action")
                 if self._wants_chart(_cur_req):
                     task.task_card["want_chart"] = True
                 if self._wants_data(_cur_req):
@@ -1888,6 +2970,12 @@ class WeaverOrchestrator:
                     task.task_card["target_words"] = _lt["words"]
                 if _lt.get("pages"):
                     task.task_card["target_pages"] = _lt["pages"]
+                # an explicit CEILING, so the writer can aim UNDER it instead of
+                # overshooting (nothing in the pipeline ever trims)
+                if _lt.get("max_words"):
+                    task.task_card["max_words"] = _lt["max_words"]
+                if _lt.get("max_pages"):
+                    task.task_card["max_pages"] = _lt["max_pages"]
         except Exception:
             pass
 
@@ -1926,8 +3014,33 @@ class WeaverOrchestrator:
                 _iv = self._intent_router(_cur_req)     # keyword-model fallback
             if _iv and isinstance(task.task_card, dict):
                 c = task.task_card
-                if _iv.get("action"):
-                    c["action"] = _iv["action"]
+                # ── THE ONE PLACE WHERE THESE ARE DECIDED ──────────────
+                # Everything below settles user → model → detector, now that
+                # the model's plan is actually on the card. Each detector reads
+                # the CURRENT request only: reading task.description pulled in
+                # earlier turns, so a style named in a previous message came
+                # back stamped «المستخدم» on a request that never mentioned it,
+                # and sat next to «بلا مصادر» as «وثّق بنمط APA».
+                _cur_only = self._current_request(task.description)
+                _act_m = str(_iv.get("action") or "").strip().lower()
+                self._settle(c, "action",
+                             _act_m if _act_m not in ("", "null", "chat") else None,
+                             self._task_action(_cur_only), "فهم الطلب")
+                _sm_m = str(_iv.get("sourcing") or "").strip().lower()
+                self._settle(c, "sourcing_mode",
+                             _sm_m if _sm_m in ("cited", "uncited", "none") else None,
+                             self._sourcing_mode(_cur_only), "فهم الطلب")
+                _cs_m = str(_iv.get("citation_style")
+                            or c.get("citation_style") or "").strip()
+                if _cs_m.lower() in ("null", "none", "unspecified", ""):
+                    _cs_m = None
+                self._settle(c, "citation_style", _cs_m, None, "فهم الطلب",
+                             explicit=self._requested_citation_style(_cur_only))
+                _rc_m = _iv.get("recency")
+                self._settle(c, "recency_intent",
+                             _rc_m if isinstance(_rc_m, bool) else None,
+                             True if self._is_recency_query(_cur_only) else None,
+                             "فهم الطلب")
                 if _iv.get("scopes"):
                     # A keyword-detected LIMITING scope is EXPLICIT (an "فقط"/
                     # "only" cue) and authoritative — a weak on-device model must
@@ -1945,16 +3058,82 @@ class WeaverOrchestrator:
                     c["output_format"] = [_iv["format"].upper()]
                 if _iv.get("slide_count"):
                     c["slide_count"] = _iv["slide_count"]
-                if _iv.get("words"):
-                    c["target_words"] = _iv["words"]
-                if _iv.get("pages"):
-                    c["target_pages"] = _iv["pages"]
+                # LENGTH, WITH ITS AUTHOR NAMED. «صفحة واحدة» and «لخّص» were
+                # both answered with 3000 words, and the ledger credited that
+                # number to «المستخدم» who had never said it. The model reads
+                # the request; whatever it returns is recorded as ITS reading,
+                # and a default is never dressed up as the user's instruction.
+                # THE DETECTOR'S READING WAS DISCARDED, NOT OUTRANKED. Both
+                # calls passed detector_value=None, so the model's number simply
+                # overwrote what the user's own words plainly said. «لا يقل
+                # عن 10 صفحات ولا يزيد عن 12» came back as target_pages=12 —
+                # the CEILING read as the target — while target_words stayed 3000
+                # (=10×300) from the detector: one ledger showing the two ends of
+                # one range as one target. When the user states a RANGE in their
+                # own words the floor IS the target and the ceiling is the
+                # maximum; that is the user speaking, so by the standing
+                # precedence it outranks the model's reading. In every other case
+                # the detector's value is merely offered as the fallback, exactly
+                # as _settle expects — the model still rules an unstated length.
+                _lt_c = {}
+                try:
+                    _lt_c = self.extract_length_target(_cur_only) or {}
+                except Exception:
+                    _lt_c = {}
+                _rng = bool(_lt_c.get("max_pages") or _lt_c.get("max_words"))
+                if _iv.get("words") or _lt_c.get("words"):
+                    self._settle(c, "target_words", _iv.get("words"),
+                                 _lt_c.get("words"), "فهم الطلب",
+                                 explicit=(_lt_c.get("words") if _rng else None))
+                if _iv.get("pages") or _lt_c.get("pages"):
+                    self._settle(c, "target_pages", _iv.get("pages"),
+                                 _lt_c.get("pages"), "فهم الطلب",
+                                 explicit=(_lt_c.get("pages") if _rng else None))
+                # A CEILING THE USER STATED IS THE USER'S, WHATEVER PATH RAN.
+                # It was only ever set from task.description; a request carried
+                # on the current turn alone left max_words unset, and nothing
+                # downstream then had a number to stop at.
+                try:
+                    if _lt_c.get("max_words") and not c.get("max_words"):
+                        c["max_words"] = _lt_c["max_words"]
+                    if _lt_c.get("max_pages") and not c.get("max_pages"):
+                        c["max_pages"] = _lt_c["max_pages"]
+                except Exception:
+                    pass
+                    # PAGES MUST BECOME WORDS OR THEY MEAN NOTHING. Every
+                    # length consumer downstream reads target_words; the budget
+                    # line is literally `base = total or mx or 0`, so a request
+                    # given ONLY in pages produced a budget of zero and the
+                    # writer wrote until it stopped — «10 إلى 12 صفحة» came back
+                    # as 18.3. The conversion is one multiplication, and the
+                    # ceiling is what the user actually said.
+                    try:
+                        import os as _o
+                        _wpp = int(_o.environ.get("WEAVER_WORDS_PER_PAGE",
+                                                  "300") or 300)
+                        _pg = int(_iv["pages"])
+                        if _pg > 0 and not c.get("target_words"):
+                            self._settle(c, "target_words", _pg * _wpp, None,
+                                         f"{_pg} صفحة × {_wpp}")
+                            c.setdefault("max_words", _pg * _wpp)
+                    except Exception:
+                        pass
                 if _iv.get("mabhath_count"):
                     c["mabhath_count"] = _iv["mabhath_count"]
                 if _iv.get("matlab_count"):
                     c["matlab_count"] = _iv["matlab_count"]
-                if _iv.get("wants_table"):
-                    c["want_table"] = True
+                # THREE-VALUED HERE TOO. This line survived the earlier fix and
+                # quietly restored the one-way flag: `False` — the model or the
+                # user saying «بلا جداول» — fell through it as if nothing had
+                # been said. That is why the prohibition was never recorded.
+                _wt_m = _iv.get("wants_table")
+                _wt = self._settle(c, "want_table",
+                                   _wt_m if isinstance(_wt_m, bool) else None,
+                                   True if self._wants_table(_cur_only) else None,
+                                   "فهم الطلب")
+                if _wt is False:
+                    c["tables_forbidden"] = True
+                    c.pop("want_table", None)
                 if _iv.get("wants_chart"):
                     c["want_chart"] = True
                 if _iv.get("wants_data"):
@@ -1966,6 +3145,185 @@ class WeaverOrchestrator:
                                + (c.get("scope") or c.get("action") or "بحث"))
         except Exception as e:
             mem.set_status(3, f"موجّه النية (تخطّي: {e})")
+
+        # ── THE FALLBACK LIVED INSIDE THE THING IT WAS THE FALLBACK FOR ──
+        # Every deterministic detector above sits under `if _iv`. When the
+        # understanding call AND the keyword router both came back empty — a
+        # weak model, a refused reply, a provider hiccup, a JSON that would not
+        # parse — nothing read the request at all: no action, no sourcing mode,
+        # no length, and no want_table. A full run of «أدرج جداول للمصطلحات
+        # التقنية وشرحها» ended with want_table unset and table_budget unset,
+        # because that sentence was never read by ANYONE. The model still rules
+        # wherever it speaks; where it is silent, silence is not an answer.
+        # This block therefore runs on keys that are STILL UNSET and on nothing
+        # else, so it can never overrule the user or the model — it only speaks
+        # where nobody has spoken, and every value it sets is stamped
+        # «قراءة الطلب» in the ledger so its source is never anonymous.
+        try:
+            if isinstance(task.task_card, dict):
+                _c2 = task.task_card
+                _cur2 = self._current_request(task.description)
+                if (_c2.get("want_table") is None
+                        and not _c2.get("tables_forbidden")
+                        and self._wants_table(_cur2)):
+                    self._settle(_c2, "want_table", None, True, "قراءة الطلب")
+                if _c2.get("want_chart") is None and self._wants_chart(_cur2):
+                    self._settle(_c2, "want_chart", None, True, "قراءة الطلب")
+                if not _c2.get("action"):
+                    self._settle(_c2, "action", None,
+                                 self._task_action(_cur2), "قراءة الطلب")
+                if not _c2.get("sourcing_mode"):
+                    self._settle(_c2, "sourcing_mode", None,
+                                 self._sourcing_mode(_cur2), "قراءة الطلب")
+                if not _c2.get("citation_style"):
+                    _cs2 = self._requested_citation_style(_cur2)
+                    if _cs2:
+                        self._settle(_c2, "citation_style", None, _cs2,
+                                     "قراءة الطلب", explicit=_cs2)
+                _lt2 = self.extract_length_target(_cur2) or {}
+                _rng2 = bool(_lt2.get("max_pages") or _lt2.get("max_words"))
+                if _lt2.get("words") and not _c2.get("target_words"):
+                    self._settle(_c2, "target_words", None, _lt2["words"],
+                                 "قراءة الطلب",
+                                 explicit=(_lt2["words"] if _rng2 else None))
+                if _lt2.get("pages") and not _c2.get("target_pages"):
+                    self._settle(_c2, "target_pages", None, _lt2["pages"],
+                                 "قراءة الطلب",
+                                 explicit=(_lt2["pages"] if _rng2 else None))
+                if _lt2.get("max_words") and not _c2.get("max_words"):
+                    _c2["max_words"] = _lt2["max_words"]
+                if _lt2.get("max_pages") and not _c2.get("max_pages"):
+                    _c2["max_pages"] = _lt2["max_pages"]
+        except Exception as e:
+            mem.set_status(3, f"قراءة الطلب احتياطيّاً (تخطّي: {e})")
+
+        # ── STAGE (أ) WIRING 1 — REQUIREMENTS CHECKLIST (build + store) ──
+        # Build the dynamic requirements checklist from the FULL request (no
+        # truncation) and store it on the card, so Layer 8 can verify what was
+        # actually delivered. Skipped for a pure chat/INLINE answer so a quick
+        # reply isn't slowed by an extra model call. Fully guarded and additive.
+        #
+        # ── STAGE (أ) WIRING 2 — deliverable GOVERNS the scope (the root fix) ──
+        # When the model — reading the WHOLE request — judged this a complete
+        # document (deliverable == "full_document") but a keyword guess limited
+        # the scope to a structural/partial one, the model's MEANING wins and the
+        # limiting scope is cleared, so it becomes a full research. This is the
+        # proven fix for "بحث بالكامل … الهيكلة مكوّنة من…" being mis-read as an
+        # outline: the keyword scope's source was a DESCRIPTION word («هيكلة»),
+        # not a real «only» request. ONE safe direction only — toward the fuller
+        # deliverable, never the reverse — and only on an explicit full_document
+        # judgement (a missing/other deliverable changes nothing).
+        try:
+            if isinstance(task.task_card, dict) and self.llm_fn:
+                _of = task.task_card.get("output_format") or []
+                if list(_of) != ["INLINE"]:
+                    _kw_scope = task.task_card.get("scope")
+                    _req = extract_requirements(
+                        self._conversation_context(task.description), _cur_req,
+                        llm_fn=self.llm_fn, system=self.system_main)
+                    if _req:
+                        task.task_card["requirements"] = _req.get("requirements")
+                        task.task_card["deliverable"] = _req.get("deliverable")
+                        _n = len(_req.get("requirements") or [])
+                        _dv = _req.get("deliverable")
+                        mem.set_status(3, f"متطلّبات: {_n} بند"
+                                       + (f" — {_dv}" if _dv else ""))
+                        # ── the model's OWN checklist, checked against itself ──
+                        # A limiting deliverable that the model contradicts in its
+                        # own typed requirements (a page/word length, a count of
+                        # sources) is self-inconsistent: nobody asks for a
+                        # headings-only outline AND "10–12 pages" AND "9 APA
+                        # references". This reads the model's structured fields —
+                        # kind/target — not words in prose, and it only ever moves
+                        # toward the FULLER deliverable, never the narrower one.
+                        if _dv in ("outline", "references", "plan", "part"):
+                            _why = self._deliverable_contradicted(
+                                _req.get("requirements"), _dv)
+                            if _why:
+                                mem.set_status(
+                                    3, f"حكم النموذج «{_dv}» يخالف متطلّباته "
+                                       f"({_why}) → مستند كامل")
+                                _dv = "full_document"
+                                task.task_card["deliverable"] = _dv
+                                task.task_card["deliverable_reason"] = _why
+                        # ── WIRING 2 (v2): the MODEL RULES the scope ──
+                        # When the model returned a judgement it now decides in
+                        # BOTH directions, with no veto from the keyword guess:
+                        # full_document clears a limiting scope, and a limiting
+                        # deliverable sets one. The keyword lists survive only as
+                        # the fallback for when there is no model judgement at all
+                        # (offline / failed call) — a backstop, not the ruler.
+                        _lim = {"outline", "references", "plan", "part"}
+                        _cur_scopes = set(task.task_card.get("scopes") or [])
+                        if _dv == "full_document":
+                            if (task.task_card.get("scope") in _lim
+                                    or (_cur_scopes & _lim)):
+                                task.task_card["scope"] = None
+                                task.task_card["scopes"] = []
+                                task.task_card["deliverable_override"] = True
+                                mem.set_status(
+                                    3, "تصحيح النطاق: مستند كامل (بحسب معنى الطلب)")
+                        elif _dv in _lim and task.task_card.get("scope") != _dv:
+                            task.task_card["scope"] = _dv
+                            task.task_card["scopes"] = sorted(
+                                (_cur_scopes & _lim) | {_dv})
+                            task.task_card["deliverable_override"] = True
+                            mem.set_status(3, f"تصحيح النطاق: {_dv} (حكم النموذج)")
+                    else:
+                        task.task_card["deliverable_reason"] = "نداء المتطلّبات لم يُرجع حكماً"
+                    # SHOW the judgement. It used to live only in the internal
+                    # status, so a wrong route looked like a mystery from outside;
+                    # on screen it is checkable in one test run.
+                    self._emit(
+                        "detail", "",
+                        "حكم المخرَج: "
+                        + (str((_req or {}).get("deliverable") or "—"))
+                        + f" · تخمين الكلمات: {_kw_scope or 'مستند كامل'}"
+                        + f" · النطاق النهائي: "
+                        + (task.task_card.get("scope") or "مستند كامل"))
+        except Exception as e:
+            task.task_card["deliverable_reason"] = f"{type(e).__name__}: {e}"
+            mem.set_status(3, f"استخراج المتطلّبات (تخطّي: {e})")
+            self._emit("detail", "", f"حكم المخرَج: تعذّر ({type(e).__name__})"
+                       f" · النطاق: {task.task_card.get('scope') or 'مستند كامل'}")
+
+        # ── LAST-RESORT BACKSTOP (no model judgement at all) ──
+        # With the model unreachable there is no judgement to rule, so the keyword
+        # guess is all that remains — and that guess is exactly what produced a
+        # 78-word outline for a request asking for 10–12 pages. This checks the
+        # card's OWN already-extracted NUMBERS against the limiting scope: a
+        # headings-only outline has no page count and no word count. Arithmetic on
+        # extracted values, not word matching, and one safe direction only.
+        # Disable with WEAVER_SCOPE_BACKSTOP=0.
+        try:
+            import os as _os
+            if (_os.environ.get("WEAVER_SCOPE_BACKSTOP", "1") != "0"
+                    and isinstance(task.task_card, dict)
+                    and not task.task_card.get("deliverable")):
+                _lim = {"outline", "references", "plan", "part"}
+                _sc = task.task_card.get("scope")
+                _scs = set(task.task_card.get("scopes") or [])
+                if _sc in _lim or (_scs & _lim):
+                    _pg = task.task_card.get("target_pages")
+                    _wd = task.task_card.get("target_words")
+                    _pg = _pg if isinstance(_pg, int) else 0
+                    _wd = _wd if isinstance(_wd, int) else 0
+                    if _pg >= 3 or _wd >= 600:
+                        task.task_card["scope"] = None
+                        task.task_card["scopes"] = []
+                        task.task_card["deliverable_override"] = True
+                        task.task_card["deliverable_reason"] = (
+                            f"بلا حكم نموذج، وطولٌ مطلوب "
+                            f"({_pg or '—'} صفحة / {_wd or '—'} كلمة) "
+                            f"لا يتّفق مع «{_sc}»")
+                        mem.set_status(3, "تصحيح النطاق (احتياط): مستند كامل — "
+                                          "الطول المطلوب يخالف نطاقاً مُقيَّداً")
+                        self._emit("detail", "",
+                                   "احتياط النطاق: الطول المطلوب "
+                                   f"({_pg or '—'} صفحة) يخالف «{_sc}» "
+                                   "→ مستند كامل")
+        except Exception as e:
+            mem.set_status(3, f"احتياط النطاق (تخطّي: {e})")
 
         # Phase 3: route tools & skills once
         self._route(task)
@@ -2586,6 +3944,7 @@ class WeaverOrchestrator:
             doi = (w.get("doi") or "").replace("https://doi.org/", "")
             oa = (w.get("open_access") or {}).get("oa_url")
             url_ = oa or w.get("doi") or w.get("id") or ""
+            _is_oa = bool(oa) or bool((w.get("open_access") or {}).get("is_oa"))
             auths = [(a.get("author") or {}).get("display_name", "")
                      for a in (w.get("authorships") or [])[:4]]
             abx = ""
@@ -2596,9 +3955,16 @@ class WeaverOrchestrator:
                     for p in ps:
                         pos[p] = word
                 abx = " ".join(pos[k] for k in sorted(pos))[:400]
+            # venue and language were already IN the payload and thrown away.
+            # Without them a reference could only ever print as a title and a
+            # link, and a request for «مراجع عربية» had nothing to check against.
+            _ven = ((w.get("primary_location") or {}).get("source") or {}) \
+                .get("display_name") or ""
             out.append({"title": title, "url": url_, "content": abx,
                         "authors": [a for a in auths if a],
                         "year": str(w.get("publication_year") or ""),
+                        "venue": _ven, "lang": (w.get("language") or ""),
+                        "oa": _is_oa,
                         "doi": doi, "source": "openalex"})
         return out or None
 
@@ -2636,8 +4002,15 @@ class WeaverOrchestrator:
             auths = [(a.get("given", "") + " " + a.get("family", "")).strip()
                      for a in (it.get("author") or [])[:4]]
             abx = re.sub(r"<[^>]+>", "", it.get("abstract", "") or "")[:400]
+            _ven = ""
+            _ct = it.get("container-title")
+            if isinstance(_ct, list) and _ct:
+                _ven = str(_ct[0] or "")
+            elif isinstance(_ct, str):
+                _ven = _ct
             out.append({"title": title, "url": url_, "content": abx,
                         "authors": [a for a in auths if a], "year": year,
+                        "venue": _ven, "lang": str(it.get("language") or ""),
                         "doi": doi, "source": "crossref"})
         return out or None
 
@@ -2743,9 +4116,15 @@ class WeaverOrchestrator:
                     url_ = L["url"]
                     break
             auths = [a.get("name", "") for a in (b.get("author") or [])[:4]]
+            _j = b.get("journal") or {}
+            _lg = _j.get("language")
+            if isinstance(_lg, (list, tuple)):
+                _lg = (_lg[0] if _lg else "")
             out.append({"title": title, "url": url_,
                         "content": (b.get("abstract") or "")[:400],
                         "authors": [a for a in auths if a],
+                        "venue": str(_j.get("title") or ""),
+                        "lang": str(_lg or ""),
                         "year": str(b.get("year") or ""), "doi": "",
                         "source": "doaj"})
         return out or None
@@ -2788,11 +4167,18 @@ class WeaverOrchestrator:
         return out or None
 
     @classmethod
-    def _scholarly_search(cls, query, lang, limit, timeout=14):
+    def _scholarly_search(cls, query, lang, limit, timeout=14, wide=False):
         """Query all free scholarly sources IN PARALLEL (OpenAlex, Crossref,
         arXiv, Semantic Scholar, DOAJ, Europe PMC) and merge/dedupe by DOI/URL/
         title. Total time ≈ the slowest source. Each degrades safely. Returns a
-        merged list or None."""
+        merged list or None.
+
+        `wide` (default False → behaviour unchanged) returns the papers the
+        lexical filter rejected as CANDIDATES too, so a caller that has a model
+        can judge topical relevance itself. The lexical test here accepts a
+        paper when ANY ONE query token appears in it — which let a paper about
+        divorce into a search about phone radiation on the word «الأطفال»
+        alone. That is a pre-filter, never a judgement."""
         import concurrent.futures as _cf
         import itertools
         engines = [
@@ -2831,19 +4217,49 @@ class WeaverOrchestrator:
         for r in itertools.chain.from_iterable(itertools.zip_longest(*lists)):
             if not r:
                 continue
-            key = (r.get("doi") or r.get("url") or r.get("title") or "")
-            key = key.strip().lower().rstrip("/")
-            if not key or key in seen or not (r.get("title") or "").strip():
+            # DEDUPE ON THE TITLE TOO, NOT THE IDENTIFIER ALONE. Keying on the
+            # DOI first let ONE paper through TWICE whenever two indexes carry
+            # it under different DOIs — measured: «W.W.S. Charters (1994) Solar
+            # energy: A viable pathway…» printed as items 8 and 9 of the same
+            # bibliography, under …90033-7 and …90113-g. The identifiers differ;
+            # the work does not. Titles are compared with punctuation, case and
+            # spacing normalised so «Solar Energy:  A Viable…» meets «solar
+            # energy: a viable…».
+            _title = (r.get("title") or "").strip()
+            if not _title:
                 continue
-            seen.add(key)
+            _ident = (r.get("doi") or r.get("url") or "").strip().lower().rstrip("/")
+            _tkey = "t:" + " ".join(
+                "".join(c for c in _title.lower() if c.isalnum() or c.isspace()
+                        ).split())
+            if (_ident and _ident in seen) or _tkey in seen:
+                continue
+            if _ident:
+                seen.add(_ident)
+            seen.add(_tkey)
             blob = (str(r.get("title", "")) + " "
                     + str(r.get("content", ""))).lower()
             if not terms or any(t in blob for t in terms):
                 merged.append(r)
             else:
                 backup.append(r)          # off-topic → only if nothing relevant
-            if len(merged) >= cap:
+            if len(merged) >= (cap * 2 if wide else cap):
                 break
+            if wide and len(merged) + len(backup) >= cap * 2:
+                break
+        if wide:
+            # hand BOTH piles on, the likelier ones first, each TAGGED with the
+            # pile it came from: the caller's model decides what belongs, and if
+            # it never answers the caller drops the `backup` tag back out. Without
+            # the tag a silent model would have PROMOTED the rejects — papers on
+            # «مراجع الحسابات» would have entered a search about phone radiation
+            # that the old code kept out. Widening must never be a one-way door.
+            for _r in merged:
+                _r["_prefilter"] = "match"
+            for _r in backup:
+                _r["_prefilter"] = "backup"
+            final = merged + backup
+            return final[:cap * 2] or None
         final = merged if merged else backup
         return final[:cap] or None
 
@@ -2864,22 +4280,900 @@ class WeaverOrchestrator:
                 out.add(tok)
         return out
 
+    def _ask_json(self, prompt, max_tokens=1400, timeout=None, retry=True):
+        """Ask the model for JSON and SAY WHY when it does not arrive.
+
+        Two things made my earlier reference calls fail silently on a live
+        phone. First, they were given max_tokens=200/600 and timeout=30/45 —
+        outliers against every other call in this file (1400 / 60). A REASONING
+        model (deepseek-v4-flash, qwq…) spends its whole budget on hidden
+        thinking and returns an EMPTY `content`, which this very file documents;
+        at 200 tokens nothing is left for the answer. Second, the failure was
+        reported as «تعذّر» with no reason, so the next test could only guess.
+
+        So: a house-standard budget, ONE retry that strips the long system
+        prompt and demands bare JSON, and a reason string the caller can show.
+        Returns (data|None, reason) — reason is "" on success. Never raises.
+        """
+        import os
+        try:
+            _to = int(timeout or os.environ.get("WEAVER_JSON_TIMEOUT", "90") or 90)
+        except Exception:
+            _to = 90
+        if not self.llm_fn:
+            return None, "لا نموذج متاح"
+        try:
+            from core.llm import extract_json
+        except Exception as e:
+            return None, f"تعذّر تحميل محلّل JSON: {type(e).__name__}"
+        # A reasoning model spends its budget thinking and is cut off before it
+        # writes the closing brace — measured: «We need decide which titles
+        # actually pertain to research )» arrived instead of {"keep": …}. So the
+        # budget rises steeply rather than politely, and the long system prompt
+        # is dropped on the retry so the whole budget is the task's.
+        attempts = [(self.system_main, 0.2, int(max_tokens), prompt)]
+        if retry:
+            attempts.append(
+                (None, 0.0, max(int(max_tokens) * 3, 4000),
+                 "أعِد كائن JSON وحده، بلا شرحٍ ولا تمهيد ولا تفكيرٍ ظاهر. "
+                 "ابدأ ردَّك بالقوس { مباشرةً.\n\n" + prompt))
+        last = "سببٌ غير معروف"
+        for _sys, _temp, _mt, _pr in attempts:
+            try:
+                raw = self.llm_fn(_pr, system=_sys, temperature=_temp,
+                                  max_tokens=_mt, timeout=_to) or ""
+            except Exception as e:
+                last = f"فشل النداء: {type(e).__name__}: {str(e)[:80]}"
+                continue
+            if not str(raw).strip():
+                last = (f"ردٌّ فارغ من النموذج عند max_tokens={_mt} — نموذج "
+                        "التفكير يستهلك الميزانية كلّها")
+                continue
+            try:
+                data = extract_json(raw)
+            except Exception:
+                last = ("ردٌّ بلا JSON صالح: "
+                        + " ".join(str(raw).split())[:80])
+                continue
+            if isinstance(data, dict):
+                return data, ""
+            last = "JSON ليس كائناً"
+        return None, last
+
+    def _search_query(self, topic, request, lang="ar"):
+        """Let the MODEL compose the scholarly search query.
+
+        The request used to be handed to the databases VERBATIM. Arabic titles
+        share stock shapes — «أثر … على …» — so a literal «أثر إشعاعات الهاتف
+        على الأطفال» matched, on shape alone, papers about divorce and about
+        mobile-phone marketing. The databases match characters; only the model
+        knows what the research is ABOUT. No keyword list, no topic table: the
+        model reads the request and names the search terms, so this behaves the
+        same with any model from any platform.
+
+        Returns a query string — the topic unchanged on any miss. Never raises.
+        """
+        base = (topic or "").strip()
+        self._last_query_reason = ""
+        self._refs_lang = ""
+        self._refs_lang_note = ""
+        self._facets = []
+        # Whether the MODEL actually produced a usable query. Comparing the
+        # result to the topic cannot answer that: a model may compose a query
+        # and land on the same words, and reporting «لم يصغ النموذج الاستعلام»
+        # for that is a false alarm printed in the user's document.
+        self._query_composed = False
+        if not self.llm_fn or not base:
+            self._last_query_reason = ("لا نموذج متاح" if not self.llm_fn
+                                       else "لا موضوع")
+            return base
+        import os
+        if (os.environ.get("WEAVER_MODEL_QUERY", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return base
+        try:
+            # WHAT THE MODEL WAS NOT TOLD. It was asked to compose a query
+            # without being told what it was querying: OpenAlex, Crossref, arXiv,
+            # Semantic Scholar, DOAJ and Europe PMC are INTERNATIONAL indexes,
+            # and for most subjects the peer-reviewed literature sits in English
+            # whatever language the request is written in. A strong model worked
+            # that out alone («mobile phone radiation effects on children») and a
+            # weaker one did not, and searched in Arabic for a literature that
+            # barely exists there. This is not a rule imposed on the model and
+            # not a keyword list — it is the information about the tool it needs
+            # in order to decide. It still chooses; and where the user named a
+            # language for the references, that is its to weigh and to answer for.
+            if lang == "en":
+                prompt = (
+                    "Compose ONE search query for academic databases for the "
+                    "research below. Keep the terms that define the subject; "
+                    "drop wrapper words that only describe the writing task.\n"
+                    "About the tool: OpenAlex, Crossref, arXiv, Semantic "
+                    "Scholar, DOAJ and Europe PMC are INTERNATIONAL indexes "
+                    "covering every language; for many subjects the "
+                    "peer-reviewed literature is predominantly in English. You "
+                    "choose the language of the query. If the user asked for "
+                    "references in a particular language, weigh that — and if "
+                    "the literature on this subject is scarce in it, say so.\n"
+                    "Return JSON only:\n"
+                    '{"query":"…","refs_lang":"ar|en|any","facets":["…","…"],'
+                    '"note":"…"}\n'
+                    '"facets" are the distinct aspects the topic is made of, '
+                    "in the words titles would actually use.\n"
+                    f"Research topic: {base}\n"
+                    f"Request: {(request or '')[:400]}")
+            else:
+                prompt = (
+                    "صُغ استعلامَ بحثٍ واحداً لقواعد البيانات الأكاديمية للبحث "
+                    "أدناه. أبقِ المصطلحات التي تُعرّف الموضوع، واحذف كلماتِ "
+                    "الصياغة التي تصف مهمّة الكتابة لا الموضوع.\n"
+                    "عن الأداة: OpenAlex و Crossref و arXiv و Semantic Scholar "
+                    "و DOAJ و Europe PMC فهارسُ عالميةٌ تغطّي كل اللغات، وفي "
+                    "كثيرٍ من الموضوعات يكون الأدب المحكَّم بالإنجليزية غالباً. "
+                    "لغةُ الاستعلام قرارُك أنت. وإن طلب المستخدم مراجع بلغةٍ "
+                    "بعينها فزِنْ ذلك، وإن كان الأدب في هذا الموضوع شحيحاً "
+                    "بتلك اللغة فقُل ذلك صراحةً.\n"
+                    "أعِد JSON فقط:\n"
+                    '{"query":"…","refs_lang":"ar|en|any","facets":["…","…"],'
+                    '"note":"…"}\n'
+                    "و«facets» هي الجوانب التي يتألّف منها موضوع البحث كما "
+                    "تفهمه أنت، بكلماتٍ تُطابق ما يُكتب في العناوين.\n"
+                    f"موضوع البحث: {base}\n"
+                    f"الطلب: {(request or '')[:400]}")
+            data, _why = self._ask_json(prompt, max_tokens=900)
+            self._last_query_reason = _why
+            q = ""
+            if isinstance(data, dict):
+                q = str(data.get("query") or "").strip()
+                self._facets = [" ".join(str(x).split())[:60]
+                                for x in (data.get("facets") or [])
+                                if str(x).strip()][:6]
+                self._refs_lang = str(data.get("refs_lang") or "").strip().lower()
+                self._refs_lang_note = " ".join(
+                    str(data.get("note") or "").split())[:300]
+            if not q:
+                self._last_query_reason = _why or "لم يُعِد النموذج استعلاماً"
+                return base
+            q = " ".join(q.split())[:200]
+            # a query the model empties or turns into a single stop-word is not
+            # an improvement — fall back rather than search for nothing.
+            if len(q) < 3:
+                self._last_query_reason = f"استعلامٌ أقصر من أن يُبحث به: «{q}»"
+                return base
+            self._query_composed = True
+            return q
+        except Exception as e:
+            self._last_query_reason = f"{type(e).__name__}: {str(e)[:60]}"
+            return base
+
+    def _judge_numbers_prompt(self, base_prompt, n, lang="ar"):
+        """Re-ask the SAME question in a format that cannot half-arrive."""
+        if lang == "en":
+            tail = ("\n\nAnswer with the numbers of the titles that belong to "
+                    "this research, separated by commas. Nothing else — no "
+                    "JSON, no explanation, no reasoning. Example: 1,4,7")
+        else:
+            tail = ("\n\nأجب بأرقام العناوين التي تخصّ هذا البحث، مفصولةً "
+                    "بفواصل. لا شيء غير الأرقام — لا JSON ولا شرح ولا تفكير. "
+                    "مثال: 1,4,7")
+        return base_prompt.split("\n\n")[0] + tail + "\n\n" + base_prompt
+
+    def _judge_by_numbers(self, base_prompt, n, lang="ar"):
+        """Last resort for the relevance judgement: ask for bare numbers.
+
+        Returns a {"keep": [...], "drop": [...]} dict shaped exactly like the
+        JSON path so the caller is unchanged, or None. A reply naming EVERY
+        number is not a judgement — it is a model agreeing with the list it was
+        shown — so it is refused; and so is one naming none, which would empty
+        the bibliography on a formatting accident. Never raises."""
+        if not self.llm_fn or n <= 0:
+            return None
+        try:
+            import re
+            raw = self.llm_fn(self._judge_numbers_prompt(base_prompt, n, lang),
+                              system=None, temperature=0.0, max_tokens=300,
+                              timeout=60) or ""
+            # read the LAST run of comma-separated numbers: a model that thinks
+            # aloud first still ends with its answer.
+            runs = re.findall(r"(?:\d{1,3}\s*[,،]\s*)+\d{1,3}|\b\d{1,3}\b",
+                              raw)
+            if not runs:
+                return None
+            keep = []
+            for tok in re.findall(r"\d{1,3}", runs[-1] if len(runs) == 1
+                                  else max(runs, key=len)):
+                v = int(tok)
+                if 1 <= v <= n and v not in keep:
+                    keep.append(v)
+            if not keep or len(keep) == n:
+                return None
+            return {"keep": keep,
+                    "drop": [i for i in range(1, n + 1) if i not in keep]}
+        except Exception:
+            return None
+
+    def _judge_relevance(self, results, topic, request, lang="ar"):
+        """ONE batched call: the model reads the fetched TITLES and says which
+        belong to this research.
+
+        This is the step that did not exist. The chain was: send the sentence
+        literally → accept a paper on one shared token → if nothing survives,
+        take everything anyway → check the PUBLISHER's reputation. Nowhere was
+        anything asked «does this reference belong to my topic?». A paper on
+        divorce published in a refereed journal passed every gate.
+
+        Returns (kept, dropped) as lists, or (None, None) when the model was
+        not consulted or its answer was unusable — the caller then keeps what
+        it had, so a model failure never empties the references. Never raises.
+        """
+        items = [r for r in (results or []) if isinstance(r, dict)]
+        self._last_judge_reason = ""
+        if not self.llm_fn or not items:
+            return None, None
+        import os
+        if (os.environ.get("WEAVER_REF_JUDGE", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return None, None
+        try:
+            lines = []
+            for i, r in enumerate(items, 1):
+                t = " ".join(str(r.get("title") or "").split())[:220]
+                y = str(r.get("year") or "").strip()
+                lines.append(f"{i}. {t}" + (f" ({y})" if y else ""))
+            listing = "\n".join(lines)
+            if lang == "en":
+                prompt = (
+                    "Below are titles returned by academic databases for the "
+                    "research described. Decide which ones genuinely belong to "
+                    "THIS research and which only share a word or a phrasing "
+                    "pattern with it. Judge the subject, not the wording. "
+                    "Return JSON only, every number appearing exactly once:\n"
+                    '{"keep":[1,3],"drop":[2,4]}\n'
+                    f"Research topic: {topic}\n"
+                    f"Request: {(request or '')[:400]}\n"
+                    f"Titles:\n{listing}")
+            else:
+                prompt = (
+                    "أدناه عناوينُ أعادتها قواعدُ البيانات الأكاديمية للبحث "
+                    "الموصوف. قرّر أيُّها يخصّ هذا البحث فعلاً، وأيُّها يشترك "
+                    "معه في كلمةٍ أو في صيغةِ العنوان فقط. احكم على الموضوع لا "
+                    "على اللفظ. أعِد JSON فقط، وليَرِد كلُّ رقمٍ مرّةً واحدة:\n"
+                    '{"keep":[1,3],"drop":[2,4]}\n'
+                    f"موضوع البحث: {topic}\n"
+                    f"الطلب: {(request or '')[:400]}\n"
+                    f"العناوين:\n{listing}")
+            data, _why = self._ask_json(prompt, max_tokens=1800)
+            self._last_judge_reason = _why
+            if not isinstance(data, dict):
+                # DEGRADE THE FORMAT, NEVER THE DECISION. JSON is all-or-nothing:
+                # a reply truncated one character early parses as nothing, and
+                # the judgement — the only step that asks whether a reference
+                # belongs — was being thrown away for a missing brace. A bare
+                # list of numbers survives truncation, needs no closing token,
+                # and is read with a regular expression. Same question, same
+                # judge, a format that cannot half-arrive.
+                data = self._judge_by_numbers(prompt, len(items), lang)
+                if not isinstance(data, dict):
+                    return None, None
+                self._last_judge_reason = ""
+
+            def _idx(name):
+                out = []
+                for x in (data.get(name) or []):
+                    try:
+                        n = int(x)
+                    except (TypeError, ValueError):
+                        continue
+                    if 1 <= n <= len(items) and n not in out:
+                        out.append(n)
+                return out
+            keep_i, drop_i = _idx("keep"), _idx("drop")
+            if not keep_i and not drop_i:
+                self._last_judge_reason = "لم يُسمِّ النموذج أي رقم"
+                return None, None       # unusable answer → caller keeps its own
+            drop_set = set(drop_i) - set(keep_i)
+            kept = [items[n - 1] for n in range(1, len(items) + 1)
+                    if n not in drop_set]
+            # the model was consulted and named some; anything it mentioned in
+            # neither list stays — silence is not a rejection.
+            dropped = [items[n - 1] for n in sorted(drop_set)]
+            return kept, dropped
+        except Exception as e:
+            self._last_judge_reason = f"{type(e).__name__}: {str(e)[:60]}"
+            return None, None
+
+    @staticmethod
+    def _wr():
+        """The GENERAL research layer (Sections 2-5). One import point, so the
+        web path and the academic path share it instead of each carrying a copy.
+        Returns None when it cannot be loaded — every caller then behaves as it
+        did before the layer existed."""
+        try:
+            import importlib.util as _u, os as _os
+            _p = _os.path.join(_os.path.dirname(_os.path.dirname(
+                _os.path.abspath(__file__))), "capabilities", "skills",
+                "web_research", "scripts", "web_research.py")
+            _sp = _u.spec_from_file_location("weaver_web_research", _p)
+            _m = _u.module_from_spec(_sp)
+            _sp.loader.exec_module(_m)
+            return _m
+        except Exception:
+            return None
+
+    @staticmethod
+    def _resolve_chain(url, timeout=20):
+        """Follow a URL's redirects and report WHERE it actually ended and HOW.
+
+        _extract_full returns text, not the journey — so a page that arrived
+        after being bounced to a sign-in screen was indistinguishable from a
+        page that simply had little on it. Returns (final_url, chain) where
+        chain is [(code, url), …]. Never raises; on any failure the original
+        URL comes back with an empty chain, and the caller behaves as before."""
+        try:
+            import urllib.request
+            import urllib.error
+            chain = []
+
+            class _Keep(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+                    chain.append((code, newurl))
+                    if len(chain) > 12:
+                        return None          # stop an endless bounce
+                    return super().redirect_request(req, fp, code, msg, hdrs,
+                                                    newurl)
+            op = urllib.request.build_opener(_Keep)
+            req = urllib.request.Request(url, headers={
+                "User-Agent": WeaverOrchestrator._ACAD_UA,
+                "Accept": "text/html,application/xhtml+xml"})
+            try:
+                r = op.open(req, timeout=timeout)
+                fin = r.geturl()
+                r.close()
+            except urllib.error.HTTPError as e:
+                fin = getattr(e, "url", None) or url
+            return fin, chain
+        except Exception:
+            return url, []
+
+    @classmethod
+    def _crossref_record(cls, doi, timeout=15):
+        """The DOI's OWN registration record, from the registrar.
+
+        When the publisher's page is behind a subscription there is still one
+        authoritative source for the citation fields: what the publisher itself
+        DEPOSITED when it registered the DOI. That is a registry record, not an
+        aggregator's scrape — which is the distinction the methodology draws.
+        It is weaker than reading the article page, so it is reported as its own
+        state, never as «confirmed on the source page». Returns a dict or None."""
+        import json as _json
+        import urllib.parse            # lazy, like every other import here
+        d = str(doi or "").strip().replace("https://doi.org/", "")
+        if not d or "/" not in d:
+            return None
+        raw = cls._http_get(
+            "https://api.crossref.org/works/" + urllib.parse.quote(d, safe="/"),
+            {"User-Agent": cls._ACAD_UA, "Accept": "application/json"}, timeout)
+        if not raw:
+            return None
+        try:
+            m = (_json.loads(raw) or {}).get("message") or {}
+        except Exception:
+            return None
+        if not isinstance(m, dict) or not m.get("DOI"):
+            return None
+        ttl = m.get("title") or []
+        ct = m.get("container-title") or []
+        auth = []
+        for a in (m.get("author") or [])[:6]:
+            nm = " ".join(x for x in [a.get("given"), a.get("family")] if x)
+            if nm.strip():
+                auth.append(nm.strip())
+        yr = ""
+        dp = ((m.get("issued") or {}).get("date-parts")
+              or (m.get("published") or {}).get("date-parts"))
+        if dp and dp[0]:
+            yr = str(dp[0][0])
+        return {"doi": m.get("DOI") or d,
+                "title": (ttl[0] if isinstance(ttl, list) and ttl else ""),
+                "venue": (ct[0] if isinstance(ct, list) and ct else ""),
+                "authors": auth, "year": yr,
+                "volume": m.get("volume") or "", "issue": m.get("issue") or "",
+                "pages": m.get("page") or ""}
+
+    @classmethod
+    def _verbatim_overlap(cls, draft, sources, floor=None):
+        """The LONGEST run of words the draft copies verbatim from any fetched
+        source. Returns that length in words (0 when nothing exceeds `floor`).
+
+        Telling the writer to paraphrase is an instruction; this is the
+        measurement. Fetched pages are other people's writing, and a long
+        verbatim run is a copyright problem whether or not anyone intended it.
+        Deterministic — difflib over word sequences, no model call, so it costs
+        nothing and behaves the same with any provider. Never raises."""
+        try:
+            import difflib
+            wr = cls._wr()
+            cap = int(floor if floor is not None
+                      else (wr.MAX_QUOTE_WORDS if wr else 15))
+            dw = " ".join(str(draft or "").split()).split()
+            if len(dw) < cap:
+                return 0
+            best = 0
+            for src in (sources or []):
+                if not isinstance(src, dict):
+                    continue
+                txt = str(src.get("content") or "")
+                sw = " ".join(txt.split()).split()
+                if len(sw) < cap:
+                    continue
+                m = difflib.SequenceMatcher(None, dw, sw, autojunk=False)
+                blk = m.find_longest_match(0, len(dw), 0, len(sw))
+                if blk.size > best:
+                    best = blk.size
+            return best if best > cap else 0
+        except Exception:
+            return 0
+
+    async def _verify_references(self, results, card, lang="ar"):
+        """THE ACADEMIC LAYER, BUILT ON THE GENERAL ONE.
+
+        Until now the academic path made ZERO fetch calls: author, venue,
+        language and abstract all came from an aggregator's JSON, and the
+        document presented them as if they had been read. That is precisely
+        what the methodology forbids — «never from a search snippet or an
+        upstream scraper's metadata field» — and it is how a scraper's fields,
+        misaligned between two entries, can put one scholar's journal under
+        another scholar's name without anything noticing.
+
+        So every reference's DOI/URL is now OPENED and READ, through the very
+        same fetcher the web path uses (_extract_full), and each metadata field
+        is checked against the page that claims it. No top-three cap here: in a
+        citation list accuracy outweighs speed, and that is a deliberate
+        difference from the general web path, which keeps its cap.
+
+        Nothing is deleted on failure. A reference whose page will not open is
+        MARKED «غير مُتحقَّق منه» and shown that way — the gap is stated, not
+        filled and not hidden. Writes onto each source in place:
+            verified        VERIFIED | UNVERIFIED | UNREACHABLE
+            verified_fields the fields the page itself confirmed
+            unconfirmed     the fields it did not
+        Never raises."""
+        wr = self._wr()
+        items = [r for r in (results or []) if isinstance(r, dict)]
+        if not wr or not items:
+            return results
+        import os
+        if (os.environ.get("WEAVER_VERIFY_REFS", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return results
+        try:
+            _cap = int(os.environ.get("WEAVER_VERIFY_REF_MAX", "0") or 0)
+        except Exception:
+            _cap = 0
+        targets = items if _cap <= 0 else items[:_cap]
+        n_ok = n_bad = n_shut = n_reg = n_wall = 0
+        _seen_pages = {}
+        for src in targets:
+            url = str(src.get("url") or "").strip()
+            doi = str(src.get("doi") or "").strip()
+            if doi and not url:
+                url = "https://doi.org/" + doi.replace("https://doi.org/", "")
+            # safety (general layer): an extremist/harmful host is never
+            # fetched and never becomes a reference, however its URL arrived.
+            if url and wr.source_is_blocked(url):
+                src["verified"] = wr.UNVERIFIED
+                src["unconfirmed"] = ["blocked"]
+                n_shut += 1
+                continue
+            if not url:
+                src["verified"] = wr.UNREACHABLE
+                src["unconfirmed"] = ["url"]
+                n_bad += 1
+                continue
+            # WHERE did the link actually end, and how? A page reached after
+            # being bounced to a sign-in screen is not the work.
+            _fin, _chain = self._resolve_chain(url)
+            _verdict = wr.redirect_verdict(_chain, _fin, url)
+            try:
+                page = await self._extract_full(url)
+            except Exception:
+                page = None
+            # TWO DIFFERENT FAILURES, TWO DIFFERENT TRUTHS. A redirect chain
+            # that loops or carries a return parameter PROVES a sign-in wall.
+            # One page body served for several works proves only that what came
+            # back is a site page, not the work — which is equally true of a
+            # JavaScript-only page. Measured: semanticscholar.org returned the
+            # same 157-byte stub for four different papers, and calling that
+            # «behind a subscription» would be a plain falsehood about a site
+            # that charges nobody. The evidence decides the wording.
+            _wall_proof = _verdict in ("paywall", "loop")
+            _walled = _wall_proof
+            # remember WHICH body this source got, so the FIRST user of a
+            # shared page can be corrected once the sharing becomes visible.
+            _pk = None
+            if page:
+                _t = " ".join(str(page).split())
+                if len(_t) >= 30:
+                    _pk = (len(_t), _t[:120])
+                    src["_page_key"] = _pk
+                    src["_chain_end"] = (_fin or "") if _chain else ""
+            if page and wr.same_page_across_sources(page, _seen_pages):
+                # one page body served for two different works is a site page
+                _walled = True
+                page = None
+            src["_wall_proof"] = _wall_proof
+            got = wr.confirm_fields(page, src) if page else {}
+            _read = bool(got.get("title") or got.get("doi"))
+            if _read and not _walled:
+                src["verified"] = wr.VERIFIED
+                src["verified_fields"] = sorted(k for k, v in got.items() if v)
+                src["unconfirmed"] = sorted(k for k, v in got.items() if not v)
+                n_ok += 1
+                continue
+            # THE PAGE IS SHUT — the registry still has what the publisher
+            # deposited. Weaker than reading the article, stronger than an
+            # aggregator's scrape, so it gets its OWN state and says so.
+            reg = self._crossref_record(src.get("doi")) if src.get("doi") else None
+            if reg and reg.get("title"):
+                _fl = []
+                for k in ("title", "venue", "authors", "year", "volume",
+                          "issue", "pages"):
+                    if reg.get(k):
+                        src[k] = reg[k] if k not in ("authors",) else reg[k]
+                        _fl.append(k)
+                src["verified"] = "registry"
+                src["verified_fields"] = _fl
+                src["unconfirmed"] = []
+                src["blocked_at"] = ((_fin or "")[:120]
+                                     if (_walled and _chain) else "")
+                n_reg += 1
+                if _walled:
+                    n_wall += 1
+                continue
+            src["verified"] = ("paywalled" if _wall_proof else
+                               ("unreadable" if _walled else wr.UNREACHABLE))
+            # name the host ONLY when a redirect chain actually took us there.
+            # When the wall was inferred from one page body serving several
+            # works, we never got bounced anywhere — printing the DOI resolver
+            # as the blocker would name the wrong party.
+            src["blocked_at"] = ((_fin or "")[:120]
+                                 if (_walled and _chain) else "")
+            src["verified_fields"] = sorted(k for k, v in got.items() if v)
+            src["unconfirmed"] = sorted(k for k, v in got.items() if not v)
+            if _walled:
+                n_wall += 1
+            n_bad += 1
+        # RETROACTIVE: the first source to receive a shared page could not be
+        # known as sharing it — nothing had come before it. Once the pass is
+        # over the tally is visible, so the first user is corrected too. Without
+        # this, one reference out of a whole blocked aggregator went unlabelled
+        # purely because it happened to be fetched first.
+        _counts = {}
+        for src in targets:
+            k = src.get("_page_key")
+            if k:
+                _counts[k] = _counts.get(k, 0) + 1
+        for src in targets:
+            k = src.pop("_page_key", None)
+            _ce = src.pop("_chain_end", "")
+            if not k or _counts.get(k, 0) < 2:
+                continue
+            if str(src.get("verified") or "") == wr.VERIFIED:
+                continue                    # its own fields confirmed: leave it
+            if not src.get("blocked_at") and _ce:
+                src["blocked_at"] = _ce[:120]
+            if str(src.get("verified") or "") in (wr.UNREACHABLE, wr.UNVERIFIED):
+                src["verified"] = ("paywalled" if src.get("_wall_proof")
+                                   else "unreadable")
+        for x in targets:
+            x.pop("_wall_proof", None)
+        n_wall = sum(1 for x in targets
+                     if str(x.get("verified") or "") == "paywalled"
+                     or (x.get("blocked_at") and x.get("verified") == "registry"))
+        n_unread = sum(1 for x in targets
+                       if str(x.get("verified") or "") == "unreadable")
+        for src in items[len(targets):]:
+            src.setdefault("verified", wr.UNVERIFIED)
+        try:
+            # `ok` + `registry` + `unverified` == total. `paywalled` and
+            # `unreadable` are ATTRIBUTES of the failures, not extra buckets —
+            # printing them as a fourth column made four numbers sum to 17 out
+            # of 9.
+            card["refs_verified"] = {"ok": n_ok, "registry": n_reg,
+                                     "unverified": n_bad, "paywalled": n_wall,
+                                     "unreadable": n_unread,
+                                     "no_doi": sum(1 for x in targets
+                                                   if not x.get("doi")),
+                                     "blocked": n_shut, "total": len(items)}
+            self._record_decision(
+                card, "تحقّق المراجع",
+                f"من الصفحة {n_ok}، من سجلّ الـDOI {n_reg}، بلا تحقّق "
+                f"{n_bad} — من {len(items)}", "measured", "بحث أكاديمي")
+            if n_wall:
+                # how many of the WALLED ones the registry actually rescued —
+                # n_reg counts every registry hit, walled or merely unreachable,
+                # so quoting it here produced «8 of the 6».
+                _saved = sum(1 for x in targets
+                             if str(x.get("verified") or "") == "registry"
+                             and x.get("blocked_at"))
+                self._skip_note(
+                    card, "مراجع محجوبة باشتراك",
+                    f"{n_wall} مرجعاً صفحتُه خلف تسجيل دخول، فلم تُقرأ؛ "
+                    + (f"وأُخذت بيانات {_saved} منها من سجلّ الـDOI الذي "
+                       "أودعه الناشر" if _saved else
+                       "ولم يُعوَّض ذلك بسجلّ الـDOI"))
+            if n_unread:
+                _nd = sum(1 for x in targets
+                          if str(x.get("verified") or "") == "unreadable"
+                          and not x.get("doi"))
+                self._skip_note(
+                    card, "صفحات لا تُقرأ آلياً",
+                    f"{n_unread} مرجعاً أعادت صفحتُه صفحةَ موقعٍ لا ورقةً "
+                    "(تحتاج جافاسكربت أو ما شابه) — وهذا ليس حجباً باشتراك"
+                    + (f"؛ و{_nd} منها بلا DOI فتعذّر الرجوع إلى السجلّ"
+                       if _nd else ""))
+            if n_bad or n_shut:
+                self._skip_note(
+                    card, "تحقّق المراجع",
+                    f"تعذّر التحقّق من {n_bad + n_shut} مرجعاً من "
+                    f"{len(items)} من صفحته الأصلية ولا من سجلّه، فوُسم "
+                    "«غير مُتحقَّق منه» ولم يُحذف")
+        except Exception:
+            pass
+        return items
+
     async def _academic_search(self, task: Task, mem: TaskMemory):
         """Layer 4 academic path: gather peer-reviewed / open-access sources
         from the free scholarly APIs and add them to the task's sources + RAG
         memory. Degrades safely (no network / all down → nothing added)."""
+        import os                       # lazy, like every other import here
         card = task.task_card
         query = (card.get("topic") or task.description or "").strip()
         if not query:
+            self._skip_note(card, "البحث الأكاديمي", "لا موضوع للبحث عنه")
             return
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
         limit = self._as_int(card.get("reference_count"), 8) or 8
+        # ① the MODEL composes the query — the request is no longer sent to the
+        #    databases as a literal sentence.
+        _q = self._search_query(query, task.description, lang)
+        if getattr(self, "_query_composed", False):
+            self._record_decision(card, "استعلام البحث", _q[:60], "model",
+                                  "بحث أكاديمي")
+            _rl = getattr(self, "_refs_lang", "")
+            if _rl:
+                self._record_decision(card, "لغة المراجع", _rl, "model",
+                                      "بحث أكاديمي")
+                card["refs_lang_target"] = _rl
+            _rn = getattr(self, "_refs_lang_note", "")
+            if _rn:
+                card["refs_lang_note"] = _rn
+        elif self.llm_fn:
+            # RULE 2 — the fallback does not pass in silence. The raw request
+            # goes to the databases as a SENTENCE, and Arabic titles match on
+            # shape: «أريدك ٩ مراجع… أثر إشعاعات الهاتف على الأطفال» pulled in
+            # papers on «مراجع الحسابات» on the word «مراجع» alone. If the model
+            # did not compose the query, the reader is told why the list may
+            # wander instead of being left to wonder.
+            self._skip_note(card, "صياغة استعلام البحث",
+                            "لم يصغ النموذج الاستعلام ("
+                            + (getattr(self, "_last_query_reason", "")
+                               or "بلا سبب معلوم")
+                            + ")، فأُرسل نصّ الطلب كما هو وقد تتأثّر دقّة المراجع")
+        _wr = self._wr()                # the general layer, needed from here on
         try:
-            results = self._scholarly_search(query, lang, limit)
+            # ② the lexical filter widens the candidate pool instead of ruling
+            #    on it, whenever there is a model to rule.
+            results = self._scholarly_search(_q or query, lang, limit,
+                                             wide=bool(self.llm_fn))
+            # SEARCH EACH PART SEPARATELY, NOT ALL OF THEM AT ONCE. One combined
+            # query returns shallow results for every part of a multi-part
+            # request: «الإعجاز العلمي والأخلاقي» searched as one phrase brought
+            # back nine papers and not one on the moral side, because the scientific
+            # half dominates the phrase. The facets are the MODEL's own reading of
+            # the topic — it already named them in the same call that composed the
+            # query, so this costs no extra model call — and the number of searches
+            # is scaled to how many parts there actually are.
+            # THE REQUEST'S LANGUAGE IS A SEARCH INSTRUCTION, NOT A PREFERENCE.
+            # An Arabic request came back with an English-only query and an
+            # English-only corpus, and the Arabic literature that does exist was
+            # never asked for. The topic is searched in the language the user
+            # wrote in as well, as its own query, so both bodies of work get a
+            # chance — and the ranking below puts the requested language first.
+            # THREE READINGS OF ONE FIELD, NOT TWO. «ar»/«en» name a language;
+            # «any» used to switch the whole preference OFF — but a reader who
+            # asks for «مراجع عربية وإنجليزية» is asking for BOTH to be present,
+            # which is the opposite of not caring. And when the model says
+            # nothing at all, the document's own language is the only sensible
+            # reading — the extra query already assumed that; the ranking did
+            # not, so half the mechanism ran.
+            _rl_raw = str(card.get("refs_lang_target") or "").strip().lower()
+            _other = "en" if lang == "ar" else "ar"
+            if _rl_raw in ("any", "all", "both", "mixed", "ar+en", "en+ar"):
+                _want_langs = [lang, _other]          # both, in turn
+            elif _rl_raw[:2] in ("ar", "en"):
+                _want_langs = [_rl_raw[:2]]
+            else:
+                _want_langs = [lang]                  # silent → the document's
+            card["refs_lang_plan"] = list(_want_langs)
+            _want_lang = _want_langs[0]
+            if (_want_lang and _wr and query
+                    and (os.environ.get("WEAVER_LANG_QUERY", "1")
+                         or "1").strip() not in ("0", "false", "no")):
+                # search in the user's own words whenever their language is one
+                # of the targets — for «both» that is always true.
+                _native = query if lang in _want_langs else None
+                if _native and _native.strip() != (_q or "").strip():
+                    try:
+                        _more = self._scholarly_search(
+                            _native, _want_lang, limit,
+                            wide=bool(self.llm_fn)) or []
+                    except Exception:
+                        _more = []
+                    _seen0 = {(r.get("doi") or r.get("url") or r.get("title") or "")
+                              for r in (results or [])}
+                    _n = 0
+                    for _m in _more:
+                        _k = (_m.get("doi") or _m.get("url")
+                              or _m.get("title") or "")
+                        if _k and _k not in _seen0:
+                            _seen0.add(_k)
+                            if results is None:
+                                results = []
+                            results.append(_m)
+                            _n += 1
+                    if _n:
+                        self._record_decision(
+                            card, "استعلام بلغة الطلب", f"+{_n} مرشّحاً",
+                            "measured", "بحث أكاديمي")
+            _fx = [f for f in (getattr(self, "_facets", []) or []) if len(f) >= 3]
+            if _wr and len(_fx) >= 2 and (os.environ.get(
+                    "WEAVER_MULTI_QUERY", "1") or "1").strip() not in (
+                    "0", "false", "no"):
+                _budget = _wr.scale_calls(len(_fx))
+                _extra = min(len(_fx), max(0, _budget - 1), 6)
+                _have = {(r.get("doi") or r.get("url") or r.get("title") or "")
+                         for r in (results or [])}
+                _added = 0
+                for _f in _fx[:_extra]:
+                    try:
+                        _more = self._scholarly_search(
+                            _f, lang, max(3, limit // 2),
+                            wide=bool(self.llm_fn)) or []
+                    except Exception:
+                        _more = []
+                    for _m in _more:
+                        _k = (_m.get("doi") or _m.get("url")
+                              or _m.get("title") or "")
+                        if _k and _k not in _have:
+                            _have.add(_k)
+                            (results or []).append(_m) if results else None
+                            _added += 1
+                if _added:
+                    self._record_decision(
+                        card, "استعلامات الجوانب",
+                        f"{_extra} جانباً ⟶ +{_added} مرشّحاً", "measured",
+                        "بحث أكاديمي")
         except Exception:
             results = None
         if not results:
+            self._skip_note(card, "البحث الأكاديمي",
+                            "لم تُعِد قواعد البيانات الأكاديمية أي نتيجة")
             mem.set_status(4, "بحث أكاديمي: لا نتائج (تدهور آمن)")
+            return
+        # ③ the MODEL judges topical relevance on the fetched titles, in ONE
+        #    call. This is the question nobody used to ask.
+        _kept, _dropped = self._judge_relevance(results, query,
+                                                task.description, lang)
+        if _kept is not None:
+            self._record_decision(card, "فرز المراجع",
+                                  f"أُبقي {len(_kept)}، استُبعد "
+                                  f"{len(_dropped or [])}", "model",
+                                  "بحث أكاديمي")
+            results = _kept
+        else:
+            # the model was NOT consulted, or said nothing usable. The widened
+            # pool was gathered FOR it; without its judgement the widening is
+            # withdrawn and the lexical pre-filter's own result stands — exactly
+            # what the old code produced. Anything else would let a silent model
+            # push MORE off-topic papers in than before.
+            _m = [r for r in (results or [])
+                  if r.get("_prefilter") != "backup"]
+            if _m:
+                results = _m
+            if self.llm_fn:
+                # RULE 2 again: the judge is the step that decides relevance.
+                # When it does not answer, the list is only lexically filtered —
+                # say so, and say WHY, instead of presenting it as judged.
+                self._skip_note(
+                    card, "فرز المراجع بالنموذج",
+                    "لم يحكم النموذج على صلة المراجع ("
+                    + (getattr(self, "_last_judge_reason", "")
+                       or "بلا سبب معلوم")
+                    + ")، فبقي الفرز اللفظيّ وحده")
+        for _r in (results or []):
+            _r.pop("_prefilter", None)
+        # ── the GENERAL layer, applied before anything is verified ──────────
+        if _wr and results:
+            # Section 5: a requested year/range narrows the pool BEFORE the
+            # fetch step, not after it — candidates outside the window are not
+            # fetched at all, and a shortfall is reported rather than quietly
+            # back-filled with older work.
+            _a, _b = _wr.parse_window(self._current_request(task.description))
+            if _a or _b:
+                _in = [r for r in results if _wr.within_window(r, _a, _b)]
+                _lost = len(results) - len(_in)
+                if _in:
+                    results = _in
+                self._record_decision(card, "المدى الزمني",
+                                      f"{_a or '…'}–{_b or '…'}", "user",
+                                      "بحث أكاديمي")
+                if _lost:
+                    self._skip_note(
+                        card, "المدى الزمني",
+                        f"استُبعد {_lost} مرجعاً خارج المدى المطلوب قبل "
+                        "التحقّق، ولم تُستبدَل بمراجع أقدم")
+                if len(results) < limit:
+                    self._skip_note(
+                        card, "كفاية المدى الزمني",
+                        f"المتاح داخل المدى {len(results)} مرجعاً مقابل "
+                        f"{limit} مطلوباً — النقص معلَنٌ ولم يُسدَّ بأقدم منه")
+            # Step 4: the quality ladder decides the order (peer-reviewed+DOI
+            # first, excluded hosts last) instead of the alphabet.
+            results = _wr.order_by_quality(results)
+            # AND THE REQUESTED LANGUAGE LEADS. Quality decides the ladder;
+            # within it, a work in the language the user asked for comes first,
+            # so a nine-item list is filled with Arabic work before it reaches
+            # for English — «قدر الإمكان» made mechanical instead of hoped for.
+            _plan = list(card.get("refs_lang_plan") or [])
+            if len(_plan) >= 2:
+                # BOTH: take turns, so a nine-item list cannot come back in one
+                # language because that language happened to rank higher.
+                results = _wr.interleave_by_lang(results, _plan)
+                _cnt = {w: sum(1 for r in results
+                               if str(r.get("lang") or "").lower().startswith(w))
+                        for w in _plan}
+                self._record_decision(
+                    card, "ترتيب لغة المراجع",
+                    "تناوبٌ بين " + "، ".join(f"{w}={_cnt[w]}" for w in _plan),
+                    "measured", "بحث أكاديمي")
+            elif _plan:
+                _wl = _plan[0]
+                _idx = {id(r): i for i, r in enumerate(results)}
+                results = sorted(
+                    results,
+                    key=lambda r: (0 if str(r.get("lang") or "").lower()
+                                   .startswith(_wl) else 1, _idx.get(id(r), 0)))
+                _n_in = sum(1 for r in results
+                            if str(r.get("lang") or "").lower().startswith(_wl))
+                self._record_decision(card, "ترتيب لغة المراجع",
+                                      f"{_n_in} من {len(results)} بـ{_wl} أولاً",
+                                      "measured", "بحث أكاديمي")
+            _drop = [r for r in results
+                     if _wr.quality_tier(r) == _wr.TIER_EXCLUDED]
+            if _drop:
+                results = [r for r in results
+                           if _wr.quality_tier(r) != _wr.TIER_EXCLUDED]
+                self._skip_note(
+                    card, "سلّم جودة المصدر",
+                    f"استُبعد {len(_drop)} مصدراً لا يصلح توثيقاً أساسياً "
+                    "(موسوعات عامة/مدوّنات/مواقع مجهولة)")
+        results = (results or [])[:limit]
+        # ── the ACADEMIC layer on top: open and read every one of them ──────
+        results = await self._verify_references(results, card, lang)
+        # ④ the back door is closed: an off-topic list is no longer served in
+        #    place of a relevant one. Saying «لم أجد» is honest; filling the
+        #    bibliography with papers about another subject is not.
+        if not results:
+            _seen = len(_dropped or []) or len(_kept or [])
+            self._skip_note(
+                card, "المراجع الأكاديمية",
+                (f"فُحص {_seen} مرجعاً من قواعد البيانات ولم يخصّ الموضوعَ "
+                 "منها شيء" if _seen else
+                 "لم يجد النموذج بين نتائج قواعد البيانات مرجعاً يخصّ الموضوع")
+                + (" — والمتاح أكاديمياً في هذا الموضوع أغلبه بلغةٍ أخرى"
+                   if lang == "ar" else ""))
+            mem.set_status(4, "بحث أكاديمي: لا مرجع مطابق للموضوع")
             return
         srcs = card.setdefault("sources", [])
         for r in results:
@@ -2889,15 +5183,125 @@ class WeaverOrchestrator:
             year = r.get("year", "")
             doi = r.get("doi", "")
             content = r.get("content") or ""
+            # venue and language must travel WITH the source. They are captured
+            # from the indexes, but this record dropped them, so the annotation
+            # line under each reference could only ever print the summary —
+            # caught by replaying real payloads through the real pipeline.
             srcs.append({"key": (title or url)[:60], "url": url, "title": title,
                          "content": content, "authors": r.get("authors") or [],
                          "year": year, "doi": doi,
+                         "venue": r.get("venue", ""), "lang": r.get("lang", ""),
+                         "verified": r.get("verified", ""),
+                         "verified_fields": r.get("verified_fields") or [],
+                         "unconfirmed": r.get("unconfirmed") or [],
+                         "blocked_at": r.get("blocked_at", ""),
+                         "oa": r.get("oa", False),
                          "source": r.get("source", ""), "academic": True,
                          "full": False})
             mem.add_reference(
                 f"[أكاديمي/{r.get('source','')}] {title} — {auth} ({year}) "
                 f"{('doi:'+doi) if doi else ''} {content[:200]} ({url})",
                 source_key=(url or doi or title))
+        # THE LANGUAGE THE USER ASKED FOR, ANSWERED WITH NUMBERS. Asking for
+        # «٩ مراجع عربية» used to return nine English papers with not one word
+        # about it. The indexes report each work's language, so the answer is
+        # counted, not guessed: how many came back in the language the model
+        # targeted, and what the rest are. Saying «the Arabic literature on this
+        # subject is scarce, here is what exists» is an answer; silence is not.
+        # A FACET THAT CAME BACK EMPTY IS NEWS. Asking for «الإعجاز العلمي
+        # والأخلاقي» returned nine references and not one on the moral side, and
+        # nothing anywhere said so — the reader is left to discover it by
+        # reading all nine. The facets are the MODEL's own reading of the topic;
+        # counting how many gathered titles carry each one is arithmetic, and it
+        # decides nothing — it only reports. A facet nobody covered is named.
+        _fc = [f for f in (getattr(self, "_facets", []) or []) if len(f) >= 3]
+        if _fc and results:
+            def _flat(t):
+                # drop Arabic diacritics and punctuation: «الإِعْجَازُ» and
+                # «الإعجاز» are the same word to a reader and must be to us.
+                t = "".join(c for c in str(t or "")
+                            if not ("\u064b" <= c <= "\u0652"))
+                return " ".join("".join(
+                    c if (c.isalnum() or c.isspace()) else " "
+                    for c in t.lower()).split())
+            _blob = _flat(" ".join(str(r.get("title") or "") + " "
+                                   + str(r.get("content") or "")
+                                   for r in results))
+
+            def _script(t):
+                return "ar" if any("\u0600" <= c <= "\u06ff" for c in str(t)) \
+                    else "la"
+
+            def _stem(w):
+                # Arabic words appear with prefixes and suffixes a literal test
+                # cannot cross: «الأطفال» vs «للأطفال» vs «أطفال»; «المراهقون»
+                # vs «المراهقين». Trimming the common affixes is not a keyword
+                # list — it is the alphabet's own morphology, and it applies to
+                # every Arabic word alike.
+                for pre in ("وال", "فال", "بال", "كال", "لل", "ال", "و", "ف",
+                            "ب", "ك", "ل"):
+                    if len(w) > len(pre) + 3 and w.startswith(pre):
+                        w = w[len(pre):]
+                        break
+                for suf in ("ات", "ون", "ين", "ان", "ية", "ها", "هم", "تي",
+                            "ه", "ي", "ة"):
+                    if len(w) > len(suf) + 3 and w.endswith(suf):
+                        w = w[:-len(suf)]
+                        break
+                return w
+
+            _blob_stems = {_stem(w) for w in _blob.split() if len(w) >= 4}
+
+            def _covered(f):
+                # EVERY distinctive word of the facet must appear, not just one.
+                # «الإعجاز الأخلاقي» shares «الإعجاز» with «الإعجاز العلمي», so
+                # an any-word test called the moral facet covered by nine papers
+                # that never touched it. The longest words carry the meaning.
+                # MEASURED: a facet «الأطفال والمراهقون» was declared uncovered
+                # by nine papers whose titles say «الأطفال» and «المراهقين» —
+                # the literal test could not see past a prefix. Comparing stems
+                # is what makes the count mean what it claims to mean.
+                ws = sorted((w for w in _flat(f).split() if len(w) >= 4),
+                            key=len, reverse=True)[:3]
+                if not ws:
+                    return True
+                return all((w in _blob) or (_stem(w) in _blob_stems)
+                           for w in ws)
+            # A WORD-MATCH CANNOT CROSS AN ALPHABET. The model names the facets
+            # in the REQUEST's language while the literature comes back in the
+            # language it is published in — so Arabic facets were hunted inside
+            # English titles and every one of them «went uncovered», printing
+            # «لم يُعثر على أيٍّ من جوانب الموضوع» under eight papers that were
+            # squarely about them. Counting is only honest within one script;
+            # across scripts this check says nothing and must stay silent.
+            _blob_scr = _script(_blob[:4000])
+            _fc = [f for f in _fc if _script(f) == _blob_scr]
+            _missing = [f for f in _fc if not _covered(f)] if _fc else []
+            if _missing and len(_missing) < len(_fc):
+                self._skip_note(
+                    card, "تغطية جوانب الموضوع",
+                    "لم تُعِد قواعد البيانات مرجعاً يتناول: "
+                    + "، ".join(_missing[:3])
+                    + f" — والمراجع الـ{len(results)} تغطّي بقية الجوانب")
+            elif _missing:
+                self._skip_note(
+                    card, "تغطية جوانب الموضوع",
+                    "لم يُعثَر على مرجعٍ يتناول أيّاً من جوانب الموضوع كما "
+                    "حدّدها النموذج: " + "، ".join(_fc[:3]))
+        _tl = str((card.get("refs_lang_plan") or [""])[0]
+                  if len(card.get("refs_lang_plan") or []) == 1
+                  else "").lower()
+        if _tl and _tl not in ("any", "all", ""):
+            _in = sum(1 for r in results
+                      if str(r.get("lang") or "").lower().startswith(_tl))
+            if _in < len(results):
+                _note = card.get("refs_lang_note") or ""
+                self._skip_note(
+                    card, "لغة المراجع",
+                    f"طُلبت المراجع بـ«{_tl}» ووُجد منها {_in} من "
+                    f"{len(results)}؛ والباقي بلغاتٍ أخرى لأن الأدب المحكَّم في "
+                    "هذا الموضوع يُنشر فيها غالباً"
+                    + (f" — {_note}" if _note else ""))
         card["academic_reads"] = len(results)
         mem.set_status(4, f"بحث أكاديمي: {len(results)} مصدر محكّم")
 
@@ -3084,9 +5488,23 @@ class WeaverOrchestrator:
         lang = "ar" if card.get("language", "ar") == "ar" else "en"
         limit = self._as_int(card.get("reference_count"), 8) or 8
 
+        # GENERAL LAYER · safety on the query itself, before it is ever sent.
+        # A query whose clear purpose is harmful material is not run at all, and
+        # no softer version of it is attempted — the limitation is stated.
+        _wr = self._wr()
+        if _wr and _wr.query_is_blocked(query):
+            self._skip_note(card, "بحث الويب",
+                            "لم يُنفَّذ البحث: الاستعلام يطلب محتوًى ضارّاً")
+            mem.set_status(4, "بحث ويب: أُوقف لسببٍ يتعلّق بالسلامة")
+            return
+
         # news/recency intent → date-augmented query + time filter + recency sort
-        is_recency = self._is_recency_query(
-            (card.get("topic") or "") + " " + (task.description or ""))
+        # the settled decision if one was reached (model first), else detect
+        _ri = card.get("recency_intent")
+        is_recency = (bool(_ri) if isinstance(_ri, bool)
+                      else self._is_recency_query(
+                          (card.get("topic") or "") + " "
+                          + (task.description or "")))
         sx_time = ddg_df = None
         if is_recency:
             query = self._augment_query_with_date(query, lang)
@@ -3135,6 +5553,32 @@ class WeaverOrchestrator:
         if not results:
             results = await self._tool_web_search(query, lang, limit)
             used = "web_search"
+
+        # GENERAL LAYER · a missed query is REFORMULATED, not resent. Each angle
+        # changes the SHAPE of the query — the nouns alone, the two most
+        # specific terms, the core phrase quoted, a document-type narrowing — so
+        # a retry is meaningfully different rather than cosmetically so, which
+        # is the one thing that actually changes what comes back.
+        if not results and _wr:
+            _tried = [query]
+            for _ in range(3):
+                _alt = _wr.reformulate(query, _tried)
+                if not _alt:
+                    break
+                _tried.append(_alt)
+                try:
+                    results = self._searx_query(instance, _alt, lang, limit,
+                                                timeout=6, time_range=sx_time)
+                    if not results:
+                        results = await self._tool_web_search(_alt, lang, limit)
+                except Exception:
+                    results = None
+                if results:
+                    self._record_decision(card, "إعادة صياغة الاستعلام",
+                                          _alt[:60], "measured", "بحث ويب")
+                    used = str(used) + "+reformulated"
+                    break
+
         if not results:
             mem.set_status(4, "بحث ويب: لا نتائج (تدهور آمن)")
             return
@@ -3151,7 +5595,11 @@ class WeaverOrchestrator:
             snippet = r.get("content", "")
             content = snippet
             is_full = False
-            if i < 3:  # read the top 3 links in full
+            # GENERAL LAYER · an extremist/harmful host is never fetched and
+            # never cited, however its URL arrived.
+            if _wr and _wr.source_is_blocked(url):
+                continue
+            if i < 3:  # read the top 3 links in full (general path cap: KEPT)
                 text = await self._extract_full(url)
                 if text:
                     content = text
@@ -3196,6 +5644,18 @@ class WeaverOrchestrator:
                                 "alternative": r.get("alternative")})
         task.task_card["sources"] = kept
         task.task_card["credibility"] = {"kept": len(kept), "dropped": dropped}
+        # A documentation style needs author/year — which a web result never
+        # carries. When the user named a style, look the DOI up so the list can
+        # actually be formatted in it. Guarded and bounded; a miss changes
+        # nothing.
+        try:
+            _cs = str(task.task_card.get("citation_style", "")).upper()
+            if _cs and _cs not in ("", "UNSPECIFIED", "NONE"):
+                _n = self._enrich_sources_for_citation(kept)
+                if _n:
+                    mem.set_status(5, f"إثراء بيانات التوثيق: {_n} مصدر")
+        except Exception as e:
+            mem.set_status(5, f"إثراء التوثيق (تخطّي: {e})")
         mem.set_status(5, f"مصداقية: قُبل {len(kept)}، رُفض {len(dropped)}")
 
     def _descriptive_titles(self, topic, sections_plan, lang):
@@ -3213,30 +5673,69 @@ class WeaverOrchestrator:
         if not self.llm_fn or not sections_plan:
             return sections_plan
         import re
+        # A slot is "abstract" by its SHAPE, not by its word. This used to be a
+        # list of four words (المبحث/المطلب/Section/Subsection), so a structure
+        # built from the user's own terms — «الباب 1», «الجزء 1.1» — matched
+        # nothing and shipped with no topical titles at all. The real test is
+        # simply: a label followed by a number and NOTHING else. Any unit word,
+        # in any language, is covered.
         abstract_re = re.compile(
-            r'^\s*(?:المبحث|المطلب|Section|Subsection)\b', re.I)
+            r'^\s*[^\W\d_]{2,20}(?:\s+[^\W\d_]{2,20})?'      # one or two words
+            r'[\s:،.\-]*([0-9٠-٩]+(?:[.\-][0-9٠-٩]+)*)[\s:،.\-]*$',
+            re.UNICODE)
+
+        def _is_slot(title, lvl, main_no):
+            """Shape AND position: a placeholder's number IS its index. Shape
+            alone would have swallowed real titles like «كوفيد 19» or
+            «رؤية 2030» — a year is not a section index. «الباب 4» is a
+            placeholder only when it is in fact the 4th main section."""
+            m = abstract_re.match(title or "")
+            if not m:
+                return False
+            nums = re.split(r'[.\-]', m.group(1).translate(
+                str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")))
+            try:
+                nums = [int(x) for x in nums if x != ""]
+            except ValueError:
+                return False
+            if not nums or any(not 1 <= n <= 99 for n in nums):
+                return False
+            if lvl <= 1:
+                return len(nums) == 1 and nums[0] == main_no + 1
+            return len(nums) >= 2 and nums[0] == main_no
         # collect the abstract body slots IN ORDER, each with a role label
         slots, main_no = [], 0        # slots: list of (plan_index, role_text)
         for i, s in enumerate(sections_plan):
             title = (s.get("title") or s.get("heading") or "").strip()
-            if not abstract_re.match(title):
-                continue
             lvl = int(s.get("level", 1) or 1)
+            if not _is_slot(title, lvl, main_no):
+                continue
+            # name the role with the USER'S OWN unit word, taken from the slot
+            # itself («الباب 1» → «الباب»), so the model is asked for a title
+            # for a الباب — not told the document is made of مباحث when it isn't
+            _unit = re.sub(r'[\s:،.\-]*[0-9٠-٩][\s\S]*$', '', title).strip() \
+                or ("قسم" if lang == "ar" else "section")
             if lvl <= 1:
                 main_no += 1
-                role = (f"مبحث رئيسي رقم {main_no}" if lang == "ar"
-                        else f"main section #{main_no}")
+                role = (f"{_unit} رئيسي رقم {main_no}" if lang == "ar"
+                        else f"{_unit} #{main_no} (main)")
+                _main_unit = _unit
             else:
-                role = (f"مطلب فرعي تحت المبحث {main_no}" if lang == "ar"
-                        else f"subsection under section {main_no}")
+                _parent = locals().get("_main_unit") or (
+                    "القسم" if lang == "ar" else "section")
+                role = (f"{_unit} فرعي تحت {_parent} {main_no}" if lang == "ar"
+                        else f"{_unit} under {_parent} {main_no}")
             slots.append((i, role))
         if not slots:
             return sections_plan          # nothing abstract to rename
 
         def _clean(t):
             t = (t or "").strip().strip('"“”«»').strip()
-            t = re.sub(r'^(?:المبحث|المطلب|Section|Subsection)\b[\s:،.\d]*', '',
-                       t, flags=re.I).strip()
+            # strip a leading "<unit> <number>:" echo of ANY unit word, not just
+            # the four that used to be listed here
+            t = re.sub(r'^[^\W\d_]{2,20}(?:\s+[^\W\d_]{2,20})?'
+                       r'[\s:،.\-]*[0-9٠-٩]+(?:[.\-][0-9٠-٩]+)*[\s:،.\-]+', '',
+                       t, flags=re.UNICODE).strip()
             return t
 
         def _valid(ct):
@@ -3253,7 +5752,8 @@ class WeaverOrchestrator:
                     f"أريد عناوين وصفية دقيقة لبحث علمي عن: «{topic}».\n"
                     f"لكل بندٍ في القائمة التالية اكتب عنواناً وصفياً واحداً يخصّ "
                     f"الموضوع فعلاً، ومختلفاً عن البقية (لا تعريفات عامة مكرّرة)، "
-                    f"بلا كلمتَي «مبحث»/«مطلب»:\n{block}\n\n"
+                    f"واكتب الموضوع وحده بلا إعادة اسم الوحدة ولا رقمها:"
+                    f"\n{block}\n\n"
                     f"أعِد {len(roles)} سطراً فقط، سطراً واحداً لكل عنوان وبنفس "
                     f"الترتيب، كلٌّ يبدأ برقمه هكذا: «1. العنوان».")
             else:
@@ -3261,8 +5761,9 @@ class WeaverOrchestrator:
                     f"I need precise descriptive titles for research on: "
                     f"\"{topic}\".\nFor each item below, write ONE descriptive, "
                     f"topic-specific title, distinct from the others (no repeated "
-                    f"general definitions), without the words 'Section'/"
-                    f"'Subsection':\n{block}\n\nReturn exactly {len(roles)} lines, "
+                    f"general definitions); write the SUBJECT only, without "
+                    f"repeating the unit word or its number:"
+                    f"\n{block}\n\nReturn exactly {len(roles)} lines, "
                     f"one title per line in the same order, each starting with its "
                     f"number: \"1. Title\".")
             try:
@@ -3310,7 +5811,15 @@ class WeaverOrchestrator:
             return sections_plan
         plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
         for k, (idx, role) in enumerate(slots):
-            plan[idx]["title"] = got[k]
+            # keep the structural label ("المبحث 1") in front of the descriptive
+            # title, the way an Arabic thesis numbers its sections — dropping it
+            # lost the numbering the user explicitly asked for.
+            _orig = (sections_plan[idx].get("title")
+                     or sections_plan[idx].get("heading") or "").strip()
+            _new = got[k]
+            plan[idx]["title"] = (f"{_orig}: {_new}"
+                                  if _orig and not _new.startswith(_orig)
+                                  else _new)
         return plan
 
     def _rich_outline_chunked(self, topic, card, lang, context=""):
@@ -3606,6 +6115,316 @@ class WeaverOrchestrator:
         return txt
 
     @staticmethod
+    def _length_directive(card=None, n_sections=1, lang="ar", share=None):
+        """What to put in the writer prompt's "Required length" slot.
+
+        That slot read card["page_count"] — a key NOTHING in the pipeline ever
+        sets — so the writer was handed an EMPTY length on every section and had
+        no idea how long the document should be; the length was only chased
+        afterwards by the expansion loop. The real target lives in
+        target_words / target_pages / max_words; this turns it into a per-section
+        budget the writer can act on. Returns "" when no length was requested,
+        leaving the previous behaviour untouched."""
+        card = card or {}
+        total = card.get("target_words")
+        pages = card.get("target_pages")
+        mx = card.get("max_words")
+        if not total and not pages and not mx:
+            return ""
+        n = max(1, int(n_sections or 1))
+        if not total and pages:
+            try:
+                import os as _o
+                total = int(pages) * int(_o.environ.get(
+                    "WEAVER_WORDS_PER_PAGE", "300") or 300)
+            except Exception:
+                total = 0
+        base = total or mx or 0
+        # `share` comes from _section_budgets when the caller computed one per
+        # ROLE; the flat division is only the fallback for callers that did not
+        if share is None:
+            share = int(base / n) if base else 0
+        else:
+            try:
+                share = max(0, int(share))
+            except Exception:
+                share = int(base / n) if base else 0
+        if lang == "en":
+            bits = []
+            if pages:
+                bits.append(f"{pages} pages")
+            if total:
+                bits.append(f"~{total} words in total")
+            if share:
+                bits.append(f"about {share} words for THIS section")
+            if mx:
+                bits.append(f"never exceeding {mx} words overall")
+            return " — ".join(bits)
+        bits = []
+        if pages:
+            bits.append(f"{pages} صفحة")
+        if total:
+            bits.append(f"نحو {total} كلمة للمستند كله")
+        if share:
+            bits.append(f"أي نحو {share} كلمة لهذا القسم")
+        if mx:
+            bits.append(f"وألّا يتجاوز المستند {mx} كلمة")
+        return " — ".join(bits)
+
+    @classmethod
+    def _section_budgets(cls, sections_plan, card=None, bridge_cap=120):
+        """Split the requested word budget over the sections BY ROLE.
+
+        `_length_directive` divides the total by the section COUNT, so a 3-level
+        structure (3 مباحث + 9 مطالب + 26 تقسيمات + front/back matter = 42) told
+        every section "about 71 words" — including the twelve parents that only
+        write a short bridge and the references list that is generated, not
+        written. 71 is not a believable size for a section, so the writer ignored
+        it and produced ~150 each: 6,300 words against a 3,000 target.
+
+        Roles:
+          • a PARENT (a section immediately followed by deeper ones) writes only
+            a bridge, and the bridges are paid for out of the same budget —
+            capped at 15% of the total between them, so twelve bridges cannot
+            eat half the document.
+          • the REFERENCES section is generated and gets nothing.
+          • every remaining LEAF shares what is left.
+
+        Returns {index: words}. Empty dict when no length was requested, so the
+        caller keeps its current behaviour. Never raises."""
+        try:
+            card = card or {}
+            total = card.get("target_words") or card.get("max_words")
+            if not total:
+                return {}
+            total = int(total)
+            secs = [s for s in (sections_plan or []) if isinstance(s, dict)]
+            if not secs:
+                return {}
+            lv = []
+            for s in secs:
+                try:
+                    lv.append(int(s.get("level", 1) or 1))
+                except Exception:
+                    lv.append(1)
+            parents, refs, leaves = [], [], []
+            for i, s in enumerate(secs):
+                title = s.get("title") or s.get("heading") or ""
+                if cls._is_ref_heading(title):
+                    refs.append(i)
+                elif i + 1 < len(secs) and lv[i + 1] > lv[i]:
+                    parents.append(i)
+                else:
+                    leaves.append(i)
+            if not leaves:
+                leaves, parents = list(range(len(secs))), []
+            out = {i: 0 for i in refs}
+            b_pool = int(total * 0.15)
+            b_each = min(int(bridge_cap or 120),
+                         max(30, b_pool // max(1, len(parents)))) if parents else 0
+            for i in parents:
+                out[i] = b_each
+            rest = max(0, total - b_each * len(parents))
+            l_each = max(60, rest // max(1, len(leaves)))
+            for i in leaves:
+                out[i] = l_each
+            return out
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _bridge_policy(card=None, request=""):
+        """How to treat the short bridge a مبحث carries above its مطالب.
+
+        Returns {"mode": "auto"|"none"|"custom", "max_words": int}. The user's
+        own instruction wins — including "بلا تمهيد", which removes it entirely
+        (and saves the model call). Otherwise it is capped automatically: a
+        parent that runs long is a parent that has started writing its
+        subsections, which is how مبحث 3 ended up 371 words against مبحث 2's 180
+        and printed every مطلب twice.
+        """
+        import os as _os
+        try:
+            cap = int(_os.environ.get("WEAVER_BRIDGE_MAXWORDS", "120") or 120)
+        except Exception:
+            cap = 120
+        # THE PLAN CARRIES THE STRUCTURE THE MODEL DESIGNED; THE CAP SHOULD FIT
+        # IT. 120 words was one number for every document — a fixed rule the
+        # model was never asked about, applied the same to a three-section
+        # summary and to a forty-page thesis. When a length IS known, the bridge
+        # is a proportion of what a parent section is actually worth, so the
+        # cap follows the document the model planned instead of a constant. The
+        # env var still overrides everything, and with no length known the old
+        # 120 stands unchanged.
+        if not _os.environ.get("WEAVER_BRIDGE_MAXWORDS"):
+            try:
+                _tw = int((card or {}).get("target_words")
+                          or (card or {}).get("max_words") or 0)
+                _np = int((card or {}).get("mabhath_count") or 0)
+                if _tw > 0 and _np > 0:
+                    # a bridge is an opening, not a section: a fifth of what one
+                    # parent is worth, never below 60 nor above 300 words.
+                    cap = max(60, min(300, int((_tw / max(_np, 1)) * 0.2)))
+            except Exception:
+                pass
+        blob = " ".join([
+            str(request or ""),
+            " ".join(str(r.get("text", "")) for r in ((card or {}).get(
+                "requirements") or []) if isinstance(r, dict)),
+        ]).lower()
+        if not blob.strip():
+            return {"mode": "auto", "max_words": cap}
+        # explicit removal
+        _drop = ("بلا تمهيد", "بدون تمهيد", "دون تمهيد", "احذف التمهيد",
+                 "لا تمهيد", "بلا مقدمة للمبحث", "دون مقدمة للمبحث",
+                 "no bridge", "no lead-in", "without an introduction to each")
+        if any(k in blob for k in _drop):
+            return {"mode": "none", "max_words": 0}
+        # an explicit length for the bridge itself
+        import re
+        m = re.search(r'(?:تمهيد|مقدمة\s+(?:كل\s+)?مبحث|bridge|lead-?in)'
+                      r'[^.\n]{0,40}?(\d{2,4})\s*(?:كلمة|كلمات|words?)', blob)
+        if not m:
+            m = re.search(r'(\d{2,4})\s*(?:كلمة|كلمات|words?)[^.\n]{0,30}?'
+                          r'(?:تمهيد|لكل مبحث|bridge)', blob)
+        if m:
+            try:
+                n = int(m.group(1))
+                if 20 <= n <= 1000:
+                    return {"mode": "custom", "max_words": n}
+            except Exception:
+                pass
+        return {"mode": "auto", "max_words": cap}
+
+    @staticmethod
+    def _cap_bridge(body, max_words):
+        """Hard-enforce the bridge length, cutting at a sentence boundary so the
+        text never ends mid-thought. Deterministic on purpose: the writing
+        prompt already asks for 2-4 sentences and a model still overran it."""
+        if not body or not max_words:
+            return body
+        words = body.split()
+        if len(words) <= max_words:
+            return body
+        clipped = " ".join(words[:max_words])
+        # back off to the last complete sentence
+        cut = max(clipped.rfind(c) for c in (".", "؟", "!", "؛"))
+        if cut > len(clipped) * 0.4:
+            return clipped[:cut + 1].strip()
+        return clipped.rstrip(" ,،") + "."
+
+    @staticmethod
+    def _trim_parent_bridge(body):
+        """A PARENT section (a مبحث followed by its مطالب) must be a short
+        bridge. Told that, a model still sometimes writes the whole chapter —
+        emitting its own "المطلب 3.1: …" sub-headings and their content inside
+        the bridge. The real مطالب are then written again as proper sections
+        with DIFFERENT (descriptive) titles, so every مطلب appeared twice under
+        two conflicting names.
+
+        Cut the body at the first line that reads as one of those invented
+        child headings. A genuine bridge never opens a line with
+        "المطلب 3.1:", so this cannot damage legitimate prose. Returns the body
+        unchanged when no such line exists."""
+        import re
+        if not body:
+            return body
+        lines = body.split("\n")
+        _kw = r'(?:المبحث|المطلب|الفصل|المحور|المبحثُ|Section|Subsection|Chapter)'
+        _ord = (r'(?:[\d\u0660-\u0669]+(?:[.\-‑][\d\u0660-\u0669]+)*|'
+                r'ال(?:أول|ثاني|ثالث|رابع|خامس|سادس|سابع|ثامن|تاسع|عاشر)\w*)')
+        _enum = (r'(?:أولا|أولاً|ثانيا|ثانياً|ثالثا|ثالثاً|رابعا|رابعاً|'
+                 r'خامسا|خامساً|سادسا|سادساً)')
+        # a heading line, in any of the shapes a model actually produces:
+        #   "المطلب 3.1: …" · "المطلب الأول: …" · "أولاً: …" · "3.1 …"
+        #   optionally wrapped in markdown (#, **, __)
+        _pre = r'^\s*(?:#{1,6}\s*)?(?:\*\*|__)?\s*'
+        pat_colon = re.compile(
+            _pre + r'(?:' + _kw + r'\s*' + _ord + r'|' + _enum + r')'
+            r'\s*(?:\*\*|__)?\s*[:：\-–]')
+        # the same without a colon is a heading only when the line is SHORT —
+        # otherwise "المطلب الأول يقتضي من الباحث …" is ordinary prose
+        pat_bare = re.compile(
+            _pre + r'(?:' + _kw + r'\s*' + _ord +
+            r'|[\d\u0660-\u0669]+[.\-‑][\d\u0660-\u0669]+)'
+            r'\s*(?:\*\*|__)?\s*$|'
+            + _pre + r'(?:' + _kw + r'\s*' + _ord +
+            r'|[\d\u0660-\u0669]+[.\-‑][\d\u0660-\u0669]+)\s+\S')
+
+        def _is_heading(ln):
+            t = ln.strip()
+            if not t:
+                return False
+            if pat_colon.match(t):
+                return True
+            return bool(pat_bare.match(t)) and len(t.split()) <= 10
+
+        for i, ln in enumerate(lines):
+            if _is_heading(ln):
+                kept = "\n".join(lines[:i]).strip()
+                # keep the trimmed bridge only if something real remains
+                return kept if kept else body
+        return body
+
+    @staticmethod
+    def _promote_heading_from_body(title, body):
+        """When an abstract structural heading ("المطلب 1.1") is followed by a
+        body whose first line spells out the REAL title ("المطلب 1.1: مفهوم
+        الذكاء الاصطناعي ومكانته…"), promote that line to be the heading and
+        drop it from the body. This turns a bare numeric outline into a
+        descriptive one AND removes the duplicated line the reader used to see
+        under every heading. Returns (title, body) unchanged when it does not
+        clearly apply."""
+        t = (title or "").strip()
+        b = (body or "").lstrip()
+        if not t or not b:
+            return title, body
+        # only for the abstract counted labels
+        if not t.startswith(("المبحث", "المطلب", "Section", "Subsection")):
+            return title, body
+        first = b.split("\n", 1)[0].strip().lstrip("#").strip()
+        if not first.startswith(t):
+            return title, body
+        rest = first[len(t):].lstrip()
+        if rest[:1] not in (":", "："):
+            return title, body
+        desc = rest[1:].strip()
+        # a real sub-title: a few words, not a whole paragraph
+        if not (2 <= len(desc.split()) <= 20):
+            return title, body
+        new_title = f"{t}: {desc}"
+        new_body = b.split("\n", 1)[1] if "\n" in b else ""
+        return new_title, new_body.strip()
+
+    @staticmethod
+    def _strip_meta_preamble(text):
+        """Drop a leading sentence that talks ABOUT the writing task instead of
+        being content — the "إليك التوسعة المطلوبة… أضفتُ نحو 300 كلمة" /
+        "أهلاً بك. سأقوم بتوسيع الفقرة" leak that the length-expansion loop
+        used to paste straight into the document. Conservative: only a SHORT
+        leading line carrying a real meta marker is removed, so genuine prose
+        is never touched. Safe on empty input."""
+        if not text:
+            return text
+        meta = ("إليك", "أضفت", "أضفتُ", "سأقوم", "قمت بتوسيع", "قمتُ بتوسيع",
+                "التوسعة", "التوسيع المطلوب", "كما طلبت", "بناءً على طلبك",
+                "مع الحفاظ على", "here is", "here's", "i have expanded",
+                "i've expanded", "as requested", "sure,", "certainly,")
+        lines = text.split("\n")
+        out, dropped = [], 0
+        for i, ln in enumerate(lines):
+            t = ln.strip()
+            if dropped >= 2 or not t:
+                out.append(ln)
+                continue
+            if i <= 2 and len(t.split()) <= 45 and any(
+                    m in t.lower() for m in meta):
+                dropped += 1
+                continue          # a meta line about the task → drop it
+            out.append(ln)
+        return "\n".join(out).strip()
+
+    @staticmethod
     def _clean_section_body(body, title):
         """Tidy a written section body: drop a leading duplicate of its own
         heading (the "المطلب 1.3: …" leak), and strip leaked markdown heading
@@ -3616,6 +6435,11 @@ class WeaverOrchestrator:
             return body
         b = body.lstrip()
         t = (title or "").strip()
+        # Strip leaked markdown heading markers FIRST. They used to be removed
+        # at the END, so a body opening with "## المطلب 2.2: …" never matched the
+        # duplicate-heading test below (it starts with "#", not with the title),
+        # and the heading survived — printing twice under its own heading.
+        b = re.sub(r'(?m)^[ \t]*#{1,6}[ \t]*', '', b).lstrip()
         # strip a leading duplicate of the heading ONLY when it reads as a
         # heading (title then ":"/"："/line-break/end) — never when the title
         # naturally opens the first sentence (e.g. "التركيب … هو الوحدة …").
@@ -3649,9 +6473,18 @@ class WeaverOrchestrator:
             prompt = (
                 "أنت مصمّم بنية مستندات خبير. صمّم البنية المناسبة تماماً لهذا "
                 "الطلب — دون فرض قالبٍ جاهز. أعِد JSON فقط:\n"
-                '{"sections":[{"title":"عنوان القسم الموضوعي","level":1أو2}],'
+                '{"sections":[{"title":"عنوان القسم الموضوعي",'
+                '"level":1|2|3|4}],'
                 '"needs_references":true|false}\n'
                 "قواعد حاسمة:\n"
+                "- العمق حرٌّ حتى أربعة مستويات، وأنت تقرّره بحسب الطلب: "
+                "1 للقسم الرئيسي (مبحث/فصل/باب…)، 2 لفرعه (مطلب…)، 3 لتقسيمات "
+                "الفرع، 4 لما أعمق. استخدم المستوى الثالث حين يطلب المستخدم "
+                "تقسيماتٍ داخل الأقسام الفرعية أو حين يقتضيه الموضوع فعلاً — "
+                "ولا تُعمّقه بلا حاجة.\n"
+                "- استعمل مصطلحات المستخدم نفسها في العناوين: إن قال «فصول» "
+                "فالعناوين فصول، وإن قال «مباحث» فمباحث، وإن قال «أبواب» "
+                "فأبواب. لا تستبدل مصطلحه بمصطلحٍ آخر.\n"
                 "- لاءم البنية مع الطلب فعلاً: طلبٌ بسيط (جدول مقارنة، تعريف، "
                 "شرح، فقرة، إجابة قصيرة) = بنية صغيرة (قسم أو أقسام قليلة قصيرة) "
                 "بلا مقدمة/خاتمة/توصيات/مراجع إن لم تلزم. بحث أو تقرير أكاديمي = "
@@ -3684,7 +6517,16 @@ class WeaverOrchestrator:
                     lvl = int(s.get("level", 1))
                 except (TypeError, ValueError):
                     lvl = 1
-                plan.append({"title": t[:200], "level": 1 if lvl < 2 else 2})
+                # RULE 1 — do not cap a decision the exporter can carry out.
+                # This line used to force `1 if lvl < 2 else 2`, so a model that
+                # correctly designed a third level (تقسيمات under a مطلب, a
+                # 1.1.1 sub-heading, a sub-section of a chapter) had its answer
+                # silently crushed to 2 — while the section assembler already
+                # allowed 4 (see out_sections below), Word's heading builder
+                # already sized levels 1-3, and the TOC already indented 3. The
+                # ONLY thing blocking a third level was this clamp.
+                plan.append({"title": t[:200],
+                             "level": max(1, min(lvl, 4))})
             if not plan:
                 return None
             card["needs_references"] = bool(data.get("needs_references"))
@@ -3918,13 +6760,91 @@ class WeaverOrchestrator:
 
         # explicit counts ("3 مباحث كل منها 3 مطالب", understood by the intent
         # router) → build the structure to EXACTLY that shape before naming it.
+        # RULE 1 — read the units and counts from the user's OWN words first.
+        # This path used to know only `mabhath_count`/`matlab_count`, so
+        # «خمسة فصول، كل فصل ثلاثة مباحث» was rebuilt as «المبحث 1..5» and a
+        # third level was impossible. `_structure_units` returns whatever the
+        # user named, in order, with its count — and `mabhath_count` stays as
+        # the fallback so nothing that worked before changes.
+        _units = []
+        try:
+            _units = self._structure_units(
+                self._current_request(task.description), lang)
+        except Exception:
+            _units = []
         _mc = card.get("mabhath_count")
-        if _mc and not (scope == "plan" or "plan" in scopes):
-            sections_plan = self._counted_structure(
-                lang, self._as_int(_mc, 1) or 1, self._as_int(card.get("matlab_count"), 0) or 0)
+        # ── THE MODEL'S DESIGN IS NOT OVERWRITTEN ──
+        # This block used to REPLACE whatever the model designed the moment a
+        # count appeared in the request, substituting empty slots («الباب 1»,
+        # «الجزء 1.1») that a second model call then had to name — and that
+        # naming step only recognised four hardcoded words, so «الباب»/«الجزء»
+        # shipped with no topical titles at all. The model reads the counts in
+        # the request perfectly well; the code's job is to CHECK them, not to
+        # take the design away. So: when the model produced a structure, count
+        # it — and only fall back to building a skeleton if the counts are
+        # actually wrong and the model cannot correct them.
+        if (_units or _mc) and card.get("structure_source") == "model" \
+                and sections_plan:
+            _ok, _why = self._counts_match(sections_plan, _units, _mc, card)
+            if _ok:
+                mem.set_status(6, f"بنية النموذج مطابقة للطلب ({_why})")
+                card["structure_units"] = _units or None
+                _units, _mc = [], None      # nothing to rebuild
+            else:
+                _fixed = self._restructure_to_counts(
+                    self._current_request(task.description),
+                    card.get("topic", "") or task.description,
+                    _units, _mc, card, lang)
+                if _fixed:
+                    _ok2, _why2 = self._counts_match(_fixed, _units, _mc, card)
+                    if _ok2:
+                        sections_plan = _fixed
+                        card["sections"] = sections_plan
+                        card["structure_units"] = _units or None
+                        mem.set_status(
+                            6, f"صحّح النموذج بنيته بعد العدّ ({_why2})")
+                        _units, _mc = [], None
+                if _units or _mc:
+                    mem.set_status(6, f"عدد أقسام النموذج لا يطابق الطلب "
+                                      f"({_why}) → يُبنى الهيكل بالعدد")
+        if (_units or _mc) and not (scope == "plan" or "plan" in scopes):
+            if _units:
+                _names = [u for u, _n in _units]
+                _n1 = _units[0][1] or 1
+                _n2 = (_units[1][1] if len(_units) > 1 else None) or (
+                    self._as_int(card.get("matlab_count"), 0) or 0)
+                # a deeper unit named with NO count («تقسيمات حسب ما يلزم») is
+                # not a number — the model decides it per section, below
+                _n3 = (_units[2][1] or 0) if len(_units) > 2 else 0
+                _deep_unit = (_units[2][0] if len(_units) > 2
+                              and _units[2][1] is None else None)
+            else:
+                _names = None
+                _n1 = self._as_int(_mc, 1) or 1
+                _n2 = self._as_int(card.get("matlab_count"), 0) or 0
+                _n3 = 0
+                _deep_unit = None
+            sections_plan = self._counted_structure(lang, _n1, _n2,
+                                                    units=_names, n_sub=_n3)
+            # «حسب ما يلزم» cannot be a fixed number — the model decides how
+            # many subdivisions each subsection needs, and may decide none.
+            # It runs AFTER the naming step below, not here: asked to subdivide
+            # «المطلب 1.1» — a label with no subject — the model invented
+            # subdivisions for the topic at large, and the مطالب were then given
+            # their real titles independently, so «المطلب 2.1: النظرية البنائية»
+            # ended up carrying «مفهوم التعليم المدمج». Deferred so it sees the
+            # actual subjects it is dividing.
+            _deep_pending = _deep_unit
             card["sections"] = sections_plan
-            mem.set_status(6, f"بنية بالطلب: {_mc} مبحث × "
-                           f"{card.get('matlab_count') or 0} مطلب")
+            card["structure_units"] = _units or None
+            # the counted plan REPLACED whatever the model had designed, so its
+            # titles are the abstract "المبحث 1"/"المطلب 1.1" slots again. Clear
+            # the "model" provenance, otherwise the descriptive-naming step
+            # below skips them and every مبحث ships without a real title.
+            card["structure_source"] = "counted"
+            _shape = " × ".join(f"{n} {u}" for u, n in (_units or []))
+            mem.set_status(6, "بنية بالطلب: " + (_shape or
+                           f"{_n1} مبحث × {_n2} مطلب"))
 
         # give the abstract "المبحث/المطلب" slots DESCRIPTIVE, topic-specific
         # titles so each section chunk has a real sub-topic to write about (the
@@ -3941,6 +6861,28 @@ class WeaverOrchestrator:
                 card["sections"] = sections_plan
         except Exception as e:
             mem.set_status(6, f"عناوين وصفية (تخطّي: {e})")
+
+        # ── NOW the subdivisions — with the real subjects in view ──
+        # «وكل مطلب تقسيمات حسب ما يلزم». This must come after the naming step
+        # above: a model asked to divide «المطلب 1.1» has nothing to divide.
+        try:
+            if locals().get("_deep_pending") and scope != "outline":
+                _before = len(sections_plan)
+                sections_plan = self._deepen_structure(
+                    sections_plan, self._current_request(task.description),
+                    card.get("topic", "") or task.description,
+                    _deep_pending, lang)
+                _added = len(sections_plan) - _before
+                card["sections"] = sections_plan
+                mem.set_status(6, f"تقسيمات ({_deep_pending}) بقرار النموذج: "
+                                  f"أُضيف {_added}")
+                self._emit("detail", "",
+                           f"تقسيمات «{_deep_pending}»: {_added} بقرار النموذج")
+                if not _added:
+                    self._skip_note(card, f"تقسيمات «{_deep_pending}»",
+                                    "لم يُضِف النموذج تقسيماتٍ (أو تعذّر النداء)")
+        except Exception as e:
+            mem.set_status(6, f"تقسيمات (تخطّي: {e})")
 
         # outline-only → a COMPLETE, richly-detailed outline authored by the model
         # itself (title, structured intro, annotated sub-points, suggested refs) —
@@ -4033,8 +6975,12 @@ class WeaverOrchestrator:
                 if isinstance(s, dict):
                     _t = s.get("title") or ""
                     _c = (s.get("content") or "")[:200]
-                    _k = s.get("key") or s.get("doi") or ""
                     _u = s.get("url") or ""
+                    # Label each source with an APA-style (author، year) key.
+                    # It used to fall back to the TITLE, so the model cited
+                    # whole titles mid-sentence — "(تأثير منصات وأدوات الذكاء
+                    # الاصطناعي على التعليم المعماري، ص. )" — with an empty page.
+                    _k = self._apa_key(s)
                     _line = f"[{_k}] {_t} — {_c} ({_u})".strip()
                     if _line.strip("[] —()"):
                         _lines.append(_line)
@@ -4042,13 +6988,194 @@ class WeaverOrchestrator:
                     _lines.append(str(s))
             if _lines:
                 rag_ctx = "\n".join(_lines)
+        # ── ALLOWED CITATION KEYS ──
+        # The APA keys were only ever attached in the no-RAG fallback above, so
+        # on the normal path the writer saw raw retrieved text with no key to
+        # cite by — and improvised: some citations came out as «(المطيري، 2022)»
+        # and others as a bare TITLE, which is the inconsistency the verifier
+        # flagged. This appends the exact, closed list of keys built from the
+        # gathered sources, so there is a right answer to copy instead of one to
+        # invent. Additive: rag_ctx itself (layer 2's output) is untouched.
+        try:
+            _keys, _seen = [], set()
+            for s in (card.get("sources") or [])[:24]:
+                if not isinstance(s, dict):
+                    continue
+                _k = (self._apa_key(s) or "").strip()
+                if not _k or _k in _seen:
+                    continue
+                _seen.add(_k)
+                _ti = " ".join(str(s.get("title") or "").split())[:70]
+                _keys.append(f"({_k})" + (f" — {_ti}" if _ti else ""))
+            if _keys and rag_ctx.strip():
+                card["citation_keys"] = [k.split(" — ")[0] for k in _keys]
+                rag_ctx = (
+                    rag_ctx + "\n\n"
+                    + ("مفاتيح الاستشهاد المسموحة (استشهد بهذه الصيغة حرفياً "
+                       "داخل المتن، ولا تستشهد بعنوان مرجعٍ ولا بمفتاحٍ غير "
+                       "مذكور هنا):\n" if lang == "ar" else
+                       "Allowed citation keys (cite in EXACTLY this form; never "
+                       "cite a reference by its title, and never invent a key "
+                       "that is not listed here):\n")
+                    + "\n".join("- " + k for k in _keys))
+        except Exception:
+            pass
         no_ctx = (not rag_ctx) or rag_ctx.strip() in ("", "(none)")
         mode = card.get("sourcing_mode", "cited")
         # In "cited" mode with NO retrieved context, don't refuse — write from
         # the model's knowledge and flag it so a clear note is added later.
         if mode == "cited" and no_ctx:
             card["sources_unavailable"] = True
-        prof = self._strength_profile(card.get("model_strength", "medium"))
+        # ── THE PROBE IS NEUTRAL ──
+        # Writing NEVER starts from the name guess. `_model_strength` reads the
+        # model's NAME; starting the document from it makes the first section a
+        # biased sample, and measuring that section afterwards measures OUR bias,
+        # not the model: a name containing "opus" got temperature 0.6 and "حلّل
+        # بعمق", wrote 520 words, and was then "measured" as strong. So every
+        # document starts on the neutral middle profile — no extreme length, no
+        # extreme temperature, no depth directive — and the FIRST real section is
+        # the unbiased probe. The name guess keeps no say over writing at all.
+        prof = self._strength_profile("medium")
+        _strength_now = "medium"
+        card["model_strength_source"] = "neutral"
+        _written_bodies = []
+        # A length the USER stated is a fact; measuring is only ever a way to
+        # guess one. When the fact exists the probe is pointless — skip it
+        # entirely and let the number rule.
+        _measure_on = not (card.get("target_words") or card.get("target_pages")
+                           or card.get("max_words"))
+        if not _measure_on:
+            mem.set_status(6, "الطول من طلب المستخدم — لا قياس ولا تخمين")
+        # how the bridge above each مبحث should behave: removed if the user
+        # said so, their length if they gave one, otherwise capped automatically
+        try:
+            _bridge = self._bridge_policy(
+                card, self._current_request(task.description))
+        except Exception:
+            _bridge = {"mode": "auto", "max_words": 120}
+        # ── TABLE BUDGET for the whole document ──
+        # The "put a table where it fits" hint is given to each section on its
+        # own, and a section cannot see the others. With 43 sections that became
+        # 43 independent invitations and produced 31 tables for one request for
+        # «جداول». "حسب الحاجة" therefore has to be expressed as a DOCUMENT-level
+        # budget the writer is told about: roughly one per top-level section
+        # (never per subsection), at least 2 so a plural ask is honoured, and
+        # capped. The model still decides where — and may use fewer — but it can
+        # no longer put one everywhere. None (no table asked for) = unchanged.
+        _tbl_budget = _tbl_used = None
+        try:
+            if card.get("tables_forbidden"):
+                # «NO» IS NOW ENFORCED, NOT MERELY RECORDED. A budget of zero
+                # is a different thing from None: None means nobody asked, zero
+                # means somebody said not to.
+                _tbl_budget, _tbl_used = 0, 0
+                card["table_budget"] = 0
+                self._record_decision(card, "الجداول", "ممنوعة", "user"
+                                      if card.get("want_table") is False
+                                      else "model", "طبقة ٦")
+                mem.set_status(6, "لا جداول — بناءً على قرارٍ صريح")
+            elif card.get("want_table") or any(
+                    isinstance(r, dict) and r.get("kind") == "insert"
+                    and any(w in str(r.get("text", "")).lower()
+                            for w in ("جدول", "جداول", "table"))
+                    for r in (card.get("requirements") or [])):
+                _tops = sum(1 for s in sections_plan
+                            if int(s.get("level", 1) or 1) == 1
+                            and not self._is_ref_heading(
+                                s.get("title") or s.get("heading") or "")
+                            and not any(w in (s.get("title") or "")
+                                        for w in ("المقدمة", "الخاتمة",
+                                                  "Introduction", "Conclusion")))
+                _tbl_budget = max(2, min(_tops or 3, 6))
+                _tbl_used = 0
+                card["table_budget"] = _tbl_budget
+                mem.set_status(6, f"ميزانية الجداول: {_tbl_budget} للمستند كله")
+        except Exception:
+            _tbl_budget = _tbl_used = None
+
+        # the writer's return channel (see _split_decisions). Off with
+        # WEAVER_DECISIONS=0; absent answers simply mean today's behaviour.
+        try:
+            import os as _os3
+            _dec_on = _os3.environ.get("WEAVER_DECISIONS", "1") != "0"
+        except Exception:
+            _dec_on = False
+        _sec_decisions = {}
+        # per-section word budget by ROLE (bridge / leaf / references)
+        try:
+            _budgets = self._section_budgets(
+                sections_plan, card, _bridge.get("max_words", 120))
+            if _budgets:
+                _lf = [v for k, v in _budgets.items() if v]
+                mem.set_status(6, f"ميزانية الطول: {min(_lf)}–{max(_lf)} كلمة "
+                                  f"لكل قسم حسب دوره")
+                # THE ARITHMETIC, IN THE OPEN. A per-section cap is only a cap
+                # if the caps SUM to something under the document ceiling; the
+                # old one did not, and nothing anywhere said so. Now the sum is
+                # computed and recorded, so a structure too fragmented for its
+                # own ceiling is visible BEFORE the writing starts instead of
+                # being discovered afterwards in the verification note.
+                try:
+                    _sum_b = sum(int(v or 0) for v in _budgets.values())
+                    _mx_b = card.get("max_words")
+                    if _mx_b:
+                        self._record_decision(
+                            card, "ميزانية الأقسام",
+                            f"{len(sections_plan)} قسماً ← {_sum_b} كلمة "
+                            f"(السقف {_mx_b})", "measured",
+                            "حصّة كلّ قسم حسب دوره")
+                except Exception:
+                    pass
+        except Exception:
+            _budgets = {}
+        # who decided the big things, recorded once so nothing is anonymous
+        try:
+            # WHO SAID 3000? The ledger printed «length: 3000 ← المستخدم» on a
+            # request that never stated a word count: 3000 was «10 صفحات» × 300,
+            # an arithmetic step this line hid, while the SAME ledger printed
+            # target_pages: 12 — the two ends of one range shown as one target,
+            # both credited to a user who had said neither number. The author
+            # and the derivation are already recorded by _settle at the moment
+            # the value was decided, so reuse them instead of stamping "user"
+            # on everything, and print the CEILING as its own line so a floor is
+            # never read as a maximum.
+            _lg_d = card.get("language", "ar")
+            _tw_d, _tp_d = card.get("target_words"), card.get("target_pages")
+            if _tw_d or _tp_d:
+                _d_rec = (card.get("decisions") or {}).get(
+                    "target_words" if _tw_d else "target_pages") or {}
+                self._record_decision(
+                    card, "length",
+                    (f"{_tw_d} كلمة" if _lg_d != "en" else f"{_tw_d} words")
+                    if _tw_d else
+                    (f"{_tp_d} صفحة" if _lg_d != "en" else f"{_tp_d} pages"),
+                    _d_rec.get("by") or "user", _d_rec.get("where") or "")
+            _mxw_d, _mxp_d = card.get("max_words"), card.get("max_pages")
+            if _mxw_d or _mxp_d:
+                _bits_d = []
+                if _mxw_d:
+                    _bits_d.append(f"{_mxw_d} كلمة" if _lg_d != "en"
+                                   else f"{_mxw_d} words")
+                if _mxp_d:
+                    _bits_d.append(f"{_mxp_d} صفحة" if _lg_d != "en"
+                                   else f"{_mxp_d} pages")
+                self._record_decision(
+                    card, "سقف الطول" if _lg_d != "en" else "length ceiling",
+                    " / ".join(_bits_d), "user",
+                    "حدٌّ أعلى من نصّ الطلب" if _lg_d != "en"
+                    else "stated in the request")
+            self._record_decision(card, "structure",
+                                  f"{len(sections_plan)} قسماً",
+                                  card.get("structure_source") or "template")
+            if _tbl_budget is not None:
+                self._record_decision(card, "table_budget", _tbl_budget,
+                                      "measured", "من عدد الأقسام الرئيسية")
+            self._record_decision(card, "model_strength",
+                                  card.get("model_strength", "medium"),
+                                  card.get("model_strength_source", "neutral"))
+        except Exception:
+            pass
+
         parts, out_sections = [], []
         for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
@@ -4067,6 +7194,14 @@ class WeaverOrchestrator:
                     _is_parent = True
             except Exception:
                 _is_parent = False
+            # the user asked for no bridge → write nothing for the parent at
+            # all (and skip its model call entirely)
+            if _is_parent and _bridge.get("mode") == "none":
+                out_sections.append({"heading": title, "body": "",
+                                     "level": max(1, min(int(
+                                         sec.get("level", 1) or 1), 4))})
+                parts.append(f"## {title}" if title else "")
+                continue
             # ── bound specialized section writers (skills already present, wired
             #    here) — additive: on any miss the generic writer below runs
             #    unchanged, keeping full backward compatibility ──
@@ -4113,10 +7248,20 @@ class WeaverOrchestrator:
                         f"scientific content appropriate to this section's role")
                 else:
                     section_name = title
+                _my = None
+                try:
+                    # this section's OWN share, by its role in the structure —
+                    # a parent writing a bridge is not given a full section's
+                    # budget, and the references list is not given one at all
+                    _my = _budgets.get(_si)
+                    _len_dir = self._length_directive(
+                        card, len(sections_plan), lang, share=_my)
+                except Exception:
+                    _len_dir = ""
                 if mode == "uncited":
                     prompt = _p.PROMPT_LAYER_6_WRITE_UNCITED.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        length=card.get("page_count", ""),
+                        length=_len_dir,
                         rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 elif mode == "none" or no_ctx:
@@ -4124,13 +7269,14 @@ class WeaverOrchestrator:
                     # none could be retrieved — write from knowledge, no refusal
                     prompt = _p.PROMPT_LAYER_6_WRITE_NO_SOURCES.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        length=card.get("page_count", ""), prior_content=_prior)
+                        length=_len_dir, prior_content=_prior)
                     system = _p.SYSTEM_PROMPT_WRITE_NO_SOURCES
                 else:
                     prompt = _p.PROMPT_LAYER_6_WRITE.format(
                         section_name=section_name, topic=card.get("topic", ""),
-                        citation_style=card.get("citation_style", ""),
-                        length=card.get("page_count", ""),
+                        citation_style=(card.get("citation_style")
+                                        or "APA (author, year)"),
+                        length=_len_dir,
                         rag_contexts=rag_ctx or "(none)", prior_content=_prior)
                     # dedicated WRITING system prompt: forbids clarifying
                     # questions/greetings that a chatty model would emit
@@ -4150,34 +7296,133 @@ class WeaverOrchestrator:
                             prompt = prompt + "\n\n" + _sb
                     except Exception:
                         pass
+                # STAGE (ب): write each section with the requirements checklist in
+                # view — a short, model-decided directive (style / content / a
+                # where-it-fits table hint), appended like the style block. Its
+                # source is the plan the model itself extracted, so writing now
+                # FOLLOWS the plan section by section. Guarded + toggleable
+                # (WEAVER_PLAN_WRITER); any miss → writing unchanged.
+                if os.environ.get("WEAVER_PLAN_WRITER", "1").strip().lower() \
+                        not in ("0", "false", "off", "no"):
+                    try:
+                        _rb = self._requirements_directive(
+                            card, section_name, lang,
+                            tables_left=(None if _tbl_budget is None
+                                         else max(0, _tbl_budget - _tbl_used)))
+                        if _rb:
+                            prompt = prompt + "\n\n" + _rb
+                    except Exception:
+                        pass
                 # PARENT section → brief bridge only (no overlap with its
                 # subsections). This removes the المبحث/المطلب 1.1 duplication.
                 if _is_parent:
+                    _bw = int(_bridge.get("max_words") or 120)
                     prompt = prompt + "\n\n" + (
-                        "هذا القسم يليه مطالب فرعية تتناول تفاصيله. اكتب تمهيداً "
-                        "موجزاً جداً (٢-٤ جُمَل) يوطّئ للمطالب ويبيّن خطّتها فقط، "
-                        "دون تعريف الموضوع من جديد ودون الدخول في تفاصيل ستُعالَج "
-                        "في المطالب — تجنّباً للتكرار."
+                        f"هذا القسم يليه مطالب فرعية تتناول تفاصيله. اكتب تمهيداً "
+                        f"موجزاً جداً (٢-٤ جُمَل، بحدٍّ أقصى {_bw} كلمة) يوطّئ "
+                        f"للمطالب ويبيّن خطّتها فقط، دون تعريف الموضوع من جديد، "
+                        f"ودون كتابة عناوين المطالب أو محتواها هنا — فهي تُكتب "
+                        f"في أقسامها. تجنّب التكرار."
                         if lang == "ar" else
                         "This section is followed by subsections that cover its "
                         "detail. Write only a very brief bridge (2-4 sentences) "
                         "that sets up the subsections, without re-defining the "
                         "topic or covering detail the subsections will handle — "
                         "to avoid repetition.")
-                # adapt depth/length + temperature to the model's ceiling
+                # depth guidance comes from the NEUTRAL profile until a real
+                # measurement replaces it — never from the model's name. When the
+                # user stated a length it rules outright and no depth band is
+                # allowed to compete with it (stripped a few lines below).
                 _depth = prof.get("depth") if lang == "ar" else prof.get("depth_en")
+                # The depth directive carries a HARD-CODED per-section word band
+                # ("استهدف نحو 500–800 كلمة لهذا القسم"). When the user asked for
+                # a length of their own, that band contradicts it directly — a
+                # 12-page request over 14 sections is ~230 words each, not
+                # 500-800 — so drop the band and keep the depth guidance.
+                if _depth and _len_dir:
+                    import re as _re
+                    _depth = _re.sub(
+                        r'\s*[\(（][^)）]*?(?:استهدف|aim)[^)）]*[\)）]', '',
+                        _depth).strip()
                 if _depth:
                     prompt = prompt + "\n\n" + _depth
+                # A requested MAXIMUM must reach the writer. Only the expansion
+                # loop knew about it, and it can only grow text — so a document
+                # written long from the start stayed long (4514 words against a
+                # 3600 ceiling). Give each section its share of the budget.
+                try:
+                    _mx = card.get("max_words")
+                    _nsec = max(1, len(sections_plan))
+                    if _mx:
+                        # THE «HARD LIMIT» AUTHORISED THE OVERSHOOT IT EXISTED
+                        # TO PREVENT. It was max(120, _mx/_nsec): with 42
+                        # sections against a 3600-word ceiling the division
+                        # gives 85, the floor of 120 wins, and 42 × 120 = 5040
+                        # — one thousand four hundred words ABOVE the ceiling.
+                        # The run came back at 4902, which means the writer
+                        # obeyed the limit exactly and the limit was wrong. A
+                        # per-section cap is a cap only if the caps SUM to
+                        # something under the ceiling, so it is taken from this
+                        # section's own role-aware share (_budgets already sums
+                        # to the target, which sits under the ceiling) with a
+                        # little headroom; the flat division stays as the
+                        # fallback for when no share could be computed.
+                        if _my:
+                            _share = max(40, int(int(_my) * 1.15))
+                        else:
+                            _share = max(40, int(_mx / _nsec))
+                        prompt = prompt + "\n\n" + (
+                            f"حدّ أقصى صارم: لا تتجاوز نحو {_share} كلمة في هذا "
+                            f"القسم. المستند كلّه يجب ألّا يتجاوز {_mx} كلمة، "
+                            f"فأوجز دون إخلال بالمضمون."
+                            if lang != "en" else
+                            f"HARD LIMIT: keep this section to about {_share} "
+                            f"words. The whole document must not exceed {_mx} "
+                            f"words — be concise without losing substance.")
+                except Exception:
+                    pass
                 # guide Quran/Hadith marks for Islamic content
                 if card.get("islamic"):
                     prompt = prompt + "\n\n" + (self._ISLAMIC_DIRECTIVE_AR
                                                if lang == "ar"
                                                else self._ISLAMIC_DIRECTIVE_EN)
+                # ── ask for the decision line (no extra call) ──
+                # Guidance the writer used to receive silently now comes back as
+                # data: whether it actually used a table here, and whether the
+                # length it was given fitted. Ignoring the line costs nothing —
+                # the caller then behaves exactly as before.
+                if _dec_on:
+                    prompt = prompt + "\n\n" + (
+                        "وفي آخر ردّك تماماً، بعد نصّ القسم، أضِف سطراً واحداً "
+                        "بهذا الشكل حرفياً (وسيُحذف قبل الإخراج فلا تُشر إليه في "
+                        "النصّ):\n"
+                        "### القرارات\n"
+                        '{"used_table": true أو false, '
+                        '"length_fits": true أو false, '
+                        '"note": "سببٌ قصير أو null"}\n'
+                        "used_table: هل أدرجتَ جدولاً في هذا القسم فعلاً. "
+                        "length_fits: هل كان الطول المطلوب مناسباً لهذا المحتوى."
+                        if lang == "ar" else
+                        "At the very end of your reply, after the section text, "
+                        "add ONE line exactly like this (it is stripped before "
+                        "export, so never refer to it in the text):\n"
+                        "### DECISIONS\n"
+                        '{"used_table": true|false, "length_fits": true|false, '
+                        '"note": "short reason or null"}\n'
+                        "used_table: whether you actually included a table "
+                        "here. length_fits: whether the requested length suited "
+                        "this content.")
                 try:
                     body = self.llm_fn(prompt, system=system,
                                        temperature=prof.get("temp", 0.5))
                 except Exception as e:
                     mem.set_status(6, f"كتابة قسم (تخطّي: {e})")
+                # cut the decision line off IMMEDIATELY — before the retry
+                # guard, the cleaners, the draft or the export can ever see it
+                if _dec_on and body:
+                    body, _dec = self._split_decisions(body)
+                    if _dec:
+                        _sec_decisions[title] = _dec
                 # guard: a conversational model may answer with a greeting /
                 # clarifying question / options menu instead of content. Detect
                 # it and retry ONCE with a blunt content-only instruction.
@@ -4194,6 +7439,10 @@ class WeaverOrchestrator:
                     try:
                         retry = self.llm_fn(firm, system=_p.SYSTEM_PROMPT_WRITE,
                                             temperature=0.4)
+                        if _dec_on and retry:
+                            retry, _dec2 = self._split_decisions(retry)
+                            if _dec2:
+                                _sec_decisions[title] = _dec2
                         if retry and not self._looks_conversational(retry):
                             body = retry
                         elif self._looks_conversational(body):
@@ -4221,12 +7470,96 @@ class WeaverOrchestrator:
                     except Exception:
                         pass
             # tidy leaked heading duplicates / markdown markers before shipping
+            # an abstract "المطلب 1.1" whose body opens with the real title
+            # → promote it, so headings are descriptive and the line is not
+            # repeated under the heading.
+            try:
+                title, body = self._promote_heading_from_body(title, body)
+            except Exception:
+                pass
+            # a PARENT (مبحث with مطالب under it) that wrote its own subsections
+            # inline → keep only the bridge, or every مطلب ships twice
+            if _is_parent:
+                try:
+                    body = self._trim_parent_bridge(body)
+                    body = self._cap_bridge(body, _bridge.get("max_words"))
+                except Exception:
+                    pass
+            # FINAL strip, whatever wrote this body. The early strip above only
+            # covers the generic writer; the specialized writers (intro,
+            # conclusion, results) call the model through their own skills, and
+            # a model that learned the decision-line habit appends it there too
+            # — which leaked "used_table" into the document. One strip here
+            # catches every origin, present and future.
+            if _dec_on and body:
+                body, _decF = self._split_decisions(body)
+                if _decF and title not in _sec_decisions:
+                    _sec_decisions[title] = _decF
             body = self._clean_section_body(body, title)
+            # ── measurement replaces the name guess, for the NEXT sections ──
+            # Strictly forward-looking: what is already written is never touched.
+            # A wrong reading can only change the guidance the remaining
+            # sections receive; it can never shorten or rewrite existing text.
+            # Off with WEAVER_MEASURE_STRENGTH=0.
+            try:
+                import os as _os2
+                if _measure_on and not _spec \
+                        and _os2.environ.get("WEAVER_MEASURE_STRENGTH", "1") != "0":
+                    # `_spec` bodies come from the specialized writers, which are
+                    # given a word target WE computed — measuring those measures
+                    # our own instruction, not the model. Only sections the model
+                    # wrote at its own natural length are evidence.
+                    _written_bodies.append(body)
+                    _st, _ev = self._measured_strength(_written_bodies,
+                                                       _strength_now)
+                    if _ev:
+                        _strength_now = _st
+                        card["model_strength"] = _st
+                        card["model_strength_source"] = "measured"
+                        prof = self._strength_profile(_st)
+                        mem.set_status(6, f"قوّة النموذج بالقياس: {_st} — {_ev}")
+                        self._emit("detail", "",
+                                   f"قوّة النموذج بالقياس: {_st} ({_ev}) — "
+                                   "تضبط الأقسام التالية فقط")
+            except Exception:
+                pass
+            # spend the budget on what was ACTUALLY written, not on what was
+            # asked for — a section told to consider a table may well write
+            # prose, and that must not cost it anything.
+            if _tbl_budget is not None:
+                try:
+                    import re as _re
+                    _cnt = len(_re.findall(
+                        r"(?m)^\s*\|[^\n]*\|\s*$\n\s*\|[\s:\-|]+\|\s*$", body))
+                    _tbl_used += _cnt
+                    # the writer's own answer, now that it HAS one. The count is
+                    # the fact; the declaration is recorded next to it, and a
+                    # disagreement is reported rather than silently preferred.
+                    _d = _sec_decisions.get(title) or {}
+                    if "used_table" in _d:
+                        self._record_decision(
+                            card, f"table::{title[:28]}",
+                            bool(_d.get("used_table")), "model", title)
+                        if bool(_d.get("used_table")) != bool(_cnt):
+                            mem.set_status(
+                                6, f"تعارض: أعلن الكاتب used_table="
+                                   f"{_d.get('used_table')} والمقيس {_cnt} — "
+                                   "المقيس هو المعتمد")
+                except Exception:
+                    pass
             parts.append((f"{title}\n{body}").strip())
-            out_sections.append({"heading": title, "body": body})
+            # keep the plan's LEVEL (1=مبحث, 2=مطلب) so the exporter can
+            # render a real hierarchy instead of flattening everything to H1.
+            try:
+                _lv = int(sec.get("level", 1) or 1)
+            except Exception:
+                _lv = 1
+            out_sections.append({"heading": title, "body": body,
+                                 "level": max(1, min(_lv, 4))})
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
         mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
+
         # run matched enrichment skills (task.skills) that have a write-stage
         # handler — turns skill routing into real execution. Additive/guarded.
         self._dispatch_skills(task, card, lang, mem)
@@ -4239,29 +7572,83 @@ class WeaverOrchestrator:
         # optional enrichments the user explicitly asked for (additive/guarded)
         self._enrich_table_chart(task, card, lang, mem)
 
+        # ── the one document-wide duplicate pass (the last net) ──
+        # The per-seam guards above have already run; this catches repetition
+        # between ANY two paragraphs of the finished document, at any level.
+        # Placed BEFORE the length/coverage check so the word count that stage
+        # sees is the post-trim one and it can expand if the document is short.
+        # Disable with WEAVER_DEDUPE=0.
+        try:
+            import os as _os
+            if _os.environ.get("WEAVER_DEDUPE", "1") != "0" and task.sections:
+                _new, _rep = self._dedupe_sections(task.sections, lang)
+                if _rep.get("skipped"):
+                    mem.set_status(6, f"كشف التكرار: {_rep['skipped']}")
+                    card["dedupe_note"] = _rep["skipped"]
+                    self._emit("detail", "", "كشف التكرار: " + _rep["skipped"])
+                elif _rep.get("dropped"):
+                    task.sections = _new
+                    task.draft = self._draft_from_sections(task)
+                    _where = "، ".join(
+                        f"«{a}» كرّر «{b}»" for a, b in _rep["pairs"][:3])
+                    mem.set_status(
+                        6, f"كشف التكرار: حُذفت {_rep['dropped']} فقرة "
+                           f"({_rep['words']} كلمة)")
+                    self._emit("detail", "",
+                               f"كشف التكرار: {_rep['dropped']} فقرة مكرّرة "
+                               f"حُذفت — {_where}")
+                    card["dedupe_report"] = _rep
+        except Exception as e:
+            mem.set_status(6, f"كشف التكرار (تخطّي: {e})")
+
     def _enrich_table_chart(self, task, card, lang, mem):
         """When the request asked for a table and/or a chart, derive them from
         the written content and attach them. A table becomes its own section; a
         chart spec is stored on the card so _maybe_chart renders it at export.
         Never fabricates numbers (the model is told to return empty otherwise).
         Additive and fully guarded — a miss changes nothing."""
+        _asked = card.get("want_table") or card.get("want_chart")
         if not self.llm_fn:
+            if _asked:
+                self._skip_note(card, "جدول/رسم بياني من المحتوى",
+                                "النموذج غير متاح")
             return
         content = task.draft or "\n".join(
             (s.get("body", "") or "") for s in (task.sections or []))
         if not content.strip():
+            if _asked:
+                self._skip_note(card, "جدول/رسم بياني من المحتوى",
+                                "لا محتوى مكتوب لاشتقاقه منه")
             return
         if card.get("want_table"):
             try:
                 tbl = _content_to_table(self.llm_fn, content, lang)
+                # pass the document so a "table" whose cells are copied out of
+                # it is recognised as a copy, not just by its row wording
+                if tbl and self._is_outline_dump(tbl, content):
+                    tbl = None          # a summary of the paper, not a table
+                    mem.set_status(6, "رُفض جدول: نسخةٌ من المتن لا بيانات")
                 if tbl and tbl.get("headers") and tbl.get("rows"):
                     md = self._skill_call("table_builder", "make_table",
                                           "make_table", tbl["headers"],
                                           tbl["rows"], lang=lang)
                     head = "جدول توضيحي" if lang == "ar" else "Table"
                     if md:
-                        task.sections = (task.sections or []) + [
-                            {"heading": head, "body": md}]
+                        # place it BEFORE the conclusion/references rather than
+                        # tacking it on at the very end, where it read as an
+                        # unrelated block bolted onto the document.
+                        _secs = task.sections or []
+                        _at = len(_secs)
+                        for _i, _s in enumerate(_secs):
+                            _h = (_s.get("heading") or "")
+                            if self._is_ref_heading(_h) or any(
+                                    w in _h for w in ("الخاتمة", "خاتمة",
+                                                      "Conclusion")):
+                                _at = _i
+                                break
+                        _secs.insert(_at, {"heading": head, "body": md,
+                                           "level": 1})
+                        task.sections = _secs
                         task.draft = (task.draft or "") + f"\n\n## {head}\n\n{md}"
                         mem.set_status(6, "أُدرج جدول من المحتوى")
             except Exception as e:
@@ -4293,6 +7680,27 @@ class WeaverOrchestrator:
                 return
             if not task.sections:
                 return
+            # COPYRIGHT, MEASURED NOT ASSUMED. Fetched pages are other people's
+            # writing. The writer is told to paraphrase, but an instruction is
+            # not a check — so the finished draft is compared against every
+            # fetched source and the longest verbatim run is counted. Anything
+            # past the quotation limit is reported in the ledger the reader
+            # sees, rather than shipped quietly. Costs no model call.
+            try:
+                _draft = "\n".join(str((sec or {}).get("body") or "")
+                                    for sec in (task.sections or [])
+                                    if isinstance(sec, dict))
+                _ov = self._verbatim_overlap(_draft, card.get("sources") or [])
+                if _ov:
+                    _lim = (self._wr().MAX_QUOTE_WORDS if self._wr() else 15)
+                    self._skip_note(
+                        card, "حدّ الاقتباس",
+                        f"في النصّ مقطعٌ منقولٌ حرفياً من مصدرٍ مجلوب طولُه "
+                        f"{_ov} كلمة، والحدّ {_lim} — يلزم إعادة صياغته")
+                    self._record_decision(card, "أطول نقلٍ حرفيّ", _ov,
+                                          "measured", "طبقة ٦.٦")
+            except Exception:
+                pass
             # نطاق مُقيِّد (هيكلة/مراجع/خطة/جزء) → المخرَج مكتمل كما أنتجته الطبقة 6.
             # حلقة التغطية هنا تعتبر كل عنوان في الخطة «ناقصاً» (لأن المخرَج سطرٌ
             # واحد «هيكل العمل») فتكتب جسماً كاملاً لكل عنوان عبر النموذج — وهذا
@@ -4321,10 +7729,115 @@ class WeaverOrchestrator:
                                 temperature=0.5) or ""
                         except Exception:
                             body = ""
-                        if body.strip():
+                        _b = self._clean_section_body(
+                            self._strip_meta_preamble(body.strip()), title)
+                        if _b and not self._looks_conversational(_b):
                             task.sections.append({"heading": title,
-                                                  "body": body.strip()})
+                                                  "body": _b})
                     mem.set_status(66, f"تغطية: أُضيف {len(missing)} قسم ناقص")
+
+            # ── OVER the requested maximum → CONDENSE, never cut ──
+            # This stage only ever grew a short document; a long one stayed
+            # long (6,323 words against a 3,600 ceiling) because nothing
+            # shortened it. Automatic trimming would delete sentences
+            # blindly, so the model REWRITES the longest sections more
+            # tightly instead — and each rewrite is accepted only if it is
+            # genuinely shorter, still substantial, keeps its citations, and
+            # is not a chat turn. A rejected rewrite leaves the original
+            # untouched. Off with WEAVER_CONDENSE=0.
+            try:
+                import os as _osc
+                lang = card.get("language", "ar")   # not bound in 6.6
+                _mx = card.get("max_words")
+                _cur = self.count_words(task.draft)
+                if (_mx and self.llm_fn and _cur > int(_mx) * 1.05
+                        and _osc.environ.get("WEAVER_CONDENSE", "1") != "0"):
+                    _over = _cur - int(_mx)
+                    # THE CANDIDATE FLOOR WAS CALIBRATED FOR A SHORT
+                    # STRUCTURE. «a section worth condensing» was fixed at 120
+                    # words — sensible for a ten-section document. A
+                    # 42-section document 4902 words long averages 117, so
+                    # almost nothing qualified and the pass saved 156 words
+                    # against a 1302-word overshoot: the safety net measured
+                    # itself against a constant instead of against the text in
+                    # front of it. The floor now follows the document — the
+                    # sections at or above ITS OWN average are its long ones,
+                    # whatever shape it has — and never drops below 60, the
+                    # point under which a rewrite cannot save anything.
+                    _secs_w = [s for s in (task.sections or [])
+                               if not self._is_ref_heading(s.get("heading", ""))]
+                    try:
+                        _avg_w = int(_cur / max(1, len(_secs_w)))
+                        _floor_w = max(60, min(120, int(_avg_w * 0.8)))
+                    except Exception:
+                        _floor_w = 120
+                    _cand = sorted(
+                        [s for s in _secs_w
+                         if self.count_words(s.get("body", "")) >= _floor_w],
+                        key=lambda s: -self.count_words(s.get("body", "")))
+                    _saved = 0
+                    for s in _cand:
+                        if _saved >= _over:
+                            break
+                        _w = self.count_words(s.get("body", ""))
+                        _goal = max(80, int(_w * 0.65))
+                        _p = (f"أعِد كتابة هذا القسم بإيجازٍ أشدّ في نحو "
+                              f"{_goal} كلمة بدل {_w}، مع الحفاظ على كل "
+                              f"الأفكار الجوهرية وكل الاستشهادات كما هي "
+                              f"(المؤلف، السنة) وعلى أيّ جدول. احذف الحشو "
+                              f"والتكرار والاستطراد فقط. أعِد النصّ وحده بلا "
+                              f"مقدمةٍ ولا تعليق ولا إعادة لعنوان القسم.\n\n"
+                              f"العنوان: {s.get('heading','')}\n\n"
+                              f"{s.get('body','')}"
+                              if lang != "en" else
+                              f"Rewrite this section more tightly in about "
+                              f"{_goal} words instead of {_w}, keeping every "
+                              f"substantive idea, every citation exactly as "
+                              f"it is, and any table. Cut only padding, "
+                              f"repetition and digression. Return the text "
+                              f"alone — no preamble, no commentary, no "
+                              f"repeat of the heading.\n\n"
+                              f"Heading: {s.get('heading','')}\n\n"
+                              f"{s.get('body','')}")
+                        try:
+                            _new = self.llm_fn(_p, system=self.system_main,
+                                               temperature=0.3) or ""
+                        except Exception:
+                            continue
+                        _new, _ = self._split_decisions(_new)
+                        _new = self._clean_section_body(
+                            self._strip_meta_preamble(_new.strip()),
+                            s.get("heading", ""))
+                        _nw = self.count_words(_new)
+                        # A rewrite may not lose a SOURCE. Counting instances is
+                        # wrong — condensing legitimately repeats a citation
+                        # fewer times — so the distinct citations are compared
+                        # instead: every source cited before must still be cited.
+                        import re as _rec
+                        _cit_re = _rec.compile(r"\([^()]{3,60}[،,]\s*\d{4}\)")
+                        _cits_old = set(_cit_re.findall(s.get("body", "")))
+                        _cits_new = set(_cit_re.findall(_new))
+                        if (_new and _nw >= 60 and _nw < _w
+                                and not self._looks_conversational(_new)
+                                and _cits_old <= _cits_new):
+                            _saved += (_w - _nw)
+                            s["body"] = _new
+                    if _saved:
+                        task.draft = "\n\n".join(
+                            (f"{s.get('heading','')}\n{s.get('body','')}").strip()
+                            for s in task.sections
+                            if (s.get("heading") or s.get("body")))
+                        mem.set_status(66, f"طول: أُعيدت صياغة أقسامٍ "
+                                           f"وفُّرت {_saved} كلمة")
+                        self._record_decision(card, "condensed", _saved,
+                                              "model", "تجاوز الحدّ الأقصى")
+                    else:
+                        self._skip_note(
+                            card, "تقليص الطول",
+                            f"المستند {_cur} كلمة والحدّ {_mx} — "
+                            "لم تُقبل أيّ إعادة صياغة")
+            except Exception as e:
+                mem.set_status(66, f"تقليص (تخطّي: {e})")
 
             # ── (ب) تحقق الطول (كلمات) ──
             target = self.extract_length_target(task.description)
@@ -4332,6 +7845,12 @@ class WeaverOrchestrator:
             if tw:
                 actual = self.count_words(task.draft or "")
                 lo, hi = int(tw * 0.9), int(tw * 1.15)
+                # An explicit ceiling ("لا يزيد عن 12 صفحة") must stop the
+                # expansion loop: it only ever grew the text, so a document
+                # already past the ceiling kept growing (20.5 pages vs 12).
+                _max_w = target.get("max_words")
+                if _max_w and actual >= int(_max_w * 0.95):
+                    lo = 0
                 if actual < lo and self.llm_fn:
                     # النص أقصر من المطلوب → وسّع أضعف الأقسام (الأقصر)
                     deficit = tw - actual
@@ -4344,18 +7863,35 @@ class WeaverOrchestrator:
                             more = self.llm_fn(
                                 f"وسّع الفقرة التالية بعمق أكبر وتفصيل دقيق "
                                 f"(أضِف نحو {min(deficit, 300)} كلمة) دون تكرار "
-                                f"ودون حشو:\n\n{s.get('body', '')}",
+                                f"ودون حشو. أعِد النصّ الموسَّع وحده فقط: بلا "
+                                f"تحية، بلا مقدمة، بلا تعليق على المهمة، وبلا "
+                                f"ذكر عدد الكلمات، ولا تُعِد عنوان القسم."
+                                f"\n\n{s.get('body', '')}",
                                 system=getattr(self, "system_write", None)
                                 or getattr(self, "system_main", None),
                                 temperature=0.5) or ""
                         except Exception:
                             more = ""
                         if more.strip():
-                            added = (self.count_words(more)
-                                     - self.count_words(s.get("body", "")))
-                            s["body"] = more.strip()
-                            deficit -= max(0, added)
+                            # GUARD: the expansion reply may be a chat turn
+                            # ("أهلاً بك. سأقوم بتوسيع…"), carry a meta preamble
+                            # ("إليك التوسعة المطلوبة… 300 كلمة"), or re-insert
+                            # the "المطلب 1.1:" label — all of which used to be
+                            # pasted verbatim into the document because this
+                            # loop overwrote the ALREADY-CLEANED body. Clean it,
+                            # and reject it outright unless it is genuinely
+                            # longer real content.
+                            _m = self._strip_meta_preamble(more.strip())
+                            _m = self._clean_section_body(
+                                _m, s.get("heading", ""))
+                            _old_w = self.count_words(s.get("body", ""))
+                            if (_m and not self._looks_conversational(_m)
+                                    and self.count_words(_m) >= _old_w):
+                                added = self.count_words(_m) - _old_w
+                                s["body"] = _m
+                                deficit -= max(0, added)
                     mem.set_status(66, f"طول: وُسّع النص نحو الهدف {tw}")
+
 
                 # أعد بناء draft بعد أي تعديل
                 task.draft = "\n\n".join(
@@ -4620,6 +8156,103 @@ class WeaverOrchestrator:
         return out
 
     @staticmethod
+    def _theme_catalog():
+        """Read the REAL theme registry (shared by Word and slides) so the
+        choice is never a hardcoded list: adding a theme to themes.json makes it
+        immediately selectable. Returns [{id,label,mood}, ...] or []."""
+        import json as _json, os as _os
+        fp = _os.path.abspath(_os.path.join(
+            _os.path.dirname(__file__), "..", "capabilities", "skills",
+            "pptx_builder", "themes", "themes.json"))
+        try:
+            with open(fp, encoding="utf-8") as f:
+                themes = (_json.load(f) or {}).get("themes") or {}
+        except Exception:
+            return []
+        out = []
+        for tid, t in themes.items():
+            if not isinstance(t, dict):
+                continue
+            out.append({"id": tid,
+                        "label": t.get("label_ar") or t.get("label_en") or tid,
+                        "mood": t.get("mood", "")})
+        return out
+
+    def _resolve_theme(self, card, lang="ar"):
+        """THE MODEL picks the document's visual theme by UNDERSTANDING the
+        request — the design counterpart of letting it decide the structure.
+        21 themes shipped in themes.json but nothing ever selected one, so every
+        document came out in the default navy. Order: an explicit WEAVER_THEME
+        override > a theme already on the card > the model's choice > None (the
+        builder's own default, i.e. unchanged behaviour). The reply is validated
+        against the REAL catalog, so an invented id can never reach the builder.
+        Toggle with WEAVER_THEME_DIRECTOR=0. Never raises."""
+        import os as _os
+        cat = self._theme_catalog()
+        ids = {t["id"] for t in cat}
+        env = (_os.environ.get("WEAVER_THEME") or "").strip()
+        if env and env in ids:
+            return env
+        cur = str(card.get("theme") or "").strip()
+        if cur in ids:
+            return cur                       # decided once, reused
+        if _os.environ.get("WEAVER_THEME_DIRECTOR", "1").strip().lower() in (
+                "0", "false", "off", "no"):
+            return None
+        if not cat or not self.llm_fn:
+            return None
+        listing = "\n".join(f"- {t['id']}: {t['label']}"
+                             + (f" — {t['mood']}" if t['mood'] else "")
+                             for t in cat)
+        topic = card.get("topic", "") or ""
+        req = ""
+        try:
+            req = self._current_request(getattr(self, "_last_desc", "")) or ""
+        except Exception:
+            req = ""
+        kind = card.get("task_type", "")
+        if lang == "en":
+            prompt = ("Pick the ONE visual theme that best fits this document. "
+                      "Reply with the theme id ONLY — no explanation.\n\n"
+                      f"Available themes:\n{listing}\n\n"
+                      f"Document type: {kind}\nTopic: {topic}\n"
+                      f"User request: {req[:600]}\n\n"
+                      "Prefer a sober academic theme for research/theses; a "
+                      "formal one for reports; an expressive one only when the "
+                      "subject or the user clearly calls for it.")
+        else:
+            prompt = ("اختر ثيماً بصرياً واحداً يناسب هذا المستند. أجب بمعرّف "
+                      "الثيم فقط، بلا أي شرح.\n\n"
+                      f"الثيمات المتاحة:\n{listing}\n\n"
+                      f"نوع المستند: {kind}\nالموضوع: {topic}\n"
+                      f"طلب المستخدم: {req[:600]}\n\n"
+                      "فضّل ثيماً أكاديمياً رصيناً للبحوث والرسائل، ورسمياً "
+                      "للتقارير، ولا تختر ثيماً تعبيرياً إلا إذا كان الموضوع أو "
+                      "طلب المستخدم يستدعيه صراحةً.")
+        try:
+            raw = self.llm_fn(prompt, system=self.system_main, temperature=0.0,
+                              max_tokens=30, timeout=25) or ""
+        except TypeError:
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.0) or ""
+            except Exception:
+                return None
+        except Exception:
+            return None
+        pick = (raw or "").strip().strip('"\'`.,\n').split()[:1]
+        pick = pick[0] if pick else ""
+        if pick not in ids:                  # tolerate "id — label" replies
+            for tid in ids:
+                if tid in (raw or ""):
+                    pick = tid
+                    break
+        if pick in ids:
+            card["theme"] = pick
+            return pick
+        return None
+
+    @staticmethod
     def _resolve_font(card: dict) -> str:
         """Resolve the document font through fonts-core (engines/fonts-core).
         Keeps the requested name (Office renders it) but validates it against
@@ -4714,20 +8347,44 @@ class WeaverOrchestrator:
                 toc_pos = self._skill_call(
                     "docx_builder", "docx_frontmatter", "resolve_toc_position",
                     card) or "after_cover"
+                # THE MODEL decides the visual theme (falls back to the
+                # builder's own default when unavailable/disabled).
+                _kw = {}
+                try:
+                    _th = self._resolve_theme(card, lang)
+                    if _th:
+                        _kw["theme_id"] = _th
+                except Exception:
+                    _kw = {}
                 self._skill_call(
                     "docx_builder", "docx_advanced", "build_rich_docx",
                     title=title, sections=sections, output_path=out, lang=lang,
                     font=font, references=references, toc=bool(card.get("toc")),
-                    cover=cover, toc_position=toc_pos)
+                    cover=cover, toc_position=toc_pos, **_kw)
                 # rich Word styling for Quran/Hadith (bold verse/matn via the
                 # quran_hadith_citation skill's own _set_run). Guarded/no-op.
                 self._style_islamic_docx(out, card)
                 return out
             if fmt == "pdf":
                 out = os.path.join(out_dir, safe + ".pdf")
-                self._skill_call("pdf_builder", "build_pdf", "build_pdf",
-                                 sections=sections, output_path=out,
-                                 title=title, lang=lang, references=references)
+                # A PDF is actually RENDERED, so the cover, the table of
+                # contents and the page numbers are REAL here — not Word fields
+                # a viewer may refuse to compute. The builder also returns the
+                # TRUE page count, which we record so a "10-12 pages"
+                # requirement can be checked exactly instead of estimated.
+                _cov = (card.get("cover") if self._skill_call(
+                    "docx_builder", "docx_frontmatter", "should_add_cover", card)
+                    else None)
+                _res = self._skill_call(
+                    "pdf_builder", "build_pdf", "build_pdf",
+                    sections=sections, output_path=out, title=title, lang=lang,
+                    references=references, toc=bool(card.get("toc")),
+                    cover=_cov)
+                try:
+                    if isinstance(_res, dict) and _res.get("pages"):
+                        card["actual_pages"] = int(_res["pages"])
+                except Exception:
+                    pass
                 return out
             if fmt == "pptx":
                 out = os.path.join(out_dir, safe + ".pptx")
@@ -4921,6 +8578,720 @@ class WeaverOrchestrator:
         return any(k in h for k in ("مراجع", "مصادر", "references", "works cited",
                                     "bibliography"))
 
+    # ── ONE document-wide duplicate pass ────────────────────────────────────
+    # Before this, every anti-repetition guard defended ONE seam: the bridge
+    # above a مبحث, a heading echoed inside its own body, two conclusion
+    # sub-sections. Eight guards in total — and repetition kept reappearing at
+    # the next seam, because the number of section PAIRS that can repeat grows
+    # with the square of the section count (15 sections = 105 pairs).
+    #
+    # This is the last net: after all sections are assembled, every paragraph is
+    # compared with every paragraph BEFORE it, anywhere in the document and at
+    # any level (مبحث / مطلب / تقسيم / فصل / مقدمة / خاتمة). Similarity is
+    # difflib on the paragraph opening — arithmetic, not a keyword list and not
+    # a model call, so it behaves identically with any model.
+    @staticmethod
+    def _dedupe_sections(sections, lang="ar", threshold=0.80,
+                         max_removed_ratio=0.40, min_words=12):
+        """Drop paragraphs that repeat an earlier paragraph of the SAME document.
+
+        Returns (new_sections, report) where report is
+        {"dropped": n, "words": n, "pairs": [(later_heading, earlier_heading)],
+         "skipped": reason_or_None}. `sections` is never mutated.
+
+        WHICH COPY SURVIVES: the first occurrence in reading order — EXCEPT when
+        the pair is a parent section and one of its own children (a مبحث and its
+        مطالب). There the child keeps the text and the parent's copy is dropped,
+        because a parent must not pre-empt what its subsections will say.
+
+        PROTECTED (never touched): a references/bibliography section (repeating
+        author names is correct there), any table row, and short paragraphs — a
+        one-line transition is not a repeat.
+
+        SAFETY: if the pass would remove more than `max_removed_ratio` of the
+        document's words it is ABANDONED whole and reported instead, so a
+        mis-measure can never gut a real research paper. Never raises."""
+        import difflib
+
+        def _norm(s):
+            t = " ".join(str(s or "").split())
+            for ch in "ًٌٍَُِّْـ":
+                t = t.replace(ch, "")
+            return (t.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا")
+                     .replace("ى", "ي").replace("ة", "ه").lower())
+
+        try:
+            secs = [s for s in (sections or []) if isinstance(s, dict)]
+            if len(secs) < 2:
+                return sections, {"dropped": 0, "words": 0, "pairs": [],
+                                  "skipped": None}
+            lv = []
+            for s in secs:
+                try:
+                    lv.append(int(s.get("level", 1) or 1))
+                except Exception:
+                    lv.append(1)
+            # children of i = the following sections with a deeper level, until
+            # a level back at or above i's own
+            kids = []
+            for i in range(len(secs)):
+                acc = set()
+                for j in range(i + 1, len(secs)):
+                    if lv[j] <= lv[i]:
+                        break
+                    acc.add(j)
+                kids.append(acc)
+
+            protected = [WeaverOrchestrator._is_ref_heading(
+                s.get("heading", "")) for s in secs]
+            # flatten to (section_index, paragraph_index, text)
+            blocks = []
+            for i, s in enumerate(secs):
+                for k, para in enumerate((s.get("body") or "").split("\n\n")):
+                    blocks.append((i, k, para))
+
+            total_words = sum(len((p or "").split()) for _i, _k, p in blocks)
+            drop = set()          # (section_index, paragraph_index)
+            pairs = []
+
+            def _eligible(i, para):
+                p = (para or "").strip()
+                if protected[i] or len(p.split()) < min_words:
+                    return False
+                return "|" not in p          # leave tables alone
+
+            for a in range(len(blocks)):
+                ia, ka, pa = blocks[a]
+                if not _eligible(ia, pa) or (ia, ka) in drop:
+                    continue
+                ha = _norm(pa)[:180]
+                for b in range(a + 1, len(blocks)):
+                    ib, kb, pb = blocks[b]
+                    if ia == ib or not _eligible(ib, pb) or (ib, kb) in drop:
+                        continue
+                    if difflib.SequenceMatcher(
+                            None, ha, _norm(pb)[:180]).ratio() < threshold:
+                        continue
+                    # parent/child pair → the CHILD keeps it, the parent loses
+                    if ib in kids[ia]:
+                        drop.add((ia, ka))
+                        pairs.append((secs[ia].get("heading", ""),
+                                      secs[ib].get("heading", "")))
+                        break
+                    drop.add((ib, kb))
+                    pairs.append((secs[ib].get("heading", ""),
+                                  secs[ia].get("heading", "")))
+
+            if not drop:
+                return sections, {"dropped": 0, "words": 0, "pairs": [],
+                                  "skipped": None}
+            removed_words = sum(len((p or "").split())
+                                for i, k, p in blocks if (i, k) in drop)
+            if total_words and removed_words > total_words * max_removed_ratio:
+                return sections, {
+                    "dropped": len(drop), "words": removed_words, "pairs": pairs,
+                    "skipped": f"القصّ كان سيحذف {removed_words} كلمة من "
+                               f"{total_words} (فوق الحدّ) فلم يُطبَّق"}
+            out, emptied = [], []
+            for i, s in enumerate(secs):
+                paras = (s.get("body") or "").split("\n\n")
+                keep = [p for k, p in enumerate(paras) if (i, k) not in drop]
+                # A section whose EVERY paragraph was a copy (a conclusion that
+                # re-printed the body wholesale) would become a bare heading.
+                # Keep its first paragraph and name it in the report, so the
+                # reader is told rather than handed an empty section.
+                if not [x for x in keep if x.strip()] and paras:
+                    keep = [next((p for k, p in enumerate(paras)
+                                  if (i, k) in drop), paras[0])]
+                    emptied.append(s.get("heading", ""))
+                new = dict(s)
+                new["body"] = "\n\n".join(x for x in keep if x.strip()).strip()
+                out.append(new)
+            return out, {"dropped": len(drop), "words": removed_words,
+                         "pairs": pairs, "skipped": None, "emptied": emptied}
+        except Exception as e:
+            return sections, {"dropped": 0, "words": 0, "pairs": [],
+                              "skipped": f"{type(e).__name__}: {e}"}
+
+    # canonical source TYPES. Arabic scholarship separates these three, and the
+    # pipeline used to merge them all into one flat "قائمة المراجع":
+    #   primary   المصادر الأوّلية — original material the research works ON
+    #             (documents, manuscripts, sacred texts, laws, raw official data)
+    #   secondary المراجع — books/articles that ANALYSE the topic
+    #   study     الدراسات السابقة — prior academic studies on the same question
+    #   web       المواقع الإلكترونية — general web pages
+    _REF_TYPES = ("primary", "secondary", "study", "web")
+    _REF_GROUP_AR = {"primary": "المصادر", "secondary": "المراجع",
+                     "study": "الدراسات السابقة",
+                     "web": "المواقع الإلكترونية"}
+    # ordinals are applied to the groups ACTUALLY present, so a list with only
+    # two of the four reads "أولاً/ثانياً" instead of skipping to "ثانياً/رابعاً"
+    _REF_ORDINALS_AR = ("أولاً", "ثانياً", "ثالثاً", "رابعاً")
+    _REF_GROUP_EN = {"primary": "Primary Sources", "secondary": "References",
+                     "study": "Previous Studies", "web": "Websites"}
+
+    # scholarly databases the pipeline queries — a hit here is a real academic
+    # work, not a web page. Used as a MODEL-FREE fallback so the type grouping
+    # still engages when the model can't classify.
+    _ACAD_PROVENANCE = ("openalex", "crossref", "arxiv", "semanticscholar",
+                        "doaj", "europepmc", "paperqa", "pubmed")
+
+    @classmethod
+    def _fallback_ref_type(cls, s):
+        """A deterministic, model-free type for one source, from its provenance
+        and fields. Deliberately conservative: it only separates scholarly works
+        («المراجع») from plain web pages («المواقع الإلكترونية»), because telling
+        a prior STUDY from an analytical reference needs real judgement. Returns
+        a type from _REF_TYPES."""
+        if not isinstance(s, dict):
+            return "web"
+        prov = str(s.get("source") or "").lower()
+        if any(k in prov for k in cls._ACAD_PROVENANCE):
+            return "secondary"
+        if s.get("doi") or s.get("venue") or s.get("journal"):
+            return "secondary"
+        a = s.get("authors") or s.get("author")
+        if a and s.get("year"):
+            return "secondary"
+        if s.get("url"):
+            return "web"
+        return "secondary"
+
+    def _classify_sources(self, sources, topic="", lang="ar"):
+        """THE MODEL labels each gathered source as a primary source, a
+        secondary reference, a prior study, or a web page — the distinction the
+        system could not make (everything landed in one «قائمة المراجع»).
+        Writes `ref_type` onto each source in place and returns True when at
+        least one label was applied. Never raises; no model → False → the flat
+        list is kept, so behaviour is unchanged."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items or not self.llm_fn:
+            return False
+        items = items[:40]
+        listing = []
+        for i, s in enumerate(items, 1):
+            bits = [str(s.get("title") or s.get("key") or "")[:120]]
+            if s.get("year"):
+                bits.append(str(s.get("year")))
+            if s.get("source"):
+                bits.append(str(s.get("source")))
+            if s.get("url"):
+                bits.append(str(s.get("url"))[:60])
+            listing.append(f"{i}. " + " | ".join(b for b in bits if b))
+        listing = "\n".join(listing)
+        if lang == "en":
+            prompt = ("Classify each item by its scholarly TYPE. Return JSON "
+                      'only: {"1":"primary|secondary|study|web", ...}\n'
+                      "primary = original material the research works on "
+                      "(documents, manuscripts, sacred texts, laws, raw official "
+                      "statistics); secondary = a book/article analysing the "
+                      "topic; study = a prior academic study (empirical paper, "
+                      "thesis) on the same question; web = a general web page or "
+                      "news site.\n\n"
+                      f"Topic: {topic}\n\n{listing}")
+        else:
+            prompt = ("صنّف كل عنصرٍ بحسب نوعه العلميّ. أعِد JSON فقط: "
+                      '{"1":"primary|secondary|study|web", ...}\n'
+                      "primary = مصدر أوّليّ يشتغل عليه البحث نفسه (وثائق، "
+                      "مخطوطات، نصوص مقدّسة، قوانين، إحصاءات رسمية خام)؛ "
+                      "secondary = مرجع (كتاب/مقال) يحلّل الموضوع؛ "
+                      "study = دراسة سابقة أكاديمية (بحث ميدانيّ، رسالة علمية) "
+                      "على السؤال نفسه؛ web = موقع إلكترونيّ عامّ أو خبريّ.\n\n"
+                      f"الموضوع: {topic}\n\n{listing}")
+        try:
+            from core.llm import extract_json
+            try:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.0, max_tokens=600,
+                                  timeout=45) or ""
+            except TypeError:
+                raw = self.llm_fn(prompt, system=self.system_main,
+                                  temperature=0.0) or ""
+            data = extract_json(raw)
+        except Exception:
+            return False
+        if not isinstance(data, dict):
+            return False
+        applied = 0
+        for i, s in enumerate(items, 1):
+            v = data.get(str(i)) or data.get(i)
+            v = str(v or "").strip().lower()
+            if v in self._REF_TYPES:
+                s["ref_type"] = v
+                applied += 1
+        return applied > 0
+
+    _REF_LANG_AR = {"ar": "العربية", "en": "الإنجليزية", "fr": "الفرنسية",
+                    "es": "الإسبانية", "de": "الألمانية", "tr": "التركية",
+                    "fa": "الفارسية", "ru": "الروسية", "zh": "الصينية"}
+
+    @classmethod
+    def _ref_annotation(cls, src, lang="ar"):
+        """One annotation line under a reference: where it was published, what
+        language it is in, and what it is ABOUT.
+
+        A bibliography of bare titles and links tells the reader nothing about
+        why an entry is there — a chat assistant answering the same request
+        gives the venue, the language and a sentence of substance for each one.
+        Every field here already arrives from the indexes (venue, language,
+        abstract) and was simply being dropped, so this costs no model call and
+        behaves the same with any provider. Returns "" when nothing is known,
+        so an entry that has no metadata prints exactly as it does today."""
+        if not isinstance(src, dict):
+            return ""
+        try:
+            bits = []
+            # THE DISTINCTION THAT WAS MISSING: a field read from the work's own
+            # page, and a field taken from an aggregator's JSON, used to print
+            # identically — so a reader had no way to tell a confirmed venue
+            # from a scraped one, which is how a misaligned metadata field
+            # passes as fact. The verdict now leads the line.
+            _v = str(src.get("verified") or "")
+            if _v == "verified":
+                _fl = [f for f in (src.get("verified_fields") or [])]
+                bits.append(
+                    ("✓ مُتحقَّق من الصفحة الأصلية"
+                     + (f" ({'، '.join(_fl[:4])})" if _fl else "")
+                     if lang != "en" else
+                     "✓ confirmed on the source page"
+                     + (f" ({', '.join(_fl[:4])})" if _fl else "")))
+            elif _v == "registry":
+                # A DISTINCT, HONEST MIDDLE STATE. The article page is shut, so
+                # these fields come from the DOI's registration record — what
+                # the publisher itself deposited. That is not the article, and
+                # it is not an aggregator's scrape either, so it is neither
+                # claimed as read nor dismissed as unverified.
+                _at = str(src.get("blocked_at") or "")
+                _host = _at.split("//")[-1].split("/")[0] if _at else ""
+                bits.append(
+                    ("◐ مُتحقَّق من سجلّ الـDOI (أودعه الناشر) — صفحة المقال "
+                     + (f"محجوبة خلف تسجيل دخول في {_host}" if _host
+                        else "غير متاحة")
+                     if lang != "en" else
+                     "◐ confirmed from the DOI registration record — the "
+                     "article page is "
+                     + (f"behind a sign-in at {_host}" if _host
+                        else "not reachable")))
+            elif _v == "unreadable":
+                # NOT a paywall. The page came back as a site stub — a
+                # JavaScript-only view, a menu, an error — so it could not be
+                # read. Saying «behind a subscription» about a site that
+                # charges nobody would be a false statement about a third
+                # party, which is exactly what this whole verification layer
+                # exists to prevent.
+                bits.append(
+                    ("⚠ صفحةٌ لا تُقرأ آلياً (صفحة موقعٍ لا ورقة) — ليست "
+                     "محجوبةً باشتراك" if lang != "en" else
+                     "⚠ page not machine-readable (a site stub, not the "
+                     "work) — not a paywall"))
+            elif _v == "paywalled":
+                _at = str(src.get("blocked_at") or "")
+                _host = _at.split("//")[-1].split("/")[0] if _at else ""
+                bits.append(
+                    ("⚠ محجوب باشتراك" + (f" ({_host})" if _host else "")
+                     + " — لم تُقرأ الصفحة ولا سجلّ الـDOI"
+                     if lang != "en" else
+                     "⚠ behind a subscription"
+                     + (f" ({_host})" if _host else "")
+                     + " — neither the page nor the DOI record could be read"))
+            elif _v in ("unverified", "unreachable"):
+                bits.append(
+                    "⚠ غير مُتحقَّق منه — تعذّر فتح الصفحة الأصلية، "
+                    "والبيانات من فهرسٍ وسيط" if lang != "en" else
+                    "⚠ unverified — source page could not be opened; "
+                    "fields come from an index, not the work itself")
+            ven = " ".join(str(src.get("venue") or src.get("journal") or "").split())
+            if ven:
+                bits.append((f"الجهة: {ven[:90]}" if lang != "en"
+                             else f"Venue: {ven[:90]}"))
+            lg = str(src.get("lang") or "").strip().lower()[:2]
+            if lg:
+                nm = (cls._REF_LANG_AR.get(lg, lg) if lang != "en" else lg)
+                bits.append((f"اللغة: {nm}" if lang != "en"
+                             else f"Language: {nm}"))
+            # a sentence of substance from the abstract the index returned
+            # A SCRAPED PAGE CARRIES ITS MARKUP. «###### الفرق بين قصر النظر»
+            # printed the page's own heading marks inside a reference summary.
+            # Strip the markers, keep the words.
+            _raw = str(src.get("content") or "")
+            for _m in ("######", "#####", "####", "###", "##", "#", "**", "__",
+                       "`", ">", "|"):
+                _raw = _raw.replace(_m, " ")
+            abx = " ".join(_raw.split())
+            if len(abx) >= 60:
+                cut = abx[:240]
+                for stop in (". ", "؟ ", "! ", "، "):
+                    i = cut.rfind(stop)
+                    if i > 80:
+                        cut = cut[:i + 1]
+                        break
+                _lbl = ("الوصف" if lang != "en" else "Summary")
+                if str(src.get("verified") or "") not in ("verified",
+                                                          "registry"):
+                    _lbl = ("الوصف (من الفهرس)" if lang != "en"
+                            else "Summary (from the index)")
+                bits.append(f"{_lbl}: {cut.strip()}")
+            return " · ".join(bits)
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _ref_keys(src):
+        """Identity keys for one source, strongest first: DOI, URL, then the
+        normalised title. Used to find a source INSIDE a rendered line."""
+        out = []
+        doi = str((src or {}).get("doi") or "").strip().lower()
+        doi = doi.replace("https://doi.org/", "").replace("http://doi.org/", "")
+        if len(doi) >= 8:
+            out.append(("doi", doi))
+        url = str((src or {}).get("url") or "").strip().lower().rstrip("/")
+        if len(url) >= 12:
+            out.append(("url", url))
+        t = str((src or {}).get("title") or "")
+        t = "".join(c for c in t.lower() if c.isalnum() or c.isspace())
+        t = " ".join(t.split())
+        if len(t) >= 12:
+            out.append(("title", t))
+        return out
+
+    @classmethod
+    def _annotate_bibliography(cls, txt, items, lang="ar"):
+        """Append each source's annotation under ITS OWN rendered entry.
+
+        The first version matched by POSITION, on the assumption that the
+        formatter returns entries in the order it was given them. It does not:
+        build_bibliography de-duplicates and then calls sort_references, so the
+        list comes back alphabetised. Position matching therefore slid the
+        annotations along the list and printed one scholar's abstract under
+        another scholar's name — measured in a real document: Blīl's abstract
+        («الإعجاز التشريعي في الميراث») sat under al-Shāwī's entry. A missing
+        annotation is a gap; a shifted one is a false attribution, which is
+        worse than printing nothing.
+
+        So identity decides, never order: a line is annotated only when exactly
+        ONE source's DOI, URL or normalised title occurs in it, AND that source
+        matches no other line. Anything ambiguous is left bare, and if fewer
+        than half the entries resolve, the list is returned untouched — the
+        behaviour before annotations existed."""
+        try:
+            lines = (txt or "").split("\n")
+            if not lines or not items:
+                return txt
+            import re as _re
+            num = _re.compile(r"^\s*(\d+)[.)]\s")
+            # normalised haystack per numbered line
+            idxs = [i for i, ln in enumerate(lines) if num.match(ln)]
+            if not idxs:
+                return txt
+            hay = {}
+            for i in idxs:
+                low = lines[i].lower()
+                flat = " ".join("".join(
+                    c for c in low if c.isalnum() or c.isspace()).split())
+                hay[i] = (low, flat)
+            # line -> matching source indexes
+            per_line = {i: set() for i in idxs}
+            per_src = {j: set() for j in range(len(items))}
+            for j, src in enumerate(items):
+                for kind, key in cls._ref_keys(src):
+                    for i in idxs:
+                        low, flat = hay[i]
+                        if (key in flat) if kind == "title" else (key in low):
+                            per_line[i].add(j)
+                            per_src[j].add(i)
+            pairs = {}
+            for i in idxs:
+                cand = per_line[i]
+                if len(cand) != 1:
+                    continue                 # ambiguous line → leave it bare
+                j = next(iter(cand))
+                if len(per_src[j]) != 1:
+                    continue                 # source seen on several lines
+                pairs[i] = j
+            if len(pairs) * 2 < len(idxs):
+                return txt                   # too little certainty → no notes
+            out = []
+            used = 0
+            for i, ln in enumerate(lines):
+                out.append(ln)
+                j = pairs.get(i)
+                if j is None:
+                    continue
+                note = cls._ref_annotation(items[j], lang)
+                if note:
+                    out.append("   " + note)
+                    used += 1
+            return "\n".join(out) if used else txt
+        except Exception:
+            return txt
+
+    @staticmethod
+    def _ref_notes_wanted(card):
+        """Should each reference carry its provenance line inside the document?
+
+        Off by default: nobody asked for an annotated bibliography. On when the
+        REQUEST itself asks for descriptions/annotation, or when the env flag is
+        set. The provenance is never lost either way — it is summarised in the
+        decisions ledger and the honest notes."""
+        try:
+            import os
+            v = (os.environ.get("WEAVER_REF_NOTES", "") or "").strip().lower()
+            if v in ("1", "true", "yes", "on"):
+                return True
+            if v in ("0", "false", "no", "off"):
+                return False
+            req = str((card or {}).get("_request_text") or "")
+            for r in ((card or {}).get("requirements") or []):
+                if isinstance(r, dict):
+                    req += " " + str(r.get("text") or "")
+            req = req.lower()
+            return any(k in req for k in (
+                "شرح المراجع", "وصف المراجع", "مع شرح لكل مرجع",
+                "قائمة مشروحة", "ببليوغرافيا مشروحة", "annotated bibliograph",
+                "describe each reference", "with annotations"))
+        except Exception:
+            return False
+
+    def _grouped_refs_body(self, sources, lang, skill, module, pq_refs, card):
+        """Build ONE bibliography body with the types separated by internal
+        sub-headings (the «قائمة المصادر والمراجع» layout of Arabic theses).
+        Kept as a single section on purpose: separate sections would collide
+        with a «الدراسات السابقة» chapter in the body and with the ref-heading
+        cleanup. Returns (heading, body) or None to fall back to the flat list."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items:
+            return None
+        # THE FILTER HAS TO SIT HERE TOO. _bib_sources runs on the flat path,
+        # but the grouped path — the one that actually produced «ثالثاً:
+        # المواقع الإلكترونية» — read the card's sources directly and never saw
+        # it. One filter, applied wherever the list is built, or it is not a
+        # filter at all.
+        try:
+            items, _dropped_general = self._bib_sources(items, card, lang)
+        except Exception:
+            _dropped_general = []
+        if not items:
+            return None
+        _how = "model"
+        if not any(s.get("ref_type") for s in items):
+            if not self._classify_sources(items, card.get("topic", ""), lang):
+                _how = "fallback"
+        # Fill in anything the model left unlabelled (or everything, when it
+        # could not classify at all) using the provenance-based fallback. This
+        # is what stops the type-aware list from silently collapsing back to one
+        # flat «قائمة المراجع» whenever the classification call fails.
+        for s in items:
+            if not s.get("ref_type"):
+                s["ref_type"] = self._fallback_ref_type(s)
+        groups = {t: [] for t in self._REF_TYPES}
+        for s in items:
+            groups.get(s.get("ref_type") or "secondary",
+                       groups["secondary"]).append(s)
+        present = [t for t in self._REF_TYPES if groups[t]]
+        try:
+            card["refs_grouping"] = {
+                "how": _how, "types": present,
+                "grouped": len(present) > 1,
+                "reason": ("" if len(present) > 1
+                           else "كل المصادر من نوعٍ واحد")}
+        except Exception:
+            pass
+        if len(present) <= 1:
+            return None                  # only one kind → the flat list is right
+        names = self._REF_GROUP_EN if lang == "en" else self._REF_GROUP_AR
+        parts = []
+        for _n, t in enumerate(present):
+            try:
+                txt = self._skill_call(skill, module, "build_bibliography",
+                                       groups[t], lang, None)
+            except Exception:
+                txt = "\n".join(
+                    f"{i}. {(x.get('title') or '')} {(x.get('url') or '')}".strip()
+                    for i, x in enumerate(groups[t], 1))
+            # A BIBLIOGRAPHY IS A LIST, NOT A COMMENTARY. The verification line
+            # under every entry («◐ مُتحقَّق من سجلّ الـDOI… · الجهة… · الوصف…»)
+            # was never asked for: it doubled the length of the list, turned an
+            # APA page into an annotated one, and broke the numbering because a
+            # paragraph sat between each pair of items. The information itself
+            # is worth keeping — it now lives in the decision ledger and the
+            # honest notes, where a reader looks for provenance, and the
+            # document keeps the clean list a reader asked for.
+            # WEAVER_REF_NOTES=1 puts it back inline for anyone who wants it.
+            if self._ref_notes_wanted(card):
+                txt = self._annotate_bibliography(txt, groups[t], lang)
+            if (txt or "").strip():
+                _label = names[t]
+                if lang != "en" and _n < len(self._REF_ORDINALS_AR):
+                    _label = f"{self._REF_ORDINALS_AR[_n]}: {_label}"
+                parts.append(f"{_label}\n{txt.strip()}")
+        if not parts:
+            return None
+        if pq_refs:
+            parts.append(str(pq_refs).strip())
+        head = ("قائمة المصادر والمراجع" if lang != "en"
+                else "Sources and References")
+        return head, "\n\n".join(parts)
+
+    @classmethod
+    def _bib_sources(cls, sources, card, lang="ar"):
+        """WHICH sources belong in a DOCUMENTED reference list.
+
+        A refereed list is the standing requirement, and a «ثانياً: المواقع
+        الإلكترونية» group placed popular health and content sites beside
+        peer-reviewed studies — a section nobody asked for, carrying sources the
+        quality ladder itself rates «supplementary only, never a primary
+        citation». A reader cannot tell, from one numbered list, which entries
+        were refereed and which were a page found by a search engine.
+
+        So: when refereed work is present, the bibliography is refereed work.
+        General pages stay in the writer's context — they informed the prose,
+        and nothing is deleted — but they are not presented as references. When
+        NO refereed source exists, the list falls back to what there is and the
+        card is marked so the reader is told plainly.
+
+        Returns (chosen, dropped). Never raises."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        if not items:
+            return sources, []
+        try:
+            wr = cls._wr()
+            acad, general = [], []
+            for s_ in items:
+                _t = wr.quality_tier(s_) if wr else 0
+                # THE THRESHOLD LET IN EXACTLY WHAT IT WAS BUILT TO KEEP OUT.
+                # Tier 3 is TIER_OFFICIAL — a university or government PAGE —
+                # so a ministry page and an upload site whose name merely ends
+                # in .edu both cleared it and printed under «ثالثاً: المواقع
+                # الإلكترونية» beside peer-reviewed studies. A documented
+                # bibliography is made of refereed work: a DOI, an academic
+                # book (tier ≥ 4), or a full bibliographic record (a named
+                # venue AND named authors) for the refereed Arabic journals
+                # that carry no DOI. `academic` alone is a SEARCH-LAYER hint,
+                # not evidence of review, so on its own it no longer carries an
+                # entry into the list — an official page informed the prose and
+                # stays in the writer's context, exactly as a general page does.
+                _rec_ = bool(s_.get("venue") or s_.get("journal")) and bool(
+                    s_.get("authors") or s_.get("author"))
+                _is_acad = bool(s_.get("doi") or (_t and _t >= 4) or _rec_)
+                (acad if _is_acad else general).append(s_)
+            if acad:
+                try:
+                    card["refs_general_dropped"] = len(general)
+                except Exception:
+                    pass
+                return acad, general
+            try:
+                card["refs_no_academic"] = True
+            except Exception:
+                pass
+            return items, []
+        except Exception:
+            return sources, []
+
+    @staticmethod
+    def _citation_coverage(draft, sources):
+        """Every (Author, Year) in the text must be findable in the list.
+
+        The text cited Van Dongen 2003, Alhola 2007 and Killgore 2010 while the
+        printed list held seven popular web pages — so every in-text citation
+        pointed at nothing and every listed entry was uncited. Neither the
+        writer nor the formatter can see that on its own: one produces the
+        prose, the other the list. Counting the overlap is the only way to know.
+
+        Returns the in-text citations that no listed source accounts for."""
+        try:
+            import re
+            txt = str(draft or "")
+            cits = re.findall(r"\(([^()]{3,70}?)[،,]\s*((?:19|20)\d{2})\)", txt)
+            if not cits:
+                return []
+            hay = []
+            for s_ in (sources or []):
+                if not isinstance(s_, dict):
+                    continue
+                a = s_.get("authors") or s_.get("author") or []
+                if isinstance(a, (list, tuple)):
+                    a = " ".join(str(x) for x in a)
+                hay.append((" ".join([str(a), str(s_.get("title") or ""),
+                                      str(s_.get("year") or "")])).lower())
+            blob = " || ".join(hay)
+            missing = []
+            for name, yr in cits:
+                n = " ".join(str(name).split())
+                # the surname carries the match; «وآخرون» and initials do not
+                parts = [w for w in n.replace("،", " ").split()
+                         if len(w) > 2 and w not in ("وآخرون", "et", "al.")]
+                key = (parts[-1] if parts else n).lower()
+                if not key or len(key) < 3:
+                    continue
+                if key not in blob:
+                    label = f"{n}، {yr}"
+                    if label not in missing:
+                        missing.append(label)
+            return missing[:8]
+        except Exception:
+            return []
+
+    @classmethod
+    def _cited_sources(cls, draft, sources):
+        """Keep only the sources the text ACTUALLY cites — the rule APA itself
+        states (a reference list lists what was cited, nothing more). The list
+        used to be built from every gathered source while the citations came
+        from whatever the writer used, so the two never matched.
+
+        A source counts as cited when its author surname, its DOI, its URL, or a
+        distinctive fragment of its title appears in the draft. SAFETY: if that
+        finds (almost) nothing — a writer that cited nothing, or an unreadable
+        style — the full list is returned unchanged, so a real bibliography is
+        never silently emptied."""
+        items = [s for s in (sources or []) if isinstance(s, dict)]
+        text = (draft or "")
+        if not items or not text.strip():
+            return sources
+        low = text.lower()
+
+        def _hit(s):
+            for key in ("doi", "url"):
+                v = str(s.get(key) or "").strip().lower()
+                if v and v in low:
+                    return True
+            a = s.get("authors") or s.get("author")
+            if isinstance(a, (list, tuple)):
+                a = a[0] if a else ""
+            a = str(a or "").strip()
+            if a:
+                # surname alone is enough: "الشلغصي، وليد" → "الشلغصي"
+                sur = a.replace("،", ",").split(",")[0].strip()
+                if len(sur) >= 3 and sur.lower() in low:
+                    return True
+            t = " ".join(str(s.get("title") or "").split())
+            if len(t) >= 12:
+                frag = " ".join(t.split()[:4]).lower()
+                if len(frag) >= 10 and frag in low:
+                    return True
+            return False
+
+        cited = [s for s in items if _hit(s)]
+        # never ship an empty (or near-empty) bibliography on a weak match
+        if len(cited) < max(1, len(items) // 4):
+            return sources
+        return cited
+
+    @staticmethod
+    def _draft_from_sections(task):
+        """Rebuild the chat draft from task.sections — the single source of
+        truth the exported file is built from. Used after the reference list is
+        rewritten, so the web view and the document can never show different
+        (or duplicated) reference lists."""
+        parts = []
+        for s in (task.sections or []):
+            h = (s.get("heading") or "").strip()
+            b = (s.get("body") or "").strip()
+            if not (h or b):
+                continue
+            parts.append((f"## {h}\n\n{b}" if h and b else (h or b)))
+        return "\n\n".join(parts).strip() or (task.draft or "")
+
     def _append_references(self, task: Task):
         """Build the full reference list from the retrieved sources via the
         citation-style skill (apa_formatter / mla_formatter) and put it as the
@@ -4939,6 +9310,41 @@ class WeaverOrchestrator:
             _strip_fabricated_refs()
             return
         sources = card.get("sources") or []
+        # APA/MLA list ONLY what the text cites — see _cited_sources (falls back
+        # to the full list when citations can't be matched).
+        try:
+            sources = self._cited_sources(task.draft, sources)
+        except Exception:
+            pass
+        # A DOCUMENTED LIST IS A REFEREED LIST. General pages keep informing the
+        # prose; they stop being presented as references.
+        _drop = []
+        try:
+            sources, _drop = self._bib_sources(sources, card, lang)
+        except Exception:
+            _drop = []
+        if _drop:
+            self._skip_note(
+                card, "قائمة المراجع",
+                f"استُبعد {len(_drop)} مصدراً عامّاً (مواقع غير محكّمة) من "
+                "قائمة التوثيق، وبقيت في سياق الكتابة — القائمة للمحكَّم وحده")
+        if card.get("refs_no_academic"):
+            self._skip_note(
+                card, "قائمة المراجع",
+                "لم يُعثر على مصدرٍ محكَّم، فالقائمة من مصادر عامة ولا تصلح "
+                "توثيقاً أكاديمياً")
+        try:
+            _miss = self._citation_coverage(task.draft, sources)
+            if _miss:
+                self._skip_note(
+                    card, "تطابق الاستشهادات",
+                    "استشهاداتٌ في النصّ لا تقابلها مداخل في القائمة: "
+                    + "؛ ".join(_miss[:4])
+                    + (f" (و{len(_miss) - 4} غيرها)" if len(_miss) > 4 else ""))
+                self._record_decision(card, "استشهادات بلا مرجع", len(_miss),
+                                      "measured", "طبقة ٨")
+        except Exception:
+            pass
         pq_refs = (card.get("paperqa_result") or {}).get("references")
         if not sources and not pq_refs:
             _strip_fabricated_refs()
@@ -4947,6 +9353,29 @@ class WeaverOrchestrator:
         style = str(card.get("citation_style", "APA")).upper()
         skill = "mla_formatter" if style == "MLA" else "apa_formatter"
         module = "format_mla" if style == "MLA" else "format_apa"
+        # TYPE-AWARE list first: separate المصادر / المراجع / الدراسات السابقة /
+        # المواقع instead of merging them into one flat «قائمة المراجع». Falls
+        # back to the flat list below whenever the types can't be told apart.
+        try:
+            _grp = self._grouped_refs_body(sources, lang, skill, module,
+                                           pq_refs, card)
+        except Exception:
+            _grp = None
+        if _grp:
+            _ghead, _gbody = _grp
+            task.sections = [x for x in (task.sections or [])
+                             if not self._is_ref_heading(x.get("heading", ""))]
+            task.sections.append({"heading": _ghead, "body": _gbody,
+                                  "level": 1})
+            # Rebuild the chat draft FROM the sections. Appending to the old
+            # draft left the writer's own reference block in the web view (and
+            # only there), so the page showed TWO differently-formatted lists
+            # while the exported file showed one. Now both render the same
+            # sections.
+            if task.draft:
+                task.draft = self._draft_from_sections(task)
+            card["references_list"] = _gbody
+            return
         try:
             refs = self._skill_call(skill, module, "build_bibliography",
                                     sources, lang, pq_refs)
@@ -4961,15 +9390,18 @@ class WeaverOrchestrator:
             if pq_refs:
                 refs = (refs + "\n" + str(pq_refs)).strip()
         if not (refs or "").strip():
+            self._skip_note(card, "قائمة المراجع",
+                            "لم تُبنَ قائمةٌ من المصادر المُجمَّعة")
             return
         head = "قائمة المراجع" if lang == "ar" else "References"
         # drop any earlier placeholder references section, then append the real one
         task.sections = [s for s in (task.sections or [])
                          if not self._is_ref_heading(s.get("heading", ""))]
         task.sections.append({"heading": head, "body": refs})
-        # also reflect it at the end of the chat draft
+        # rebuild the chat draft from the sections (see note above) so the web
+        # view and the exported document never diverge.
         if task.draft:
-            task.draft = task.draft.rstrip() + "\n\n" + head + "\n" + refs
+            task.draft = self._draft_from_sections(task)
         card["references_list"] = refs
 
     @staticmethod
@@ -4987,6 +9419,220 @@ class WeaverOrchestrator:
         # a lone "(ص. X)" / "(p. N)" with no source → remove the empty citation
         text = re.sub(r"[\(\[]\s*(?:ص|p)\s*\.?\s*[XxNn؟\?]+\s*[\)\]]", "", text)
         return text
+
+    def _expand_draft_to_length(self, draft, target_words, lang="ar"):
+        """WIRING 3 helper — ask the model to EXPAND an under-length draft to the
+        target word count, adding depth within the EXISTING sections. Returns the
+        expanded text only when it genuinely grew AND preserved the structure
+        (headings kept, any table kept, language kept); otherwise None so the
+        original draft is left untouched. Never truncates, never raises."""
+        if not self.llm_fn or not (draft or "").strip() or not target_words:
+            return None
+        import os
+        cur = _vr_words(draft)
+        if cur >= target_words * 0.95:
+            return None
+        try:
+            _mt = int(os.environ.get("WEAVER_RICH_MAXTOK", "8000") or 8000)
+        except Exception:
+            _mt = 8000
+        heads_before = len(_vr_headings(draft))
+        had_table = _vr_has_table(draft)
+        if lang == "en":
+            prompt = (
+                f"Expand the following document to at least ~{target_words} words "
+                "by adding analytical depth, detail and examples WITHIN the "
+                "existing sections. Do not delete any existing content, do not "
+                "remove or rename headings, and keep every table and the language "
+                "intact. Return the full expanded Markdown only:\n\n" + draft)
+        else:
+            prompt = (
+                f"وسّع المستند التالي ليبلغ نحو {target_words} كلمة على الأقل، "
+                "بإضافة عمقٍ تحليليّ وتفصيلٍ وأمثلةٍ ضمن الأقسام القائمة. لا تحذف "
+                "أيّ محتوى موجود، ولا تحذف العناوين أو تُعِد تسميتها، وحافظ على "
+                "الجداول واللغة العربية كما هي. أعِد النصّ الكامل الموسَّع بصيغة "
+                "ماركداون فقط:\n\n" + draft)
+        try:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.3, max_tokens=_mt) or ""
+        except TypeError:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.3) or ""
+        out = (out or "").strip()
+        # strip a wrapping ```markdown fence if present
+        if out.startswith("```"):
+            out = out.split("\n", 1)[-1] if "\n" in out else ""
+            if out.rstrip().endswith("```"):
+                out = out.rstrip()[:-3]
+        out = out.strip()
+        # GUARDS: accept only a real, structure-preserving expansion
+        if (_vr_words(out) > cur
+                and len(_vr_headings(out)) >= heads_before
+                and (not had_table or _vr_has_table(out))
+                and (lang == "en" or _vr_arabic_ratio(out) >= 0.6)):
+            return out
+        return None
+
+    @staticmethod
+    def _is_outline_dump(tbl, content=None):
+        """True when a generated "table" is really the document re-tabulated
+        rather than data. Rejecting it protects the length budget and the
+        no-repetition rule at once.
+
+        The original test matched section WORDS in the first cell («المقدمة»,
+        «المبحث», «المطلب»). A run then produced a 32-row «النقطة | التفصيل»
+        whose first cells read «خلفية الموضوع», «أهمية البحث», «مشكلة البحث» —
+        no match, so ~1,400 copied words shipped as a "table". Two MEASURED
+        signals now decide it, with the word test kept as a third:
+
+          • CELL SIZE — measured across a real run: genuine term/explanation
+            tables had a longest cell of 7–14 words; the dump's longest was 184.
+            A cell of 40+ words is prose, and prose in cells is not a table.
+          • REPETITION — cells whose opening is already present in the document
+            are copies, not data. Needs `content` (optional, so old callers
+            behave exactly as before).
+        """
+        rows = (tbl or {}).get("rows") or []
+        if len(rows) < 3:
+            return False
+        cells = [str(c) for r in rows for c in (r or [])]
+        lens = [len(c.split()) for c in cells if c.strip()]
+        # (a) prose in cells
+        if lens and max(lens) >= 40:
+            return True
+        # (b) cells copied out of the document
+        if content:
+            low = " ".join(str(content).split())
+            rep = 0
+            for c in cells:
+                w = c.split()
+                if len(w) >= 12 and " ".join(w[:10]) in low:
+                    rep += 1
+            if rep >= max(2, len([c for c in cells
+                                  if len(c.split()) >= 12]) // 4):
+                return True
+        # (c) the original wording signal
+        marks = ("المقدمة", "المبحث", "المطلب", "الخاتمة", "التوصيات",
+                 "Introduction", "Section", "Conclusion")
+        hits = 0
+        for r in rows:
+            first = str((r or [""])[0])
+            if any(m in first for m in marks):
+                hits += 1
+        return hits >= max(2, len(rows) // 2)
+
+    def _generate_table(self, task, req, lang="ar"):
+        """WIRING 3 helper — produce a REAL Markdown table for an unmet table
+        requirement. The writer's soft "use a table where it fits" hint is not
+        enough for a MUST requirement: a run produced a «جدول توضيحي» heading
+        with 900 words of prose and no table at all. Here we ask for a table and
+        nothing else, and accept it ONLY when it really parses as one."""
+        if not self.llm_fn:
+            return None
+        want = (req.get("text") or "").strip()
+        topic = (task.task_card or {}).get("topic", "") or task.description
+        if lang == "en":
+            prompt = (f"Produce ONE Markdown table only — no title, no preamble, "
+                      f"no commentary, no prose before or after it.\n"
+                      f"Topic: {topic}\nThe table must satisfy: {want}\n"
+                      f"Use a header row and a |---|---| separator row, with at "
+                      f"least 5 data rows of real, specific content.")
+        else:
+            prompt = (f"أخرِج جدولاً واحداً بصيغة ماركداون فقط — بلا عنوان، وبلا "
+                      f"مقدمة، وبلا تعليق، وبلا أي نصٍّ قبله أو بعده.\n"
+                      f"الموضوع: {topic}\nيجب أن يحقّق الجدول: {want}\n"
+                      f"استعمل صفَّ رؤوسٍ ثم صفَّ فاصلٍ |---|---| ثم خمسة صفوف "
+                      f"بيانات على الأقل بمحتوى حقيقيّ محدّد لا عام.")
+        try:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.2, max_tokens=1500) or ""
+        except TypeError:
+            out = self.llm_fn(prompt, system=self.system_main,
+                              temperature=0.2) or ""
+        out = (out or "").strip()
+        if out.startswith("```"):
+            out = out.split("\n", 1)[-1] if "\n" in out else ""
+            if out.rstrip().endswith("```"):
+                out = out.rstrip()[:-3]
+        out = out.strip()
+        # keep ONLY the table lines, and accept only if it truly parses
+        lines = [ln for ln in out.splitlines() if ln.strip().count("|") >= 2]
+        table = "\n".join(lines).strip()
+        return table if table and _vr_has_table(table) else None
+
+    def _repair_requirements(self, task, unmet, reqs):
+        """WIRING 3 — attempt SAFE, targeted repairs for unmet MUST requirements.
+        Only high-confidence fixes are made; anything riskier is left for the
+        honest note. Returns True if it changed anything. Never raises.
+          • cover / TOC → set the card flag the export builder reads (the model's
+            checklist caught what the keyword detectors missed).
+          • length too short → expand the draft (guarded; reverts on any doubt).
+        Structure counts, missing tables, and content/style judgements are NOT
+        auto-rewritten here — they are reported, not silently patched."""
+        card = task.task_card or {}
+        lang = card.get("language", "ar") or "ar"
+        by_id = {r.get("id"): r for r in (reqs or []) if isinstance(r, dict)}
+        fixed = False
+        for x in unmet:
+            req = by_id.get(x.get("id")) or x
+            kind = req.get("kind")
+            text = (req.get("text") or "").lower()
+            if kind == "insert":
+                if (any(k in text for k in ("غلاف", "cover", "عنوان",
+                                            "title")) and not card.get("cover")):
+                    card["cover"] = True
+                    fixed = True
+                    continue
+                if (any(k in text for k in ("فهرس", "محتويات", "toc",
+                                            "contents", "index"))
+                        and not card.get("toc")):
+                    card["toc"] = True
+                    fixed = True
+                    continue
+                if any(w in text for w in ("جدول", "جداول", "table")) \
+                        and not _vr_has_table(task.draft or ""):
+                    _tb = None
+                    try:
+                        _tb = self._generate_table(task, req, lang)
+                    except Exception:
+                        _tb = None
+                    if _tb:
+                        _head = ("جدول المصطلحات" if lang != "en"
+                                 else "Table")
+                        _secs = task.sections or []
+                        _new = {"heading": _head, "body": _tb, "level": 1}
+                        # place it BEFORE the references list, not after it
+                        _at = len(_secs)
+                        for _i in range(len(_secs) - 1, -1, -1):
+                            if self._is_ref_heading(
+                                    _secs[_i].get("heading", "")):
+                                _at = _i
+                                break
+                        _secs.insert(_at, _new)
+                        task.sections = _secs
+                        task.draft = (task.draft or "").rstrip() \
+                            + f"\n\n## {_head}\n\n{_tb}"
+                        fixed = True
+                        continue
+            if kind == "length":
+                import os
+                pt = _vr_page_target(req)
+                if pt:
+                    try:
+                        wpp = int(os.environ.get("WEAVER_WORDS_PER_PAGE",
+                                                 "300") or 300)
+                    except Exception:
+                        wpp = 300
+                    tgt = pt * wpp
+                else:
+                    tgt = req.get("target") if isinstance(
+                        req.get("target"), int) else None
+                if tgt:
+                    exp = self._expand_draft_to_length(task.draft, tgt, lang)
+                    if exp:
+                        task.draft = exp
+                        fixed = True
+        return fixed
 
     async def _layer_8(self, task: Task, mem: TaskMemory):
         """٨: الإخراج — كتابة الملف النهائي على القرص في outputs/."""
@@ -5020,6 +9666,114 @@ class WeaverOrchestrator:
                 mem.add_reference(f"[تقرير التحقق]\n{verify_text}", source_key="layer_8")
         except Exception:
             pass
+        # ── STAGE (ج) WIRING 3 — VERIFY → BOUNDED REPAIR → RE-VERIFY ──
+        # Verify the finished draft against the requirements checklist; when a
+        # MUST requirement isn't confirmed met, attempt SAFE targeted repairs
+        # (_repair_requirements) and re-verify, up to WEAVER_REPAIR_ROUNDS passes
+        # (default 1). Export is NEVER blocked: after the budget is spent, any
+        # still-unmet MUST requirement is reported in ONE honest plain-text note —
+        # nothing is silently dropped, and no work is discarded. Fully guarded.
+        try:
+            _reqs = (task.task_card or {}).get("requirements")
+            if _reqs and (task.draft or "").strip():
+                import os as _os
+                try:
+                    _rounds = int(_os.environ.get("WEAVER_REPAIR_ROUNDS",
+                                                  "1") or 1)
+                except Exception:
+                    _rounds = 1
+                _rounds = max(0, min(_rounds, 3))
+                _lang = task.task_card.get("language", "ar")
+                _rep = verify_requirements(
+                    _reqs, task.draft, card=task.task_card, lang=_lang,
+                    llm_fn=self.llm_fn, system=self.system_main)
+                _done = 0
+                while (_rep and not _rep.get("all_met") and _done < _rounds):
+                    _unmet = [x for x in _rep.get("results", [])
+                              if x.get("must") and x.get("status") != "met"]
+                    if not _unmet:
+                        break
+                    try:
+                        _changed = self._repair_requirements(
+                            task, _unmet, _reqs)
+                    except Exception:
+                        _changed = False
+                    if not _changed:
+                        break            # nothing safe left to fix → stop
+                    mem.set_status(8, f"إصلاح متطلّبات (جولة {_done + 1})")
+                    _rep = verify_requirements(
+                        _reqs, task.draft, card=task.task_card, lang=_lang,
+                        llm_fn=self.llm_fn, system=self.system_main)
+                    _done += 1
+                if _rep:
+                    task.task_card["verification"] = _rep
+                    mem.set_status(8, _rep.get("summary", "تحقّق المتطلّبات"))
+                    if not _rep.get("all_met"):
+                        _miss = [x for x in _rep.get("results", [])
+                                 if x.get("must") and x.get("status") != "met"]
+                        if _miss:
+                            _en = (_lang == "en")
+                            _hdr = ("Verification note (unconfirmed requirements):"
+                                    if _en else
+                                    "ملاحظة تحقّق (متطلّبات لم تتأكّد):")
+                            _lines = [_hdr]
+                            for x in _miss:
+                                _ev = x.get("evidence", "")
+                                _lines.append("• " + str(x.get("text", ""))
+                                              + (f" — {_ev}" if _ev else ""))
+                            task.draft = (task.draft or "").rstrip() \
+                                + "\n\n" + "\n".join(_lines)
+        except Exception as e:
+            mem.set_status(8, f"تحقّق/إصلاح المتطلّبات (تخطّي: {e})")
+
+        # ── who decided what ──
+        # A decision with no named source is a decision nobody can argue with.
+        # Only the document-level ones are shown; the per-section table answers
+        # stay on the card for inspection.
+        try:
+            _dec = (task.task_card or {}).get("decisions") or {}
+            _big = [(k, v) for k, v in _dec.items() if "::" not in k]
+            if _big:
+                _ar = (task.task_card.get("language", "ar") != "en")
+                _by = {"user": "المستخدم" if _ar else "user",
+                       "measured": "قياس" if _ar else "measured",
+                       "model": "النموذج" if _ar else "model",
+                       "counted": "قياس" if _ar else "measured",
+                       "neutral": "افتراضي محايد" if _ar else "neutral default",
+                       "template": "قالب احتياطي" if _ar else "fallback template",
+                       "fallback": "قالب احتياطي" if _ar else "fallback template"}
+                _line = " · ".join(
+                    f"{k}: {v.get('value')} ← "
+                    f"{_by.get(str(v.get('by')), v.get('by'))}"
+                    for k, v in _big)
+                task.draft = (task.draft or "").rstrip() + "\n\n" + (
+                    ("مصدر القرارات: " if _ar else "Decided by: ") + _line)
+                self._emit("detail", "", "مصدر القرارات: " + _line)
+        except Exception as e:
+            mem.set_status(8, f"سجلّ القرارات (تخطّي: {e})")
+
+        # ── RULE 2 — surface every step that cancelled itself ──
+        # Deliberately INDEPENDENT of the verification block above: that one
+        # only runs when a requirements checklist exists and something is
+        # unmet, so a skipped step (statistics with no data file, a table the
+        # enricher could not derive) would still have vanished without a word
+        # whenever the checklist was absent. This always reports.
+        try:
+            _sk = (task.task_card or {}).get("skipped_steps") or []
+            if _sk:
+                _en = (task.task_card.get("language", "ar") == "en")
+                _h = ("Not done, and why:" if _en else "لم يُنفَّذ، والسبب:")
+                _ls = [_h] + [f"• {x.get('step','')} — {x.get('reason','')}"
+                              for x in _sk if isinstance(x, dict)]
+                task.draft = (task.draft or "").rstrip() + "\n\n" \
+                    + "\n".join(_ls)
+                mem.set_status(8, f"خطوات لم تُنفَّذ: {len(_sk)}")
+                self._emit("detail", "",
+                           "لم يُنفَّذ: " + "، ".join(
+                               str(x.get("step", "")) for x in _sk[:4]))
+        except Exception as e:
+            mem.set_status(8, f"تقرير الخطوات (تخطّي: {e})")
+
         # كتابة الملف الفعلي على القرص
         try:
             task.output_path = self._export(task)
@@ -5670,9 +10424,20 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
             '"target_file":"اسم|null","on_previous":true|false,'
             '"mabhath_count":عدد|null,"matlab_count":عدد|null,'
             '"slide_count":عدد|null,"words":عدد|null,"pages":عدد|null,'
-            '"wants_table":true|false,"wants_chart":true|false,'
-            '"wants_data":true|false,"needs_sources":true|false}]}\n\n'
+            '"wants_table":true|false|null,"wants_chart":true|false|null,'
+            '"wants_data":true|false,"needs_sources":true|false,'
+            '"sourcing":"cited|uncited|none|null",'
+            '"citation_style":"APA|MLA|Chicago|Harvard|IEEE|null",'
+            '"recency":true|false|null}]}\n\n'
             "قواعد مهمة:\n"
+            "- null تعني «لا رأي لي»: لا تخترع قراراً لم يطلبه المستخدم ولم "
+            "يقتضِه الموضوع. وfalse تعني «لا» صريحةً — فإن قال المستخدم «بلا "
+            "جداول» فاجعل wants_table=false لا null.\n"
+            "- sourcing: cited = يريد مصادر موثّقة · uncited = يريد محتوًى بلا "
+            "توثيق · none = نهى عن المصادر أصلاً · null = لم يُحدِّد.\n"
+            "- citation_style: فقط إن سمّى المستخدم نمطاً، وإلا null.\n"
+            "- recency: true إن كان الجواب يتغيّر بمرور الوقت (سعر، منصب "
+            "حاليّ، خبر، إصدار)، false إن كان ثابتاً، null إن لم يتبيّن.\n"
             "- استعمل المحادثة كاملةً لتحديد الموضوع: إن كان الطلب الحالي تعليمةَ "
             "تنسيق (مثل «اجعلها 3 مباحث») دون ذكر الموضوع، فخذ الموضوع من الرسائل "
             "السابقة ولا تسأل عنه.\n"
@@ -5693,8 +10458,10 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
         except Exception:
             _to = 45
         try:
+            # the schema grew; a reasoning model that runs out mid-object
+            # returns nothing usable, and this one call decides the whole route.
             raw = llm_fn(prompt, system=system, temperature=0.0,
-                         max_tokens=700, timeout=_to) or ""
+                         max_tokens=1200, timeout=_to) or ""
         except TypeError:
             raw = llm_fn(prompt, system=system, temperature=0.0) or ""
         try:
@@ -5704,6 +10471,631 @@ def understand_request(conversation, request, attachments=None, llm_fn=None,
         return _normalize_plan(data)
     except Exception:
         return None
+
+
+# ── requirement kinds: a SMALL controlled vocabulary that lets a later, generic
+#    verifier route "is this satisfied?" checks. The requirement TEXT stays the
+#    user's own words (any topic, any count, any language) — nothing here is
+#    hardcoded to a subject. Unknown kinds are kept as "other" (never dropped).
+_REQ_KINDS = ("deliverable", "structure", "length", "section", "insert",
+              "content", "source", "style", "language", "format", "other")
+# what the user ultimately wants PRODUCED — decided by MEANING, not keywords.
+# This is the field that fixes the proven scope mis-routing: a "بحث بالكامل"
+# request resolves to full_document even when it also says "الهيكلة مكوّنة من…".
+_DELIVERABLES = ("full_document", "outline", "references", "plan", "part",
+                 "answer", "rewrite", "summary", "translation", "conversion",
+                 "edit")
+
+
+def _normalize_requirements(d):
+    """Validate the requirements-extraction JSON into safe types. Returns a dict
+    with a `requirements` list (possibly empty) plus `deliverable`/`language`/
+    `task_kind`/`notes`, or None when the payload is unusable. Never raises."""
+    if not isinstance(d, dict):
+        return None
+
+    def _clip(v, n):
+        return (str(v or "").strip())[:n]
+
+    def _num_or_str(v):
+        # keep an explicit number as int, otherwise a short free-form target
+        if isinstance(v, bool) or v is None:
+            return None
+        if isinstance(v, (int, float)):
+            try:
+                return int(v)
+            except (TypeError, ValueError, OverflowError):
+                return None
+        s = str(v).strip()
+        return s[:120] or None
+
+    dv = _clip(d.get("deliverable"), 40).lower()
+    deliverable = dv if dv in _DELIVERABLES else None
+
+    reqs_in = d.get("requirements")
+    if isinstance(reqs_in, dict):          # tolerate a single-object shape
+        reqs_in = [reqs_in]
+    out_reqs = []
+    if isinstance(reqs_in, list):
+        seen_ids = set()
+        for i, r in enumerate(reqs_in):
+            if not isinstance(r, dict):
+                # tolerate a bare string requirement
+                if isinstance(r, str) and r.strip():
+                    r = {"text": r}
+                else:
+                    continue
+            text = _clip(r.get("text") or r.get("requirement") or r.get("name"),
+                         300)
+            if not text:
+                continue
+            kind = _clip(r.get("kind") or r.get("type"), 20).lower()
+            if kind not in _REQ_KINDS:
+                kind = "other"
+            rid = _clip(r.get("id"), 40) or f"{kind}_{i + 1}"
+            # keep ids unique so a later verifier can address each one
+            if rid in seen_ids:
+                rid = f"{rid}_{i + 1}"
+            seen_ids.add(rid)
+            must = r.get("must")
+            must = True if must is None else bool(must)   # default: required
+            out_reqs.append({
+                "id": rid,
+                "text": text,
+                "kind": kind,
+                "target": _num_or_str(r.get("target")),
+                "must": must,
+            })
+
+    lang = _clip(d.get("language"), 8).lower()
+    return {
+        "task_kind": _clip(d.get("task_kind"), 200) or None,
+        "deliverable": deliverable,
+        "requirements": out_reqs,
+        "language": lang if lang in ("ar", "en") else None,
+        "notes": _clip(d.get("notes"), 400) or None,
+    }
+
+
+def extract_requirements(conversation, request, attachments=None, llm_fn=None,
+                         system=None):
+    """STAGE (أ) of Plan+Verify — REQUIREMENTS EXTRACTION (model-agnostic).
+
+    Reads the FULL request and the FULL conversation — NO truncation. (The older
+    understand_request/classify_intent capped input at req[:1500]/convo[:4000],
+    which silently dropped half of a long, detailed instruction — one proven
+    cause of forgotten requirements like a cover page or a 10-page length.) It
+    asks the connected model — ANY model, on any platform — to read the request
+    and return a DYNAMIC requirements checklist: the concrete, checkable things
+    the user actually asked for, in the user's own words. Nothing here is
+    hardcoded to a topic, a structure (3×3 or otherwise), or a keyword list —
+    the model decides, and the checklist is whatever THIS request contains.
+
+    Two things it fixes at the root:
+      • `deliverable` is decided by MEANING, so "أريد بحثاً بالكامل … الهيكلة
+        مكوّنة من…" resolves to full_document, not the keyword-guessed "outline".
+      • every concrete ask (غلاف، فهرس، عدد صفحات، جداول بمصطلحات، عدد مباحث/
+        مطالب…) becomes an explicit, addressable checklist item a later verify
+        stage can confirm was actually delivered.
+
+    Returns a normalized dict (see _normalize_requirements) or None when the
+    model is unavailable or its reply is unusable — callers keep their existing
+    behaviour, so no fallback is ever removed.
+
+    DORMANT for now: built and verified here; wired into the pipeline in the
+    next approved step, so behaviour is unchanged until then. Classification
+    only — it never writes or executes."""
+    req = (request or "").strip()
+    convo = (conversation or "").strip()
+    if not req and not convo:
+        return None
+    if llm_fn is None:
+        try:
+            from core.llm import get_llm_fn
+            llm_fn = get_llm_fn()
+        except Exception:
+            llm_fn = None
+    if not llm_fn:
+        return None
+    try:
+        import os
+        att = ""
+        if attachments:
+            att = ("الملفات/الروابط المرفقة:\n"
+                   + "\n".join("- " + str(a) for a in attachments) + "\n\n")
+        prompt = (
+            "أنت محلّل متطلّبات دقيق في نظام كتابةٍ بحثيّ. مهمتك أن تقرأ طلب "
+            "المستخدم كاملاً (والمحادثة كلها) وتستخرج «قائمة المتطلّبات»: كل "
+            "شيءٍ محدّدٍ طلبه المستخدم فعلاً، بكلماته هو، دون تنفيذ الطلب ودون "
+            "إضافة متطلّباتٍ لم يذكرها. أعِد JSON فقط بلا أي نصٍّ آخر.\n\n"
+            "الشكل المطلوب بالضبط:\n"
+            '{"task_kind":"وصفٌ حرٌّ قصير لما يريده المستخدم",'
+            '"deliverable":"full_document|outline|references|plan|part|answer|'
+            'rewrite|summary|translation|conversion|edit",'
+            '"language":"ar|en|null",'
+            '"requirements":[{"id":"معرّف_قصير","text":"المتطلّب بكلمات المستخدم",'
+            '"kind":"deliverable|structure|length|section|insert|content|source|'
+            'style|language|format|other","target":عدد أو نص أو null,'
+            '"must":true|false}],'
+            '"notes":"ملاحظاتٌ قصيرة أو null"}\n\n'
+            "قواعد حاسمة:\n"
+            "- deliverable يُحدَّد بالمعنى لا بمطابقة كلمة: إن طلب المستخدم بحثاً/"
+            "مستنداً/تقريراً مكتوباً كاملاً فهو full_document، حتى لو وصف هيكله في "
+            "نفس الرسالة (وصف الهيكل ليس طلباً للهيكل وحده). لا تجعله outline إلا "
+            "إذا طلب المستخدم الهيكل/العناصر فقط دون كتابة المحتوى.\n"
+            "- استخرج كل متطلّبٍ ملموسٍ قابلٍ للتحقّق ذكره المستخدم، منها مثلاً "
+            "(إن وُجدت فقط، ولا تختلق شيئاً): نوع المخرَج، عدد المباحث/المطالب "
+            "وأيّ تقسيماتٍ أعمق، عدد الصفحات أو الكلمات، صفحة غلاف، فهرس/جدول "
+            "محتويات، جداول (وما يجب أن تحتويه كمصطلحاتٍ أو مقارنة)، رسوم بيانية، "
+            "مصادر/مراجع/دراسات وتوثيقها، لغة المخرجات، الأسلوب (أكاديمي/بشري/"
+            "سردي/نقطي)، أقسامٌ بعينها يجب أن تُذكر. اجعل كل واحدٍ عنصراً مستقلاً.\n"
+            "- target: ضع فيه القيمة المحدّدة إن ذُكرت (عدد الصفحات، عدد المباحث، "
+            "اسم قسم…) وإلا null. must=true للمتطلّب الإلزاميّ، false للمرغوب.\n"
+            "- إن لم يذكر المستخدم متطلّباتٍ تفصيلية، أعِد requirements كقائمةٍ "
+            "فارغة [] مع تحديد deliverable وtask_kind فقط. لا تختلق متطلّبات.\n"
+            "- language: لغة المخرجات إن طُلبت صراحةً، وإلا null.\n\n"
+            + att + "المحادثة (الأقدم فالأحدث):\n" + convo + "\n\n"
+            "الطلب الحالي (اقرأه كاملاً):\n" + req)
+        from core.llm import extract_json
+        try:
+            _to = int(os.environ.get("WEAVER_REQUIREMENTS_TIMEOUT", "60") or 60)
+        except Exception:
+            _to = 60
+        try:
+            raw = llm_fn(prompt, system=system, temperature=0.0,
+                         max_tokens=1200, timeout=_to) or ""
+        except TypeError:
+            raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+        try:
+            data = extract_json(raw)
+        except Exception:
+            data = None
+        return _normalize_requirements(data)
+    except Exception:
+        return None
+
+
+# ── STAGE (ج): VERIFY ────────────────────────────────────────────────────────
+# The verifier takes the requirements checklist from extract_requirements and the
+# PRODUCED output, and reports — requirement by requirement — what was actually
+# delivered, BEFORE export. Design: measure what can be measured EXACTLY (word/
+# page count, a table's presence, cover/TOC flags, output language) with no model
+# at all (so it behaves identically with ANY model), and let the model JUDGE only
+# what needs judgement (content, style, "the tables carry technical terms"). It
+# NEVER claims a requirement failed on a guess: when it cannot tell, it says
+# "unknown", so honest reporting is preserved and no genuine work is discarded.
+
+def _vr_words(text):
+    """Whitespace word count of the draft (a good proxy for both Arabic and
+    English length). Markdown markup counts too — a harmless over-count."""
+    import re
+    return len(re.findall(r"\S+", text or ""))
+
+
+def _vr_arabic_ratio(text):
+    """Fraction of letters that are Arabic — used to confirm output language."""
+    ar = other = 0
+    for ch in (text or ""):
+        if "؀" <= ch <= "ۿ":
+            ar += 1
+        elif ch.isalpha():
+            other += 1
+    tot = ar + other
+    return (ar / tot) if tot else 0.0
+
+
+def _vr_headings(text):
+    """Return the list of Markdown heading lines (without the leading #s)."""
+    import re
+    out = []
+    for line in (text or "").splitlines():
+        m = re.match(r"\s{0,3}(#{1,6})\s+(.*\S)\s*$", line)
+        if m:
+            out.append(m.group(2).strip())
+    return out
+
+
+_VR_AR_NUM = {
+    "واحد": 1, "واحدة": 1, "اثنان": 2, "اثنين": 2, "اثنتان": 2, "اثنتين": 2,
+    "ثلاثة": 3, "ثلاث": 3, "أربعة": 4, "اربعة": 4, "أربع": 4, "اربع": 4,
+    "خمسة": 5, "خمس": 5, "ستة": 6, "ست": 6, "سبعة": 7, "سبع": 7,
+    "ثمانية": 8, "ثماني": 8, "تسعة": 9, "تسع": 9, "عشرة": 10, "عشر": 10,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+
+
+def _vr_numbers(text):
+    """Read the counts stated in a requirement, IN ORDER, from digits or from
+    number WORDS ("ثلاثة مباحث، كل مبحث فيه أربعة مطالب" → [3, 4]). Needed so a
+    two-level structure rule is checked against the numbers the user actually
+    said instead of assuming the same number twice. Never raises."""
+    import re as _re
+    out = []
+    try:
+        for tok in _re.findall(r"[0-9٠-٩]+|[^\W\d_]+",
+                               (text or ""), _re.UNICODE):
+            if tok[0].isdigit() or "٠" <= tok[0] <= "٩":
+                t = tok.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789"))
+                try:
+                    out.append(int(t))
+                except ValueError:
+                    pass
+            else:
+                n = _VR_AR_NUM.get(tok.strip("ًٌٍَُِّْ").lower())
+                if n:
+                    out.append(n)
+    except Exception:
+        return out
+    return out
+
+
+def _vr_has_table(text):
+    """True when the draft contains a Markdown table (a separator row like
+    |---|---| is the reliable signal)."""
+    import re
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if s.count("|") >= 2 and re.match(r"^\|?\s*:?-{2,}", s.replace(" ", "")):
+            return True
+    # also accept a header row immediately followed by a separator
+    return bool(re.search(r"\n.*\|.*\n\s*\|?\s*:?-{2,}", "\n" + (text or "")))
+
+
+def _vr_page_target(req):
+    """If a length requirement is expressed in PAGES, return that page count,
+    else None. Reads the requirement text + target; never guesses a topic.
+
+    A RANGE cannot fit in one integer, so «لا يقل عن 10 صفحات ولا يزيد عن 12»
+    came back with target=None and the whole length check degraded to
+    "unknown — لا هدف رقمي محدّد" even though both numbers were sitting in the
+    requirement's own text. The floor is read from that text as a fallback."""
+    t = (req.get("text") or "").lower()
+    is_pages = any(k in t for k in ("صفح", "page"))
+    if not is_pages:
+        return None
+    tgt = req.get("target")
+    if isinstance(tgt, int) and not isinstance(tgt, bool):
+        return tgt
+    nums = [n for n in _vr_numbers(req.get("text") or "") if 1 <= n <= 2000]
+    return nums[0] if nums else None
+
+
+def _verify_deterministic(req, draft, card, lang):
+    """Try to settle ONE requirement by exact measurement. Returns
+    (status, evidence) with status in {"met","unmet","unknown"}, or None when
+    this requirement isn't deterministically checkable (→ defer to the model).
+    Conservative: returns "unknown" instead of "unmet" whenever unsure, so we
+    never wrongly report a delivered requirement as missing."""
+    import os
+    kind = req.get("kind")
+    text = (req.get("text") or "").lower()
+    card = card or {}
+
+    # ── COVER / TABLE OF CONTENTS — settled from the CARD, whatever the model
+    #    labelled the requirement. These are EXPORT-time features: they never
+    #    appear in the draft text, so if this check is skipped the requirement
+    #    falls through to the model, which reads only the draft and always
+    #    reports them missing — a false failure on a document that HAS them.
+    if any(k in text for k in ("غلاف", "cover page", "title page")) or (
+            "cover" in text):
+        if card.get("cover"):
+            return ("met", "الغلاف مطلوبٌ ومضبوط (يُبنى عند التصدير)")
+        return (("unmet" if "cover" in card else "unknown"),
+                "لا علامة غلاف في البطاقة")
+    if any(k in text for k in ("فهرس", "محتويات", "toc",
+                               "table of contents", "index page")):
+        if card.get("toc"):
+            return ("met", "الفهرس مطلوبٌ ومضبوط (يُبنى عند التصدير)")
+        return (("unmet" if "toc" in card else "unknown"),
+                "لا علامة فهرس في البطاقة")
+
+    # ── length: words or pages ──
+    if kind == "length":
+        words = _vr_words(draft)
+        pages_tgt = _vr_page_target(req)
+        if pages_tgt:
+            try:
+                wpp = int(os.environ.get("WEAVER_WORDS_PER_PAGE", "300") or 300)
+            except Exception:
+                wpp = 300
+            est_pages = words / max(1, wpp)
+            # a CEILING in the same requirement ("لا يزيد عن 12 صفحة") is a
+            # failure too — the check only ever tested the floor
+            _mx = None
+            try:
+                _mx = (card or {}).get("max_pages")
+                if not _mx:
+                    # the ceiling may live only in the requirement's own text
+                    _ns = [n for n in _vr_numbers(req.get("text") or "")
+                           if 1 <= n <= 2000]
+                    if len(_ns) >= 2 and _ns[1] > _ns[0]:
+                        _mx = _ns[1]
+            except Exception:
+                _mx = None
+            # a PDF export gives a MEASURED page count — prefer it over the
+            # words-per-page estimate, which is only ever an approximation
+            try:
+                _real = (card or {}).get("actual_pages")
+                if _real:
+                    est_pages = float(_real)
+                    wpp = "مقيس"
+            except Exception:
+                pass
+            ev = f"~{est_pages:.1f} صفحة ({words} كلمة، {wpp}/صفحة) مقابل " \
+                 f"مطلوب ≥{pages_tgt}" + (f" و≤{_mx}" if _mx else "")
+            if _mx and est_pages > _mx * 1.05:
+                return ("unmet", ev + " — تجاوز الحدّ الأقصى")
+            # "at least" semantics with a small tolerance
+            return (("met" if est_pages >= pages_tgt * 0.95 else "unmet"), ev)
+        tgt = req.get("target")
+        if isinstance(tgt, int):
+            ev = f"{words} كلمة مقابل مطلوب ≥{tgt}"
+            return (("met" if words >= tgt * 0.95 else "unmet"), ev)
+        return ("unknown", f"{words} كلمة (لا هدف رقمي محدّد)")
+
+    # ── language of the output ──
+    if kind == "language":
+        tgt = str(req.get("target") or "").lower()
+        want_ar = ("ar" in tgt or "عرب" in text)
+        want_en = ("en" in tgt or "انجل" in text or "إنجل" in text
+                   or "english" in text)
+        ratio = _vr_arabic_ratio(draft)
+        if want_ar:
+            return (("met" if ratio >= 0.6 else "unmet"),
+                    f"نسبة العربية {ratio:.0%}")
+        if want_en:
+            return (("met" if ratio <= 0.4 else "unmet"),
+                    f"نسبة العربية {ratio:.0%}")
+        return None
+
+    # ── sources: COUNT them exactly; leave the citation STYLE to judgement ──
+    # RULE 3 — «مع 9 مراجع … موثقة بأسلوب APA» went entirely to the model, which
+    # then reported a mix of a countable fact and a stylistic opinion in one
+    # breath. The count is countable: numbered entries under a references
+    # heading. Only the style part needs a judgement, so only that is deferred.
+    if kind == "structure" or kind == "source":
+        _txt = text
+        if kind == "source" or any(k in _txt for k in (
+                "مرجع", "مراجع", "مصدر", "مصادر", "دراس", "reference",
+                "source", "stud")):
+            _want = req.get("target")
+            if not isinstance(_want, int) or isinstance(_want, bool):
+                _ns = [n for n in _vr_numbers(req.get("text") or "")
+                       if 1 <= n <= 500]
+                _want = _ns[0] if _ns else None
+            if _want:
+                import re as _re
+                _in_refs, _cnt = False, 0
+                for _ln in (draft or "").splitlines():
+                    _s = _ln.strip()
+                    if _s.startswith("#"):
+                        _low = _s.lstrip("# ").lower()
+                        _in_refs = any(k in _low for k in (
+                            "مراجع", "مصادر", "دراسات", "المواقع",
+                            "references", "bibliography"))
+                        continue
+                    if _in_refs and _re.match(r"^\d{1,3}[.)]\s+\S", _s):
+                        _cnt += 1
+                if _cnt:
+                    _ev = f"عدد المدخلات المرقّمة في قائمة المراجع = {_cnt} " \
+                          f"مقابل {_want}"
+                    if _cnt < _want:
+                        return ("unmet", _ev)
+                    # A SURPLUS WAS PASSING IN SILENCE. The check only ever
+                    # tested the floor, so a request for «9 مراجع» answered with
+                    # thirteen came back «met» and the user read the note and saw
+                    # nothing. More than was asked for is not a failure, but it
+                    # is a deviation, and the note is the one place where the
+                    # user finds out what they actually received.
+                    if _cnt > _want:
+                        _ev += f" — زيادةٌ {_cnt - _want} عن المطلوب"
+                    # count is satisfied; the STYLE (APA) is a judgement
+                    if any(k in _txt for k in ("apa", "mla", "chicago",
+                                               "توثيق", "أسلوب")):
+                        return None
+                    return ("met", _ev)
+        if kind == "source":
+            return None
+
+    # ── inserts: table/references live in the draft (cover/TOC are settled
+    #    above, for ANY kind, because they are invisible in the draft) ─
+    if kind == "insert":
+        if "جدول" in text or "table" in text:
+            # presence is deterministic; whether it holds the RIGHT content
+            # (e.g. technical terms) is a judgement → defer that part to model
+            if not _vr_has_table(draft):
+                return ("unmet", "لا جدول في المخرَج")
+            # a table exists but the requirement adds a content condition
+            if any(k in text for k in ("مصطلح", "تقني", "مقارنة", "term",
+                                       "technical", "comparison")):
+                return None            # let the model judge the table content
+            return ("met", "يوجد جدول في المخرَج")
+        if any(k in text for k in ("مراجع", "مصادر", "references",
+                                   "bibliography")):
+            heads = " ".join(_vr_headings(draft)).lower()
+            has = any(k in heads for k in ("مراجع", "مصادر", "references",
+                                           "bibliography"))
+            return (("met" if has else "unmet"),
+                    "قسم المراجع " + ("موجود" if has else "غير موجود"))
+        return None
+
+    # ── structure: count matching headings ──
+    if kind == "structure":
+        tgt = req.get("target")
+        if isinstance(tgt, bool):
+            tgt = None
+        if not isinstance(tgt, int):
+            # A compound rule («ثلاثة مباحث، كل مبحث فيه ثلاثة مطالب، وكل مطلب
+            # تقسيمات») cannot be expressed as one integer, so the model returns
+            # target=None — and the whole check then went to the model, which
+            # judged a TRUNCATED draft and twice reported a مبحث missing that was
+            # demonstrably present. The counts are in the requirement's own text.
+            _ns = [n for n in _vr_numbers(req.get("text") or "")
+                   if 1 <= n <= 200]
+            tgt = _ns[0] if _ns else None
+        if isinstance(tgt, int):
+            # map the requirement wording (often a PLURAL like «مباحث») to the
+            # singular STEM that appears in the headings («المبحث الأول»).
+            groups = (
+                (("مبحث", "مباحث"), "مبحث"),
+                (("مطلب", "مطالب"), "مطلب"),
+                (("فصل", "فصول"), "فصل"),
+                (("باب", "أبواب", "ابواب"), "باب"),
+                (("section", "sections"), "section"),
+                (("chapter", "chapters"), "chapter"),
+            )
+            # A requirement may name TWO levels at once — «ثلاثة مباحث، كل مبحث
+            # فيه ثلاثة مطالب». That whole case used to be handed to the model
+            # (`"كل" not in text`), which then judged a TRUNCATED draft and
+            # reported a مبحث missing that was demonstrably present. Counting
+            # both stems settles it exactly, with no model and no truncation.
+            stems = [s for triggers, s in groups
+                     if any(k in text for k in triggers)]
+            if stems:
+                heads = [h.lower() for h in _vr_headings(draft)]
+                counts = [(s, sum(1 for h in heads if s in h)) for s in stems]
+                if all(c == 0 for _s, c in counts):
+                    return None       # wording may differ from headings → model
+                # "N X, each X has M Y": the outer count is `target`; the inner
+                # one is target×target when the rule repeats the same number,
+                # which is the only per-section form a single int can express.
+                if len(counts) >= 2 and ("كل" in text or " each " in text):
+                    (s1, c1), (s2, c2) = counts[0], counts[1]
+                    # the INNER number is read from the requirement text, so
+                    # "ثلاثة مباحث، كل مبحث فيه أربعة مطالب" needs 3×4, not 3×3
+                    _nums = _vr_numbers(text)
+                    _inner = _nums[1] if len(_nums) >= 2 else None
+                    if _inner:
+                        need2 = tgt * _inner
+                        ok = (c1 >= tgt and c2 >= need2)
+                        return (("met" if ok else "unmet"),
+                                f"«{s1}» = {c1} مقابل {tgt} · "
+                                f"«{s2}» = {c2} مقابل {need2}")
+                    # inner number unreadable → judge the outer level only and
+                    # report the inner count rather than guess at it
+                    return (("met" if c1 >= tgt else "unmet"),
+                            f"«{s1}» = {c1} مقابل {tgt} · «{s2}» = {c2}")
+                s, cnt = counts[0]
+                if cnt == 0:
+                    return None
+                return (("met" if cnt >= tgt else "unmet"),
+                        f"عدد العناوين المطابقة لـ«{s}» = {cnt} مقابل {tgt}")
+        return None
+
+    return None
+
+
+def verify_requirements(requirements, draft, card=None, lang="ar", llm_fn=None,
+                        system=None):
+    """STAGE (ج) — verify the produced output against the requirements checklist.
+
+    `requirements`: the list from extract_requirements()["requirements"].
+    `draft`: the assembled document text (Markdown). `card`: the task card (for
+    cover/toc flags). Returns:
+      {"results":[{"id","text","kind","must","status","evidence","by"}],
+       "unmet":[ids of MUST requirements not confirmed met],
+       "all_met": bool,          # every MUST requirement is "met"
+       "summary": str}
+    status ∈ {"met","unmet","partial","unknown"}. Deterministic checks settle
+    what they can with NO model; the rest go to the model in ONE call. When the
+    model is unavailable those stay "unknown" (never a false "unmet"). Never
+    raises — returns None only when there are no requirements to check."""
+    reqs = [r for r in (requirements or []) if isinstance(r, dict)
+            and (r.get("text") or "").strip()]
+    if not reqs:
+        return None
+    draft = draft or ""
+    card = card or {}
+
+    results = []
+    to_model = []          # requirements needing the model's judgement
+    for r in reqs:
+        try:
+            det = _verify_deterministic(r, draft, card, lang)
+        except Exception:
+            det = None
+        if det is not None:
+            status, ev = det
+            results.append({"id": r.get("id"), "text": r.get("text"),
+                            "kind": r.get("kind"), "must": bool(r.get("must")),
+                            "status": status, "evidence": ev,
+                            "by": "deterministic"})
+        else:
+            to_model.append(r)
+
+    # ── model judgement for the remainder (content / style / conditional) ──
+    verdicts = {}
+    if to_model:
+        if llm_fn is None:
+            try:
+                from core.llm import get_llm_fn
+                llm_fn = get_llm_fn()
+            except Exception:
+                llm_fn = None
+        if llm_fn:
+            try:
+                import os
+                from core.llm import extract_json
+                try:
+                    _cap = int(os.environ.get("WEAVER_VERIFY_MAXCHARS",
+                                              "16000") or 16000)
+                except Exception:
+                    _cap = 16000
+                if len(draft) <= _cap:
+                    body = draft
+                else:
+                    # Send the HEAD **and the TAIL**. Truncating from the front
+                    # only made everything at the END of the document invisible
+                    # to the judge — the references list, the conclusion — so it
+                    # reported them MISSING on documents that clearly had them
+                    # ("لا توجد قائمة مراجع في نهاية النص" while the file ended
+                    # with a full APA list). Same class of false failure as the
+                    # cover/TOC one: never accuse what you cannot see.
+                    _head = int(_cap * 0.6)
+                    _tail = _cap - _head
+                    body = (draft[:_head]
+                            + "\n\n[...جزءٌ من المتن حُذف للاختصار...]\n\n"
+                            + draft[-_tail:])
+                items = "\n".join(
+                    f'- id={r.get("id")}: {r.get("text")}' for r in to_model)
+                prompt = (
+                    "أنت مدقّق متطلّبات. لكل متطلّبٍ في القائمة، احكم هل حقّقه "
+                    "النصُّ المُنتَج فعلاً. أعِد JSON فقط: "
+                    '{"results":[{"id":"..","status":"met|unmet|partial",'
+                    '"reason":"سببٌ قصير من النص"}]}\n'
+                    "لا تفترض؛ استند إلى ما هو موجودٌ في النص فعلاً. "
+                    "partial حين يتحقّق المتطلّب جزئياً فقط.\n\n"
+                    "المتطلّبات:\n" + items + "\n\nالنصُّ المُنتَج:\n" + body)
+                try:
+                    raw = llm_fn(prompt, system=system, temperature=0.0,
+                                 max_tokens=800, timeout=60) or ""
+                except TypeError:
+                    raw = llm_fn(prompt, system=system, temperature=0.0) or ""
+                data = extract_json(raw) or {}
+                for it in (data.get("results") or []):
+                    if isinstance(it, dict) and it.get("id"):
+                        st = str(it.get("status", "")).lower().strip()
+                        if st not in ("met", "unmet", "partial"):
+                            st = "unknown"
+                        verdicts[str(it["id"])] = (
+                            st, str(it.get("reason", ""))[:200])
+            except Exception:
+                verdicts = {}
+    for r in to_model:
+        st, reason = verdicts.get(str(r.get("id")), ("unknown", "تعذّر الحكم"))
+        results.append({"id": r.get("id"), "text": r.get("text"),
+                        "kind": r.get("kind"), "must": bool(r.get("must")),
+                        "status": st, "evidence": reason, "by": "model"})
+
+    unmet = [x["id"] for x in results
+             if x["must"] and x["status"] != "met"]
+    all_met = not unmet
+    n_met = sum(1 for x in results if x["status"] == "met")
+    summary = (f"تحقّق {n_met}/{len(results)} من المتطلّبات؛ "
+               f"{'كل الإلزامية مُحقّقة' if all_met else str(len(unmet)) + ' إلزامي غير مؤكّد'}")
+    return {"results": results, "unmet": unmet, "all_met": all_met,
+            "summary": summary}
 
 
 def _content_to_chart(llm_fn, content, lang="ar"):
@@ -5848,7 +11240,15 @@ def quick_live_context_ex(msg, lang="ar", max_chars=6000):
                 # source; sources are collected in the SAME order.
                 lines.append(f"[{n}] {title} — {snip} ({url})")
                 if url:
-                    sources.append({"title": title, "url": url})
+                    # Keep the snippet and mine the URL/title for a DOI and a
+                    # year. This used to store {title, url} ONLY — throwing away
+                    # the snippet it had just read and ignoring the DOI sitting
+                    # inside the URL — which left every web source without the
+                    # author/year that APA (or any style) needs.
+                    sources.append(
+                        WeaverOrchestrator._enrich_source({
+                            "title": title, "url": url,
+                            "content": snip, "source": "web"}))
                 n += 1
             if lines:
                 _hdr = ("[نتائج بحث حيّة مرقّمة، الأحدث أولاً]" if _recency

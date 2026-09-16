@@ -147,8 +147,109 @@ def add_cover_page(doc, title, lang="ar", theme_id="academic_navy", font=None,
 
 
 # ── table of contents ────────────────────────────────────────
+# ── page estimation ──────────────────────────────────────────────────────────
+# A .docx carries no pagination: Word computes it. That is why a TOC has to be
+# a FIELD, and why a viewer that refuses to compute fields shows a blank
+# contents page. To make the contents readable in ANY viewer we estimate the
+# layout ourselves and write the result INTO the field as its cached value —
+# Word can still refresh it, everyone else sees the numbers we measured.
+# Geometry below matches build_rich_docx: A4, 2cm margins, 14pt body.
+_PAGE_H_CM = 29.7
+_MARGIN_CM = 2.0
+_CM_PER_PT = 0.03528
+
+
+def estimate_toc_entries(sections, lang="ar", body_pt=14, head_pt=18,
+                         line_factor=1.30, chars_per_line=None,
+                         start_page=1):
+    """Estimate which page each heading lands on.
+
+    Returns ([{"text","level","page"}, ...], total_pages). Deterministic and
+    dependency-free so it runs anywhere — the numbers are an estimate of Word's
+    own layout, not a promise, which is why the TOC stays a real field that Word
+    may refresh.
+    """
+    usable_cm = _PAGE_H_CM - 2 * _MARGIN_CM
+    line_cm = body_pt * _CM_PER_PT * line_factor
+    lines_per_page = max(10, int(usable_cm / line_cm))
+    # a 17cm text column at 14pt Arabic fits roughly this many characters
+    cpl = chars_per_line or max(30, int(17.0 / (body_pt * _CM_PER_PT * 0.46)))
+
+    entries, line, page = [], 0, start_page
+
+    def _advance(n):
+        nonlocal line, page
+        line += n
+        while line >= lines_per_page:
+            line -= lines_per_page
+            page += 1
+
+    for sec in (sections or []):
+        head = (sec.get("heading") or "").strip()
+        try:
+            lvl = int(sec.get("level", 1) or 1)
+        except Exception:
+            lvl = 1
+        if head:
+            # a heading takes its own line plus the space above it
+            if line + 2 >= lines_per_page:
+                line = 0
+                page += 1
+            entries.append({"text": head, "level": max(1, min(lvl, 3)),
+                            "page": page})
+            _advance(2 if lvl <= 1 else 1)
+        for raw in (sec.get("body") or "").split("\n"):
+            t = raw.strip()
+            if not t:
+                _advance(1)
+                continue
+            _advance(max(1, -(-len(t) // cpl)))
+        _advance(1)
+    return entries, page
+
+
+def _toc_entry_paragraph(doc, text, page, level, font, rtl, primary):
+    """One STATIC contents line: title … dot leader … page number.
+    A right tab with a dot leader is what Word itself emits, so this looks
+    native — and being literal text it renders in every viewer."""
+    p = doc.add_paragraph()
+    if rtl:
+        _set_rtl(p)
+    pPr = p._p.get_or_add_pPr()
+    tabs = OxmlElement("w:tabs")
+    tab = OxmlElement("w:tab")
+    tab.set(qn("w:val"), "right")
+    tab.set(qn("w:leader"), "dot")
+    tab.set(qn("w:pos"), "9026")
+    tabs.append(tab)
+    pPr.append(tabs)
+    ind = OxmlElement("w:ind")
+    ind.set(qn("w:start" if rtl else "w:left"), str(max(0, (level - 1)) * 240))
+    pPr.append(ind)
+
+    def _run(txt, bold=False):
+        r = p.add_run(txt)
+        r.font.size = Pt(11.5)
+        r.font.bold = bold
+        r.font.name = font
+        rpr = r._element.get_or_add_rPr()
+        rf = rpr.find(qn("w:rFonts"))
+        if rf is None:
+            rf = OxmlElement("w:rFonts")
+            rpr.append(rf)
+        for a in ("w:ascii", "w:hAnsi", "w:cs"):
+            rf.set(qn(a), font)
+        return r
+
+    _run(text, bold=(level <= 1))
+    tr = p.add_run()
+    tr._r.append(OxmlElement("w:tab"))
+    _run(str(page))
+    return p
+
+
 def add_toc_page(doc, lang="ar", theme_id="academic_navy", font=None,
-                 page_break_after=True):
+                 page_break_after=True, entries=None):
     """
     Insert a real Word TOC field with a themed heading. Word builds the actual
     entries on "update fields". Bilingual + direction-correct.
@@ -183,13 +284,31 @@ def add_toc_page(doc, lang="ar", theme_id="academic_navy", font=None,
     instr = OxmlElement("w:instrText"); instr.set(qn("xml:space"), "preserve")
     instr.text = 'TOC \\o "1-3" \\h \\z \\u'
     fldSep = OxmlElement("w:fldChar"); fldSep.set(qn("w:fldCharType"), "separate")
-    placeholder = OxmlElement("w:t")
-    placeholder.text = ("اضغط بزر الماوس الأيمن ثم (تحديث الحقل) لعرض المحتويات"
-                        if rtl else
-                        "Right-click and choose Update Field to build the TOC")
-    fldEnd = OxmlElement("w:fldChar"); fldEnd.set(qn("w:fldCharType"), "end")
-    for el in (fldBegin, instr, fldSep, placeholder, fldEnd):
+    for el in (fldBegin, instr, fldSep):
         run._r.append(el)
+
+    # The field's CACHED RESULT. Word shows this until the field is refreshed —
+    # and so does every viewer that will not compute fields at all, which is why
+    # the contents page used to come out blank on phones. With real entries here
+    # the contents are readable everywhere, and Word can still refresh them.
+    if entries:
+        for e in entries:
+            _toc_entry_paragraph(doc, e.get("text", ""), e.get("page", ""),
+                                 int(e.get("level", 1) or 1), font, rtl,
+                                 primary)
+        tail = doc.add_paragraph()
+        if rtl:
+            _set_rtl(tail)
+        endrun = tail.add_run()
+    else:
+        placeholder = OxmlElement("w:t")
+        placeholder.text = ("اضغط بزر الماوس الأيمن ثم (تحديث الحقل) لعرض "
+                            "المحتويات" if rtl else
+                            "Right-click and choose Update Field to build the TOC")
+        run._r.append(placeholder)
+        endrun = run
+    fldEnd = OxmlElement("w:fldChar"); fldEnd.set(qn("w:fldCharType"), "end")
+    endrun._r.append(fldEnd)
 
     if page_break_after:
         doc.add_page_break()

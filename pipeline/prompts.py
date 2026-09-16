@@ -102,8 +102,10 @@ References available from the RAG store:
 
 Mandatory:
 - Use ONLY the references above.
-- Cite per task level: (source_key, p. N) when pages are required, or
-  (Author, Year) for assignments and short/medium papers.
+- Cite with the bracketed key exactly as given in the context above, e.g.
+  (الشلغصي، 2025) / (Author, Year). NEVER cite by writing the reference's
+  full title inside the sentence, and NEVER emit an empty page marker such as
+  "ص. )". Add a page number ONLY when a real one is known.
 - Never fabricate a reference; do not leave a visible placeholder in the final
   text — omit the claim or find a proper source.
 - No general-memory knowledge. Academic, human-toned, varied rhythm.
