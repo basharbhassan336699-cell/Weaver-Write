@@ -8,6 +8,7 @@ Usage:
 """
 from __future__ import annotations
 import argparse
+import re
 
 
 def _year(y):
@@ -72,6 +73,73 @@ def _site_from_url(url):
         return ""
 
 
+# A DOI RESOLVER IS NOT A WEBSITE. An entry whose only link was
+# https://doi.org/10.53796/hnsj4411 rendered as «… (2023). *doi.org*.» —
+# naming the resolver as if it were the publisher. doi.org, dx.doi.org and
+# handle.net route to a work; they never publish one, so their host is never
+# printed as a source's name.
+_RESOLVER_HOSTS = ("doi.org", "dx.doi.org", "hdl.handle.net", "handle.net")
+
+
+def _ident(src):
+    """The IDENTITY of a source, for de-duplication: its DOI, else its URL
+    reduced to what actually identifies the page, else its normalized title.
+
+    The list carried the SAME Shamela book twice — once as
+    `shamela.ws/book/31080` and once as `shamela.ws/index.php/book/31080` —
+    because de-duplication compared the RENDERED STRINGS, and two strings that
+    differ by `index.php/` are simply not equal. A reference's identity is not
+    how it happens to be typeset."""
+    if not isinstance(src, dict):
+        return str(src).strip().lower()
+    doi = str(src.get("doi") or "").strip().lower()
+    if doi:
+        return "doi:" + doi.replace("https://doi.org/", "").replace(
+            "http://doi.org/", "").strip("/")
+    url = str(src.get("url") or "").strip().lower()
+    if url:
+        u = re.sub(r"^https?://", "", url)
+        u = re.sub(r"^www\.", "", u)
+        u = u.split("#")[0].split("?")[0]
+        u = u.replace("/index.php/", "/").replace("/index.html", "/")
+        u = re.sub(r"/+$", "", u)
+        if u.startswith(_RESOLVER_HOSTS[0]) or any(
+                u.startswith(h) for h in _RESOLVER_HOSTS):
+            return "doi:" + u.split("/", 1)[-1]
+        return "url:" + u
+    t = " ".join(str(src.get("title") or "").split()).strip().lower()
+    return ("title:" + t) if t else ""
+
+
+def dedupe_sources(sources):
+    """Collapse sources that are the SAME work, keeping the richest record.
+    Order is preserved. Never raises."""
+    try:
+        out, seen = [], {}
+        for s_ in (sources or []):
+            k = _ident(s_)
+            if not k:
+                out.append(s_)
+                continue
+            if k not in seen:
+                seen[k] = len(out)
+                out.append(s_)
+                continue
+            # keep whichever record carries more usable bibliographic data
+            old_ = out[seen[k]]
+            def _score(d):
+                if not isinstance(d, dict):
+                    return -1
+                return sum(1 for f in ("doi", "authors", "author", "venue",
+                                       "journal", "year", "publisher")
+                           if d.get(f))
+            if _score(s_) > _score(old_):
+                out[seen[k]] = s_
+        return out
+    except Exception:
+        return list(sources or [])
+
+
 def format_apa_website(title, url="", year=None, site=None, author=None):
     """APA 7th for a web page / online source.
 
@@ -88,6 +156,8 @@ def format_apa_website(title, url="", year=None, site=None, author=None):
     # link itself, and n.d. is APA's own marker for an undated source — both
     # are honest, and both are better than silence.
     site = site or _site_from_url(url)
+    if str(site or "").strip().lower() in _RESOLVER_HOSTS:
+        site = ""            # a resolver routes to the work; it never issues it
     s = f" *{site}*." if site else ""
     u = f" {_readable_url(url)}" if url else ""
     if a:
@@ -109,6 +179,7 @@ def build_bibliography(sources, lang="ar", extra=None):
     when there is nothing to list.
     """
     entries = []
+    sources = dedupe_sources(sources)
     for s in (sources or []):
         if not isinstance(s, dict):
             s = {"title": str(s)}
@@ -142,7 +213,8 @@ def build_bibliography(sources, lang="ar", extra=None):
         else:
             entries.append(format_apa_website(title, s.get("url", ""), year,
                                               s.get("site"), author))
-    # de-dup then sort
+    # the rendered strings are de-duplicated too, as a last net: two DIFFERENT
+    # records that typeset identically are one reference on the page
     seen, uniq = set(), []
     for e in entries:
         if e not in seen:

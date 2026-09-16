@@ -5658,6 +5658,29 @@ class WeaverOrchestrator:
             mem.set_status(5, f"إثراء التوثيق (تخطّي: {e})")
         mem.set_status(5, f"مصداقية: قُبل {len(kept)}، رُفض {len(dropped)}")
 
+    @staticmethod
+    def _is_bare_label(title):
+        """True when a heading is a unit word and a number and NOTHING else —
+        «المبحث 1», «المطلب 1.1», «الباب 2», "Section 3".
+
+        The writer's safety net tested `startswith(("المبحث", "المطلب",
+        "Section", "Subsection"))` — four words. A structure built from the
+        user's own units («الباب», «الجزء», «الفصل») matched none of them, so
+        the writer was handed a bare number as its subject and had nothing to
+        write about — the same four-word-list failure as «جدول» against
+        «جداول». Shape carries no vocabulary, so it covers every unit word in
+        any language. A real title with a number in it («رؤية 2030», «COVID
+        19») is one or two words plus a number too, so this is used only where
+        being wrong is harmless — framing the subject for the writer."""
+        try:
+            import re as _re
+            return bool(_re.match(
+                r'^\s*[^\W\d_]{2,20}(?:\s+[^\W\d_]{2,20})?'
+                r'[\s:،.\-]*[0-9٠-٩]+(?:[.\-][0-9٠-٩]+)*[\s:،.\-]*$',
+                str(title or ""), _re.UNICODE))
+        except Exception:
+            return False
+
     def _descriptive_titles(self, topic, sections_plan, lang):
         """Replace the abstract structural labels ("المبحث 1"/"المطلب 1.1"/
         "Section 1"/"Subsection 1.2") with DESCRIPTIVE, topic-specific titles the
@@ -5803,14 +5826,24 @@ class WeaverOrchestrator:
             for j, k in enumerate(missing):
                 if j < len(fill) and fill[j]:
                     got[k] = fill[j]
-        # ALL-OR-NOTHING: rename only when EVERY abstract slot got a valid,
-        # topic-specific title. Otherwise keep the clean abstract labels — never
-        # a half-renamed mix, and never a truncated stub. Weak models half-fail,
-        # and a consistent outline beats a patchy one.
-        if any(not t for t in got):
+        # ALL-OR-NOTHING COST THE WHOLE DOCUMENT. The rule was: rename only
+        # when EVERY slot got a valid title, on the reasoning that a consistent
+        # outline beats a patchy one. But with twelve slots and a weak model,
+        # ONE failure discarded the other eleven — and a run shipped twelve
+        # headings reading «المبحث 1», «المطلب 1.1»… with nothing written
+        # under any of them. A consistent outline does not beat a patchy one
+        # when the consistent one is a list of numbers. Every slot that got a
+        # real title keeps it; the rest keep their clean label (and the label
+        # stays in front of the renamed ones anyway, so the two sit together
+        # without looking broken). Nothing invalid is ever written, and how
+        # many were left unnamed is recorded rather than passed over.
+        _named = sum(1 for t in got if t)
+        if not _named:
             return sections_plan
         plan = [dict(s) for s in sections_plan]     # copy, don't mutate input
         for k, (idx, role) in enumerate(slots):
+            if not got[k]:
+                continue                  # keeps its clean structural label
             # keep the structural label ("المبحث 1") in front of the descriptive
             # title, the way an Arabic thesis numbers its sections — dropping it
             # lost the numbering the user explicitly asked for.
@@ -5820,6 +5853,12 @@ class WeaverOrchestrator:
             plan[idx]["title"] = (f"{_orig}: {_new}"
                                   if _orig and not _new.startswith(_orig)
                                   else _new)
+        # left for the CALLER to record on the real card — this helper has no
+        # card of its own, and a note written to a throwaway dict is no note
+        try:
+            self._titles_named, self._titles_total = _named, len(slots)
+        except Exception:
+            pass
         return plan
 
     def _rich_outline_chunked(self, topic, card, lang, context=""):
@@ -6856,9 +6895,19 @@ class WeaverOrchestrator:
             # the MODEL designed the structure — its titles are already
             # topic-specific, so re-naming would waste a call and could dilute them.
             if scope != "outline" and card.get("structure_source") != "model":
+                self._titles_named = self._titles_total = 0
                 sections_plan = self._descriptive_titles(
                     card.get("topic", "") or task.description, sections_plan, lang)
                 card["sections"] = sections_plan
+                _tn = getattr(self, "_titles_named", 0)
+                _tt = getattr(self, "_titles_total", 0)
+                if _tt:
+                    mem.set_status(6, f"عناوين وصفية: {_tn} من {_tt}")
+                if _tt and _tn < _tt:
+                    self._skip_note(
+                        card, "عناوين الأقسام",
+                        f"سُمّي {_tn} من {_tt} قسماً؛ وبقي {_tt - _tn} "
+                        "بعنوانه الرقميّ لأن النموذج لم يُعد لها عنواناً صالحاً")
         except Exception as e:
             mem.set_status(6, f"عناوين وصفية (تخطّي: {e})")
 
@@ -7177,6 +7226,7 @@ class WeaverOrchestrator:
             pass
 
         parts, out_sections = [], []
+        _empty_secs = []          # sections that came back with no prose at all
         for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
             body = ""
@@ -7237,7 +7287,7 @@ class WeaverOrchestrator:
                 # structural label (a weak model may not have produced a
                 # descriptive one), frame it with the topic so the writer knows
                 # what this section is about — otherwise it writes nothing.
-                if title.strip().startswith(
+                if self._is_bare_label(title) or title.strip().startswith(
                         ("المبحث", "المطلب", "Section", "Subsection")):
                     section_name = (
                         f"«{title}» ضمن بحث عن: {_topic} — اكتب المحتوى العلمي "
@@ -7496,6 +7546,19 @@ class WeaverOrchestrator:
                 if _decF and title not in _sec_decisions:
                     _sec_decisions[title] = _decF
             body = self._clean_section_body(body, title)
+            # AN EMPTY SECTION IS A FACT, NOT A NON-EVENT. A whole document
+            # shipped with fourteen headings and not one line of prose under
+            # any of them, while the progress line said «قسم 15 — كتابة
+            # المحتوى ✓» and every later step reported success. Whatever
+            # returned nothing — the writer, a refusal, a strip that removed
+            # everything — the reader is entitled to know the section is
+            # empty, and so is the verifier. Recorded per section, and counted
+            # for the summary below.
+            try:
+                if not (body or "").strip() and not self._is_ref_heading(title):
+                    _empty_secs.append(title)
+            except Exception:
+                pass
             # ── measurement replaces the name guess, for the NEXT sections ──
             # Strictly forward-looking: what is already written is never touched.
             # A wrong reading can only change the guidance the remaining
@@ -7558,7 +7621,36 @@ class WeaverOrchestrator:
                                  "level": max(1, min(_lv, 4))})
         task.draft = "\n\n".join(p for p in parts if p)
         task.sections = out_sections
-        mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode})")
+        # THE PROGRESS LINE SAID «15 قسم» AND THE DOCUMENT HAD NO PROSE.
+        # A count of sections says nothing about whether anything was WRITTEN,
+        # and a run that produced fourteen headings and 35 words of body still
+        # reported success at every step. So the words are counted here, next
+        # to the count of sections, and an empty or near-empty body is stated
+        # as plainly as the system states everything else it could not do.
+        try:
+            _wrote = self.count_words(task.draft or "")
+            _body_secs = [o for o in out_sections
+                          if not self._is_ref_heading(o.get("heading", ""))]
+            mem.set_status(6, f"صياغة: {len(out_sections)} قسم ({mode}) — "
+                              f"{_wrote} كلمة")
+            if _empty_secs:
+                _shown = "، ".join(_empty_secs[:6]) + (
+                    f" و{len(_empty_secs) - 6} غيرها" if len(_empty_secs) > 6 else "")
+                mem.set_status(6, f"أقسام عادت فارغة: "
+                                  f"{len(_empty_secs)} — {_shown}")
+                self._skip_note(
+                    card, "كتابة المحتوى",
+                    f"{len(_empty_secs)} قسماً عاد بلا نصّ من النموذج وشُحن عنواناً "
+                    f"بلا محتوى: {_shown}")
+            if _body_secs and _wrote < 60 * len(_body_secs):
+                self._skip_note(
+                    card, "كتابة المحتوى",
+                    f"المتن {_wrote} كلمة لـ{len(_body_secs)} قسماً — أقلّ بكثير من "
+                    f"أيّ مستندٍ مكتوب؛ النموذج لم يكتب المحتوى المطلوب")
+            card["body_words"] = _wrote
+            card["empty_sections"] = list(_empty_secs)
+        except Exception:
+            pass
 
         # run matched enrichment skills (task.skills) that have a write-stage
         # handler — turns skill routing into real execution. Additive/guarded.
@@ -7955,9 +8047,29 @@ class WeaverOrchestrator:
                 # blocks verbatim — the AI-fingerprint cleaner would otherwise
                 # reflow a table's '|'/'---' rows and flatten it. Citations are
                 # still masked/restored inside (per prose segment).
-                task.draft = self._humanize_draft(
+                _rewritten = self._humanize_draft(
                     draft, mod.humanize_text, file_type)
-                task.task_card["humanized"] = True
+                # A REWRITE THAT LOSES THE TEXT IS NOT A REWRITE. The result was
+                # assigned straight over task.draft with nothing checking it, so
+                # an empty or gutted return would have replaced the whole
+                # document in silence and no later step could tell the
+                # difference. Rewriting changes WORDING, not SIZE: a return that
+                # is empty, or that has lost more than a third of the words, is
+                # refused and the authored text stands — and the refusal is
+                # recorded, never swallowed. This guards the boundary from the
+                # orchestrator's side; the rewriter itself is untouched.
+                _bw, _aw = (self.count_words(draft),
+                            self.count_words(_rewritten or ""))
+                if _aw == 0 or (_bw >= 40 and _aw < _bw * 0.65):
+                    mem.set_status(65, f"رُفضت إعادة الصياغة: "
+                                       f"{_bw} كلمة ← {_aw} — النصّ الأصليّ باقٍ")
+                    self._skip_note(
+                        task.task_card, "أنسنة النصّ",
+                        f"أعادت الصياغة نصّاً أقصر بكثير ({_bw} ← {_aw} كلمة)، "
+                        "فأُبقي النصّ المكتوب كما هو")
+                else:
+                    task.draft = _rewritten
+                    task.task_card["humanized"] = True
         except Exception as e:
             mem.set_status(65, f"إعادة الصياغة (تخطّي: {e})")
 
@@ -9189,6 +9301,84 @@ class WeaverOrchestrator:
             return sources, []
 
     @staticmethod
+    def _requested_source_count(card):
+        """How many references the user asked for — None when unstated.
+
+        Read from the model's own typed checklist first (kind == "source" with
+        a numeric target), and from the request's own words as the fallback for
+        when the model returned no checklist at all. Never raises."""
+        try:
+            for r in ((card or {}).get("requirements") or []):
+                if not isinstance(r, dict):
+                    continue
+                if str(r.get("kind") or "").lower() != "source":
+                    continue
+                t = r.get("target")
+                if isinstance(t, int) and not isinstance(t, bool) \
+                        and 1 <= t <= 300:
+                    return t
+            import re as _re
+            txt = str((card or {}).get("request")
+                      or (card or {}).get("topic") or "")
+            m = _re.search(r"(\d{1,3})\s*(?:مراجع|مرجعاً|مرجعا|مرجع|"
+                           r"مصادر|مصدراً|مصدرا|مصدر|references?|sources?)", txt)
+            if m:
+                n = int(m.group(1))
+                if 1 <= n <= 300:
+                    return n
+        except Exception:
+            pass
+        return None
+
+    @classmethod
+    def _cap_to_requested(cls, sources, card, draft="", lang="ar"):
+        """Trim the list to the COUNT the user asked for — without orphaning a
+        single in-text citation.
+
+        A request for «9 مراجع» came back with sixteen entries, and the
+        verifier only ever tested the FLOOR, so the surplus passed in silence.
+        A count the user stated is part of the request. But a reference cited in
+        the prose can never be removed — that would turn a citation into a
+        pointer at nothing — so cited sources are kept whatever the count, and
+        the remaining places go to the best of the rest: verified before
+        unverified, peer-reviewed before everything else.
+
+        Returns (kept, dropped). On any doubt it returns the list untouched."""
+        try:
+            n = cls._requested_source_count(card)
+            items = [x for x in (sources or []) if isinstance(x, dict)]
+            if not n or len(items) <= n:
+                return sources, []
+            txt = str(draft or "")
+            wr = cls._wr()
+
+            def _cited(s_):
+                try:
+                    k = cls._apa_key(s_) or ""
+                except Exception:
+                    k = ""
+                head = (k.split("،")[0].split(",")[0] or "").strip()
+                return bool(head) and len(head) > 2 and head in txt
+
+            def _rank(s_):
+                v = str(s_.get("verify_state") or "").lower()
+                return (
+                    1 if _cited(s_) else 0,
+                    1 if v in ("verified", "registry") else 0,
+                    (wr.quality_tier(s_) if wr else 0),
+                    1 if s_.get("doi") else 0,
+                )
+            ordered = sorted(items, key=_rank, reverse=True)
+            keep_n = max(n, sum(1 for x in items if _cited(x)))
+            kept = ordered[:keep_n]
+            dropped = ordered[keep_n:]
+            # restore the caller's original order among the survivors
+            kept = [x for x in items if x in kept]
+            return kept, dropped
+        except Exception:
+            return sources, []
+
+    @staticmethod
     def _citation_coverage(draft, sources):
         """Every (Author, Year) in the text must be findable in the list.
 
@@ -9298,6 +9488,19 @@ class WeaverOrchestrator:
         LAST section of the report, replacing any placeholder references
         heading. No sources → nothing added."""
         card = task.task_card
+        # THE REFEREED-ONLY FILTER NEVER RAN ON THIS PATH. `lang` was READ by
+        # the _bib_sources call below and only ASSIGNED twenty-nine lines
+        # further down, so every call raised UnboundLocalError — which the
+        # bare `except Exception` around it swallowed, leaving `sources`
+        # exactly as it found them. A document asking for «9 مراجع محكّمة»
+        # therefore shipped sixteen entries with alukah.net, mhtwyat.com and
+        # shamela.ws standing beside peer-reviewed studies — not because the
+        # filter judged them acceptable, but because it was never reached. The
+        # grouped path passed its own `lang` and worked, which is why earlier
+        # runs looked clean: one filter, two call sites, and only one of them
+        # ever ran. The binding moves to the top, where nothing can read it
+        # early again.
+        lang = card.get("language", "ar")
 
         def _strip_fabricated_refs():
             # remove any references section the writer may have produced when we
@@ -9321,8 +9524,17 @@ class WeaverOrchestrator:
         _drop = []
         try:
             sources, _drop = self._bib_sources(sources, card, lang)
-        except Exception:
+        except Exception as _e_bib:
+            # AND IT MUST NEVER FAIL IN SILENCE AGAIN. `except: pass` here is
+            # what let an UnboundLocalError hide for as long as it did: the
+            # list came out unfiltered and nothing anywhere said the filter had
+            # not run. A failure to filter is a fact about the document the
+            # reader is entitled to.
             _drop = []
+            self._skip_note(
+                card, "قائمة المراجع",
+                f"تعذّر فرز المصادر المحكّمة ({_e_bib}) — القائمة كما "
+                "وردت من البحث، وقد تضمّ مواقع غير محكّمة")
         if _drop:
             self._skip_note(
                 card, "قائمة المراجع",
@@ -9333,6 +9545,19 @@ class WeaverOrchestrator:
                 card, "قائمة المراجع",
                 "لم يُعثر على مصدرٍ محكَّم، فالقائمة من مصادر عامة ولا تصلح "
                 "توثيقاً أكاديمياً")
+        # THE COUNT THE USER STATED IS PART OF THE REQUEST.
+        try:
+            _n_req = self._requested_source_count(card)
+            sources, _over = self._cap_to_requested(sources, card,
+                                                    task.draft, lang)
+            if _over:
+                self._skip_note(
+                    card, "عدد المراجع",
+                    f"طُلب {_n_req}، وتوفّر {_n_req + len(_over)} — فأُبقيت "
+                    f"{_n_req} بالأولوية للمُتحقَّق منه والمحكَّم، ولم "
+                    f"يُسقط مرجعٌ مُستشهَدٌ به في النصّ")
+        except Exception:
+            pass
         try:
             _miss = self._citation_coverage(task.draft, sources)
             if _miss:
@@ -9349,7 +9574,6 @@ class WeaverOrchestrator:
         if not sources and not pq_refs:
             _strip_fabricated_refs()
             return
-        lang = card.get("language", "ar")
         style = str(card.get("citation_style", "APA")).upper()
         skill = "mla_formatter" if style == "MLA" else "apa_formatter"
         module = "format_mla" if style == "MLA" else "format_apa"
