@@ -91,6 +91,45 @@ _EXCLUDED_HOSTS = ("wikipedia.org", "wikiwand.com", "blogspot.", "wordpress.com"
                    "twitter.com", "x.com", "reddit.com", "pinterest.")
 _OFFICIAL_HINTS = (".edu", ".ac.", ".gov", ".mil", ".int")
 
+# AN UPLOAD SITE IS NOT AN INSTITUTION, WHATEVER ITS NAME ENDS IN.
+# `academia.edu` is a commercial site anyone can upload to; nothing on it is
+# refereed. The official check was a plain substring test, so that name scored
+# TIER_OFFICIAL and walked into a refereed bibliography beside peer-reviewed
+# studies. A paper hosted on one of these that carries a real DOI is still rated
+# by its DOI above — this list only stops the HOST from conferring standing it
+# does not have.
+_SELF_PUBLISH_HOSTS = ("academia.edu", "researchgate.net", "scribd.com",
+                       "slideshare.net", "coursehero.com", "studocu.com",
+                       "docplayer.", "issuu.com", "calameo.com", "mega.nz",
+                       "4shared.", "archive.org/details/")
+
+
+def is_official_host(host):
+    """True when the host's DOMAIN carries an institutional label — .edu, .ac.*,
+    .gov, .mil, .int — matched as a whole label, not as a substring.
+
+    `any(h in host for h in _OFFICIAL_HINTS)` was a substring test: it matched
+    `academia.edu`, and it would just as happily match `mygov-news.com` or
+    `not-edu.net`. Labels are matched instead, so `ac.uk`, `edu.sa` and `gov.sa`
+    still count and a name that merely CONTAINS the letters does not."""
+    h = str(host or "").strip().strip(".").lower()
+    if not h:
+        return False
+    labels = [x for x in h.split(".") if x]
+    if len(labels) < 2:
+        return False
+    for hint in _OFFICIAL_HINTS:
+        lab = hint.strip(".")
+        if lab and lab in labels[1:]:
+            return True
+    return False
+
+
+def is_self_published(host):
+    """True for repository / upload hosts, whose standing is the uploader's."""
+    h = str(host or "").lower()
+    return any(x in h for x in _SELF_PUBLISH_HOSTS)
+
 
 def quality_tier(src):
     """Rate ONE source on the ladder. Deterministic, from what the record
@@ -115,7 +154,7 @@ def quality_tier(src):
         return TIER_PEER_DOI
     if src.get("publisher") and src.get("authors"):
         return TIER_BOOK
-    if any(h in host for h in _OFFICIAL_HINTS):
+    if is_official_host(host) and not is_self_published(host):
         return TIER_OFFICIAL
     if venue or src.get("academic"):
         return TIER_REPORT

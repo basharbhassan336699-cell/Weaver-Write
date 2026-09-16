@@ -526,10 +526,32 @@ class WeaverOrchestrator:
                    "بصياغة أفضل", "بأسلوب أكاديمي", "بلغة أبسط", "أعد صياغة الملف",
                    "reword", "rephrase", "rewrite", "paraphrase", "humanize",
                    "improve wording", "improve the writing")
+        # A LANGUAGE IS NOT A VERB, AND A STYLE IS NOT AN ORDER TO REDO.
+        # «بالعربي» sits inside «بالعربية» letter for letter, so «بالعربية
+        # وبأسلوب أكاديمي» — a statement of which language to WRITE IN — came
+        # back as "translate" on a request to write a new piece of research;
+        # and «بأسلوب أكاديمي» in the rewrite list read a style for new
+        # writing as an order to rewrite something. Both entries describe the
+        # OUTPUT of fresh writing, while this detector's whole subject, by its
+        # own docstring, is an action on content that ALREADY EXISTS. So those
+        # bare ones now count only when the sentence actually points at existing
+        # content — a translation or rewriting VERB, or a demonstrative
+        # reference to a text or file already in hand. Every other entry in the
+        # lists behaves exactly as before.
+        _bare = ("بالإنجليزي", "بالانجليزي", "بالعربي", "in english",
+                 "into english", "into arabic", "to arabic", "to english",
+                 "بأسلوب أكاديمي")
+        _onhand = ("ترجم", "translate", "هذا النص", "هذا الملف", "النص التالي",
+                   "الملف المرفق", "المرفق", "الناتج السابق", "ما سبق",
+                   "أعد صياغة", "اعد صياغة", "أعد كتابة", "اعد كتابة",
+                   "this text", "this file", "the attached", "rewrite",
+                   "reword", "rephrase", "paraphrase")
+        _has_onhand = any(v in t for v in _onhand)
         for name, kws in (("edit", edit), ("convert", convert),
                           ("translate", translate), ("summarize", summarize),
                           ("rewrite", rewrite)):
-            if any(k in t for k in kws):
+            if any(k in t for k in kws
+                   if (k not in _bare or _has_onhand)):
                 return name
         return None
 
@@ -538,12 +560,46 @@ class WeaverOrchestrator:
         """True when the user wants a TABLE inserted into the document (distinct
         from an Excel FILE, which is a format)."""
         t = " " + (text or "").lower() + " "
-        return any(k in t for k in (
-            "أدرج جدول", "ادرج جدول", "أضف جدول", "اضف جدول", "اعمل جدول",
-            "ضع جدولاً", "ضع جدول", "رتّبه في جدول", "رتبه في جدول",
-            "في جدول", "على شكل جدول", "بشكل جدول", "جدول يوضّح", "جدول مقارنة",
-            "جدولاً", "insert a table", "add a table", "in a table",
-            "as a table", "tabulate", "comparison table"))
+        if any(k in t for k in (
+                "أدرج جدول", "ادرج جدول", "أضف جدول", "اضف جدول", "اعمل جدول",
+                "ضع جدولاً", "ضع جدول", "رتّبه في جدول", "رتبه في جدول",
+                "في جدول", "على شكل جدول", "بشكل جدول", "جدول يوضّح", "جدول مقارنة",
+                "جدولاً", "insert a table", "add a table", "in a table",
+                "as a table", "tabulate", "comparison table")):
+            return True
+        # THE PLURAL IS NOT A SUBSTRING OF THE SINGULAR. The list held «أدرج
+        # جدول» and the user wrote «أدرج جداول للمصطلحات التقنية» — and
+        # «جدول» is not inside «جداول» letter for letter, so the fallback
+        # answered False to a sentence that says «insert tables» in plain Arabic.
+        # When the model then said nothing either, the whole table chain died at
+        # its first gate: want_table unset, table_budget unset, no directive, no
+        # table — for a request that named them outright. A phrase list can only
+        # ever hold the phrasings somebody thought of, so this reads the SENTENCE
+        # instead: the WORD for a table, in any of its forms and with any of its
+        # prefixes, standing next to an instruction to put one in. «جدول
+        # المحتويات» is the index and «جدول زمني» is a schedule — neither is a
+        # data table — so both are removed before the reading, and the Excel
+        # FILE sense stays where it was, a format and not an insertion.
+        try:
+            import re as _re
+            _s = t
+            for _n in ("جدول المحتويات", "جدول محتويات",
+                       "جدول الأعمال", "جدول أعمال", "جدول زمني",
+                       "جدولاً زمنياً", "table of contents", "timetable"):
+                _s = _s.replace(_n, " ")
+            _noun = _re.search(
+                r"(?:\A|\s|\W)(?:ال|بال|وال|كال|فال|لل|ب|و|ف|ل)?"
+                r"(?:جداول|جدولين|جدولاً|جدولا|جدول|tables|table)\b", _s)
+            if _noun and any(v in _s for v in (
+                    "أدرج", "ادرج", "أضف", "اضف", "ضع", "اعمل", "أنشئ",
+                    "انشئ", "اصنع", "قدّم", "قدم", "اعرض", "رتّب", "رتب",
+                    "مع ", "تتضمن", "يتضمن", "تشمل", "يشمل", "بها ",
+                    "فيها ", "insert", "add ", "include", "provide", "present",
+                    "with ", "show ")):
+                return True
+        except Exception:
+            pass
+        return False
 
     @staticmethod
     def _wants_chart(text):
@@ -724,8 +780,8 @@ class WeaverOrchestrator:
         n = (section_name or "").lower()
         if any(k in n for k in ("مراجع", "مصادر", "references", "bibliography")):
             return ""
-        if not isinstance(reqs, list) or not reqs:
-            return _copy_rule
+        if not isinstance(reqs, list):
+            reqs = []
         styles, contents, want_table = [], [], False
         for r in reqs:
             if not isinstance(r, dict):
@@ -746,11 +802,38 @@ class WeaverOrchestrator:
                 # for «جداول تحتوي المصطلحات التقنية وشرحها» came back as
                 # classification tables, exactly as that generic line asked.
                 want_table = t
+        # THE DECISION AND THE INSTRUCTION READ FROM TWO DIFFERENT PLACES, AND
+        # ONLY ONE OF THEM REACHED THE WRITER. `card["want_table"]` is what the
+        # model (or the user) decided, and layer 6 computes `table_budget` from
+        # it — but this directive, the ONLY line that ever tells a section to
+        # build a table, was read exclusively from a requirement filed under
+        # kind == "insert". A run asking for «أدرج جداول للمصطلحات التقنية
+        # وشرحها» came back with want_table=True, table_budget=3 and ZERO tables,
+        # because that one sentence had been filed as "content". A decision that
+        # does not reach its executor is not a decision: fall back to the flag,
+        # and recover the user's OWN wording from any requirement that mentions a
+        # table — whatever kind it was filed under — so the columns still match
+        # what was actually asked for.
+        if not want_table and (card or {}).get("want_table") \
+                and not (card or {}).get("tables_forbidden"):
+            for r in reqs:
+                if not isinstance(r, dict):
+                    continue
+                t = (r.get("text") or "").strip()
+                if t and any(w in t.lower()
+                             for w in ("جدول", "جداول", "table")):
+                    want_table = t
+                    break
+            else:
+                want_table = True
+        # «NO» IS ENFORCED HERE TOO, not merely recorded on the card.
+        if (card or {}).get("tables_forbidden"):
+            want_table = False
         # the document's table budget is spent → stop inviting tables at all
         if want_table and isinstance(tables_left, int) and tables_left <= 0:
             want_table = False
         if not (styles or contents or want_table):
-            return ""
+            return _copy_rule
         if lang == "en":
             lines = ["Request requirements to honour in THIS section (apply "
                      "where they fit — never force):"]
@@ -775,7 +858,8 @@ class WeaverOrchestrator:
                     "- Where this section's content is a comparison or a set of "
                     "terms/values, present it as a Markdown table (| … | … |) "
                     "instead of prose." + _budget)
-            return "\n".join(lines)
+            lines.append(_copy_rule)
+            return "\n".join(x for x in lines if x)
         lines = ["متطلّبات الطلب التي تُراعى في هذا القسم (طبّقها حيث تناسب، "
                  "دون إقحام):"]
         if styles:
@@ -2888,12 +2972,43 @@ class WeaverOrchestrator:
                 # number to «المستخدم» who had never said it. The model reads
                 # the request; whatever it returns is recorded as ITS reading,
                 # and a default is never dressed up as the user's instruction.
-                if _iv.get("words"):
-                    self._settle(c, "target_words", _iv["words"], None,
-                                 "فهم الطلب")
-                if _iv.get("pages"):
-                    self._settle(c, "target_pages", _iv["pages"], None,
-                                 "فهم الطلب")
+                # THE DETECTOR'S READING WAS DISCARDED, NOT OUTRANKED. Both
+                # calls passed detector_value=None, so the model's number simply
+                # overwrote what the user's own words plainly said. «لا يقل
+                # عن 10 صفحات ولا يزيد عن 12» came back as target_pages=12 —
+                # the CEILING read as the target — while target_words stayed 3000
+                # (=10×300) from the detector: one ledger showing the two ends of
+                # one range as one target. When the user states a RANGE in their
+                # own words the floor IS the target and the ceiling is the
+                # maximum; that is the user speaking, so by the standing
+                # precedence it outranks the model's reading. In every other case
+                # the detector's value is merely offered as the fallback, exactly
+                # as _settle expects — the model still rules an unstated length.
+                _lt_c = {}
+                try:
+                    _lt_c = self.extract_length_target(_cur_only) or {}
+                except Exception:
+                    _lt_c = {}
+                _rng = bool(_lt_c.get("max_pages") or _lt_c.get("max_words"))
+                if _iv.get("words") or _lt_c.get("words"):
+                    self._settle(c, "target_words", _iv.get("words"),
+                                 _lt_c.get("words"), "فهم الطلب",
+                                 explicit=(_lt_c.get("words") if _rng else None))
+                if _iv.get("pages") or _lt_c.get("pages"):
+                    self._settle(c, "target_pages", _iv.get("pages"),
+                                 _lt_c.get("pages"), "فهم الطلب",
+                                 explicit=(_lt_c.get("pages") if _rng else None))
+                # A CEILING THE USER STATED IS THE USER'S, WHATEVER PATH RAN.
+                # It was only ever set from task.description; a request carried
+                # on the current turn alone left max_words unset, and nothing
+                # downstream then had a number to stop at.
+                try:
+                    if _lt_c.get("max_words") and not c.get("max_words"):
+                        c["max_words"] = _lt_c["max_words"]
+                    if _lt_c.get("max_pages") and not c.get("max_pages"):
+                        c["max_pages"] = _lt_c["max_pages"]
+                except Exception:
+                    pass
                     # PAGES MUST BECOME WORDS OR THEY MEAN NOTHING. Every
                     # length consumer downstream reads target_words; the budget
                     # line is literally `base = total or mx or 0`, so a request
@@ -2939,6 +3054,57 @@ class WeaverOrchestrator:
                                + (c.get("scope") or c.get("action") or "بحث"))
         except Exception as e:
             mem.set_status(3, f"موجّه النية (تخطّي: {e})")
+
+        # ── THE FALLBACK LIVED INSIDE THE THING IT WAS THE FALLBACK FOR ──
+        # Every deterministic detector above sits under `if _iv`. When the
+        # understanding call AND the keyword router both came back empty — a
+        # weak model, a refused reply, a provider hiccup, a JSON that would not
+        # parse — nothing read the request at all: no action, no sourcing mode,
+        # no length, and no want_table. A full run of «أدرج جداول للمصطلحات
+        # التقنية وشرحها» ended with want_table unset and table_budget unset,
+        # because that sentence was never read by ANYONE. The model still rules
+        # wherever it speaks; where it is silent, silence is not an answer.
+        # This block therefore runs on keys that are STILL UNSET and on nothing
+        # else, so it can never overrule the user or the model — it only speaks
+        # where nobody has spoken, and every value it sets is stamped
+        # «قراءة الطلب» in the ledger so its source is never anonymous.
+        try:
+            if isinstance(task.task_card, dict):
+                _c2 = task.task_card
+                _cur2 = self._current_request(task.description)
+                if (_c2.get("want_table") is None
+                        and not _c2.get("tables_forbidden")
+                        and self._wants_table(_cur2)):
+                    self._settle(_c2, "want_table", None, True, "قراءة الطلب")
+                if _c2.get("want_chart") is None and self._wants_chart(_cur2):
+                    self._settle(_c2, "want_chart", None, True, "قراءة الطلب")
+                if not _c2.get("action"):
+                    self._settle(_c2, "action", None,
+                                 self._task_action(_cur2), "قراءة الطلب")
+                if not _c2.get("sourcing_mode"):
+                    self._settle(_c2, "sourcing_mode", None,
+                                 self._sourcing_mode(_cur2), "قراءة الطلب")
+                if not _c2.get("citation_style"):
+                    _cs2 = self._requested_citation_style(_cur2)
+                    if _cs2:
+                        self._settle(_c2, "citation_style", None, _cs2,
+                                     "قراءة الطلب", explicit=_cs2)
+                _lt2 = self.extract_length_target(_cur2) or {}
+                _rng2 = bool(_lt2.get("max_pages") or _lt2.get("max_words"))
+                if _lt2.get("words") and not _c2.get("target_words"):
+                    self._settle(_c2, "target_words", None, _lt2["words"],
+                                 "قراءة الطلب",
+                                 explicit=(_lt2["words"] if _rng2 else None))
+                if _lt2.get("pages") and not _c2.get("target_pages"):
+                    self._settle(_c2, "target_pages", None, _lt2["pages"],
+                                 "قراءة الطلب",
+                                 explicit=(_lt2["pages"] if _rng2 else None))
+                if _lt2.get("max_words") and not _c2.get("max_words"):
+                    _c2["max_words"] = _lt2["max_words"]
+                if _lt2.get("max_pages") and not _c2.get("max_pages"):
+                    _c2["max_pages"] = _lt2["max_pages"]
+        except Exception as e:
+            mem.set_status(3, f"قراءة الطلب احتياطيّاً (تخطّي: {e})")
 
         # ── STAGE (أ) WIRING 1 — REQUIREMENTS CHECKLIST (build + store) ──
         # Build the dynamic requirements checklist from the FULL request (no
@@ -6852,14 +7018,61 @@ class WeaverOrchestrator:
                 _lf = [v for k, v in _budgets.items() if v]
                 mem.set_status(6, f"ميزانية الطول: {min(_lf)}–{max(_lf)} كلمة "
                                   f"لكل قسم حسب دوره")
+                # THE ARITHMETIC, IN THE OPEN. A per-section cap is only a cap
+                # if the caps SUM to something under the document ceiling; the
+                # old one did not, and nothing anywhere said so. Now the sum is
+                # computed and recorded, so a structure too fragmented for its
+                # own ceiling is visible BEFORE the writing starts instead of
+                # being discovered afterwards in the verification note.
+                try:
+                    _sum_b = sum(int(v or 0) for v in _budgets.values())
+                    _mx_b = card.get("max_words")
+                    if _mx_b:
+                        self._record_decision(
+                            card, "ميزانية الأقسام",
+                            f"{len(sections_plan)} قسماً ← {_sum_b} كلمة "
+                            f"(السقف {_mx_b})", "measured",
+                            "حصّة كلّ قسم حسب دوره")
+                except Exception:
+                    pass
         except Exception:
             _budgets = {}
         # who decided the big things, recorded once so nothing is anonymous
         try:
-            if card.get("target_words") or card.get("target_pages"):
-                self._record_decision(card, "length",
-                                      card.get("target_words")
-                                      or card.get("target_pages"), "user")
+            # WHO SAID 3000? The ledger printed «length: 3000 ← المستخدم» on a
+            # request that never stated a word count: 3000 was «10 صفحات» × 300,
+            # an arithmetic step this line hid, while the SAME ledger printed
+            # target_pages: 12 — the two ends of one range shown as one target,
+            # both credited to a user who had said neither number. The author
+            # and the derivation are already recorded by _settle at the moment
+            # the value was decided, so reuse them instead of stamping "user"
+            # on everything, and print the CEILING as its own line so a floor is
+            # never read as a maximum.
+            _lg_d = card.get("language", "ar")
+            _tw_d, _tp_d = card.get("target_words"), card.get("target_pages")
+            if _tw_d or _tp_d:
+                _d_rec = (card.get("decisions") or {}).get(
+                    "target_words" if _tw_d else "target_pages") or {}
+                self._record_decision(
+                    card, "length",
+                    (f"{_tw_d} كلمة" if _lg_d != "en" else f"{_tw_d} words")
+                    if _tw_d else
+                    (f"{_tp_d} صفحة" if _lg_d != "en" else f"{_tp_d} pages"),
+                    _d_rec.get("by") or "user", _d_rec.get("where") or "")
+            _mxw_d, _mxp_d = card.get("max_words"), card.get("max_pages")
+            if _mxw_d or _mxp_d:
+                _bits_d = []
+                if _mxw_d:
+                    _bits_d.append(f"{_mxw_d} كلمة" if _lg_d != "en"
+                                   else f"{_mxw_d} words")
+                if _mxp_d:
+                    _bits_d.append(f"{_mxp_d} صفحة" if _lg_d != "en"
+                                   else f"{_mxp_d} pages")
+                self._record_decision(
+                    card, "سقف الطول" if _lg_d != "en" else "length ceiling",
+                    " / ".join(_bits_d), "user",
+                    "حدٌّ أعلى من نصّ الطلب" if _lg_d != "en"
+                    else "stated in the request")
             self._record_decision(card, "structure",
                                   f"{len(sections_plan)} قسماً",
                                   card.get("structure_source") or "template")
@@ -6944,6 +7157,7 @@ class WeaverOrchestrator:
                         f"scientific content appropriate to this section's role")
                 else:
                     section_name = title
+                _my = None
                 try:
                     # this section's OWN share, by its role in the structure —
                     # a parent writing a bridge is not given a full section's
@@ -7049,7 +7263,23 @@ class WeaverOrchestrator:
                     _mx = card.get("max_words")
                     _nsec = max(1, len(sections_plan))
                     if _mx:
-                        _share = max(120, int(_mx / _nsec))
+                        # THE «HARD LIMIT» AUTHORISED THE OVERSHOOT IT EXISTED
+                        # TO PREVENT. It was max(120, _mx/_nsec): with 42
+                        # sections against a 3600-word ceiling the division
+                        # gives 85, the floor of 120 wins, and 42 × 120 = 5040
+                        # — one thousand four hundred words ABOVE the ceiling.
+                        # The run came back at 4902, which means the writer
+                        # obeyed the limit exactly and the limit was wrong. A
+                        # per-section cap is a cap only if the caps SUM to
+                        # something under the ceiling, so it is taken from this
+                        # section's own role-aware share (_budgets already sums
+                        # to the target, which sits under the ceiling) with a
+                        # little headroom; the flat division stays as the
+                        # fallback for when no share could be computed.
+                        if _my:
+                            _share = max(40, int(int(_my) * 1.15))
+                        else:
+                            _share = max(40, int(_mx / _nsec))
                         prompt = prompt + "\n\n" + (
                             f"حدّ أقصى صارم: لا تتجاوز نحو {_share} كلمة في هذا "
                             f"القسم. المستند كلّه يجب ألّا يتجاوز {_mx} كلمة، "
@@ -7432,10 +7662,27 @@ class WeaverOrchestrator:
                 if (_mx and self.llm_fn and _cur > int(_mx) * 1.05
                         and _osc.environ.get("WEAVER_CONDENSE", "1") != "0"):
                     _over = _cur - int(_mx)
+                    # THE CANDIDATE FLOOR WAS CALIBRATED FOR A SHORT
+                    # STRUCTURE. «a section worth condensing» was fixed at 120
+                    # words — sensible for a ten-section document. A
+                    # 42-section document 4902 words long averages 117, so
+                    # almost nothing qualified and the pass saved 156 words
+                    # against a 1302-word overshoot: the safety net measured
+                    # itself against a constant instead of against the text in
+                    # front of it. The floor now follows the document — the
+                    # sections at or above ITS OWN average are its long ones,
+                    # whatever shape it has — and never drops below 60, the
+                    # point under which a rewrite cannot save anything.
+                    _secs_w = [s for s in (task.sections or [])
+                               if not self._is_ref_heading(s.get("heading", ""))]
+                    try:
+                        _avg_w = int(_cur / max(1, len(_secs_w)))
+                        _floor_w = max(60, min(120, int(_avg_w * 0.8)))
+                    except Exception:
+                        _floor_w = 120
                     _cand = sorted(
-                        [s for s in (task.sections or [])
-                         if not self._is_ref_heading(s.get("heading", ""))
-                         and self.count_words(s.get("body", "")) >= 120],
+                        [s for s in _secs_w
+                         if self.count_words(s.get("body", "")) >= _floor_w],
                         key=lambda s: -self.count_words(s.get("body", "")))
                     _saved = 0
                     for s in _cand:
@@ -8820,8 +9067,21 @@ class WeaverOrchestrator:
             acad, general = [], []
             for s_ in items:
                 _t = wr.quality_tier(s_) if wr else 0
-                _is_acad = bool(s_.get("academic") or s_.get("doi")
-                                or (_t and _t >= 3))
+                # THE THRESHOLD LET IN EXACTLY WHAT IT WAS BUILT TO KEEP OUT.
+                # Tier 3 is TIER_OFFICIAL — a university or government PAGE —
+                # so a ministry page and an upload site whose name merely ends
+                # in .edu both cleared it and printed under «ثالثاً: المواقع
+                # الإلكترونية» beside peer-reviewed studies. A documented
+                # bibliography is made of refereed work: a DOI, an academic
+                # book (tier ≥ 4), or a full bibliographic record (a named
+                # venue AND named authors) for the refereed Arabic journals
+                # that carry no DOI. `academic` alone is a SEARCH-LAYER hint,
+                # not evidence of review, so on its own it no longer carries an
+                # entry into the list — an official page informed the prose and
+                # stays in the writer's context, exactly as a general page does.
+                _rec_ = bool(s_.get("venue") or s_.get("journal")) and bool(
+                    s_.get("authors") or s_.get("author"))
+                _is_acad = bool(s_.get("doi") or (_t and _t >= 4) or _rec_)
                 (acad if _is_acad else general).append(s_)
             if acad:
                 try:
