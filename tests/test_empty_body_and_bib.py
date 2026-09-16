@@ -323,6 +323,35 @@ chk("والمُثري لا يعمل إذا كان المتن فيه جداولُ
 chk("ويُسجَّل سببُ عدمِ إضافةِ القسم", "لم يطلبه المستخدم" in _srcE)
 
 print("\n" + "═" * 70)
+print(" ١٠) الاستشهادُ المختلَق حُذف — من نسخةٍ لا تصل إلى الملف")
+print("═" * 70)
+# التشغيل: (Smith, 2020) و(Jones, 2019) و(Brown, 2021) في بحثٍ عربيٍّ عن
+# الإعجاز القرآني، بلا مقابلٍ في المصادر. والطبقة ٧ التقطتها فعلاً — لكنها
+# أسندت النصّ النظيف إلى task.draft وحده، والتصديرُ يبني من task.sections.
+sys.path.insert(0, _ROOT + "/capabilities/skills/weak_model_support/scripts")
+from weak_model_support import enforce_strict_rag as _esr
+
+_txt = ("تتكون الكائنات من الماء بنسبة 90% (Smith, 2020). ويحافظ على "
+        "البروتينات (Jones, 2019). وقد بيّن (المعبدى، 2018) أن الإعجاز سبقٌ.")
+_r = _esr(_txt, ["المعبدى، 2018", "حسين، 2025"])
+chk("الفحصُ الصارم نفسه سليم: يلتقط المختلَق",
+    set(_r["removed"]) == {"(Smith, 2020)", "(Jones, 2019)"},
+    str(_r["removed"]))
+chk("ولا يمسّ الاستشهاد الصحيح", "(المعبدى، 2018)" in _r["text"])
+
+# الخلل في الجسر: الأقسام لا تُنظَّف
+_src7 = inspect.getsource(W._layer_7)
+_i_strict = _src7.find("enforce_strict_rag")
+_after = _src7[_i_strict:_i_strict + 400]
+chk("الطبقة ٧ تُسند النصّ النظيف إلى draft", "task.draft = res[" in _after)
+chk("ولا تمسّ sections (وهذا هو الخلل الأصليّ)",
+    "task.sections" not in _after)
+_srcExp = inspect.getsource(W._export_docx) if hasattr(W, "_export_docx") else ""
+_src8 = inspect.getsource(W._layer_8)
+chk("والطبقة ٨ تُطبّق الحذف على الأقسام أيضاً", "citations_removed" in _src8)
+chk("وتُسجّله للمستخدم", "استشهادات مُختلَقة" in _src8)
+
+print("\n" + "═" * 70)
 print(" النتيجة: " + ("PASS ✅" if ok else "FAIL ❌"))
 print("═" * 70)
 sys.exit(0 if ok else 1)

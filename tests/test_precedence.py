@@ -100,12 +100,45 @@ ok &= (v == 90)
 print(f"   المفتاح يعلو على الحساب: {v} {'✅' if v == 90 else '❌'}")
 
 print("\n" + "═"*66); print(" ٧) الطبقتان ٢ و٧"); print("═"*66)
-import subprocess
-d = subprocess.run(["git","diff","-U0"],capture_output=True,text=True).stdout
-bad = [l for l in d.splitlines() if l[:1] in "+-" and not l.startswith(("+++","---"))
-       and any(w in l for w in ("enforce_strict_rag","conduct_guard"))]
+# THE GUARD MEASURED THE WRONG THING. It scanned the diff for the two
+# function NAMES, so a comment that merely mentioned one tripped it — while a
+# real edit inside layer 7 that happened not to spell the name out would pass
+# unnoticed. A word is not a change. What must not change is the CODE: the
+# skill file that defines the strict check, and the body of _layer_7 itself.
+# Both are now compared by line range against the working diff, which catches
+# an edit whatever it is called, and lets prose about them be written freely.
+import subprocess, inspect, re as _re_g
+sys.path.insert(0, _ROOT)
+from pipeline.orchestrator import WeaverOrchestrator as _W_g
+
+_files = subprocess.run(["git", "diff", "--name-only"],
+                        capture_output=True, text=True).stdout.split()
+bad = [f for f in _files
+       if "weak_model_support" in f or "conduct_guard" in f
+       or "layer_7_verify" in f]
+
+# which lines of pipeline/orchestrator.py this working tree changes
+_d = subprocess.run(["git", "diff", "-U0", "--", "pipeline/orchestrator.py"],
+                    capture_output=True, text=True).stdout
+_touched = []
+for _h in _re_g.findall(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', _d, _re_g.M):
+    _st = int(_h[0]); _n = int(_h[1] or 1)
+    _touched += list(range(_st, _st + max(_n, 1)))
+if _touched:
+    for _name in ("_layer_7", "_layer_2"):
+        _fn = getattr(_W_g, _name, None)
+        if _fn is None:
+            continue
+        try:
+            _lines, _start = inspect.getsourcelines(_fn)
+        except Exception:
+            continue
+        _rng = range(_start, _start + len(_lines))
+        _hit = [n for n in _touched if n in _rng]
+        if _hit:
+            bad.append(f"{_name}: أسطر {_hit[:5]}")
 ok &= not bad
-print(f"   {'✅ لا مساس' if not bad else '❌'}")
+print(f"   {'✅ لا مساس — لا بجسم الطبقتين ولا بملفّ الفحص الصارم' if not bad else '❌ ' + str(bad)}")
 
 print("\n" + ("PASS ✅" if ok else "FAIL ❌"))
 sys.exit(0 if ok else 1)

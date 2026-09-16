@@ -10099,6 +10099,46 @@ class WeaverOrchestrator:
                     s.get("body", ""))} for s in task.sections]
         except Exception:
             pass
+        # ── THE STRICT CHECK CLEANED A COPY THAT NEVER REACHES THE FILE ──
+        # Layer 7 runs enforce_strict_rag and it WORKS: given the real keys it
+        # removes «(Smith, 2020)» and «(Jones, 2019)» and keeps the genuine
+        # Arabic citation. But it assigns the cleaned text to `task.draft`
+        # ALONE, while the exporter builds the document from `task.sections`
+        # (see _export: `sections = task.sections or …`). So three fabricated
+        # Western citations were detected, reported as removed, and shipped
+        # anyway — in an Arabic paper on Quranic exegesis, sourced to nothing.
+        # The no-citation path four lines above it fixes BOTH; this one fixes
+        # one. The removals are already recorded on the card, so applying the
+        # very same list to the sections needs no second call and no judgement
+        # of its own — and it is done HERE, at the export boundary, because
+        # layer 7 is not mine to change.
+        try:
+            _rm = (task.task_card or {}).get("citations_removed") or []
+            if _rm and task.sections:
+                _n = 0
+                _secs = []
+                for _s in task.sections:
+                    _b = _s.get("body", "") or ""
+                    for _c in _rm:
+                        _c = str(_c)
+                        if _c and _c in _b:
+                            _n += _b.count(_c)
+                            _b = _b.replace(_c, "")
+                    import re as _re8
+                    _b = _re8.sub(r"[ \t]+([.،!؟])", r"\1", _b)
+                    _b = _re8.sub(r"[ \t]{2,}", " ", _b)
+                    _secs.append({**_s, "body": _b})
+                task.sections = _secs
+                if _n:
+                    mem.set_status(8, f"حُذف {_n} استشهادً مُختلَقٍ من "
+                                      "متن المستند نفسه")
+                    self._skip_note(
+                        task.task_card, "استشهادات مُختلَقة",
+                        f"أنتج النموذج {len(_rm)} استشهاداً لا مقابل له في المصادر "
+                        f"المجلوبة، فحُذفت من المستند: "
+                        + "، ".join(str(x) for x in _rm[:6]))
+        except Exception as e:
+            mem.set_status(8, f"تنظيف الاستشهادات (تخطّي: {e})")
         # honest note when the document was written without external sources
         try:
             self._source_note(task)
