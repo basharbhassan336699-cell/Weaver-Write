@@ -335,7 +335,88 @@ class WeaverOrchestrator:
         "اكتب موضوع", "اعمل بحث", "أعد بحث", "اعد بحث", "حضّر بحث", "حضر بحث",
         "جهّز بحث", "بحثاً كاملاً", "بحث كامل", "بحثا كاملا",
         "write a research", "write an essay", "write a report", "write a paper",
-        "full research", "research paper")
+        "full research", "research paper",
+        # «بالكامل» IS NOT «كاملاً». The list held the second and the user
+        # wrote the first, so a request that says «أريد بحثاً بالكامل» in
+        # plain Arabic was not recognised as a request to write one — the same
+        # letter-for-letter miss as «جدول» against «جداول». Added here for the
+        # exact phrasings; the structural reading below is what stops the NEXT
+        # phrasing nobody thought of.
+        "بحثاً بالكامل", "بحثا بالكامل", "بحث بالكامل",
+        "البحث بالكامل", "بحثاً كاملا", "بحثا كاملاً",
+        "بحثاً متكاملاً", "بحثا متكاملا", "بحث متكامل",
+        "دراسة كاملة", "دراسة بالكامل", "مقال كامل", "تقرير كامل",
+        "full paper", "complete research", "complete paper", "entire research",
+        "whole research", "in full")
+
+    @staticmethod
+    def _full_document_marks(text):
+        """The EVIDENCE in a request that only a WHOLE DOCUMENT can carry.
+
+        `_WRITE_FULL_MARK` is a phrase list, and a phrase list holds only the
+        phrasings somebody thought of. It held «بحثاً كاملاً»; the user wrote
+        «بحثاً بالكامل» — not the same letters — so `writing` came back
+        False, the SOFT cue «هيكلة» went unopposed, and a request for a full
+        piece of research became an outline: one section written, the academic
+        search never run, nothing verified, and thirteen references recalled
+        from the model's own memory in place of the nine that were asked to be
+        fetched and checked. One gate, and the whole chain behind it fell.
+
+        The phrasing of a verb is the weakest signal there is. What a request
+        CANNOT be is far more certain: nobody asks for a headings-only outline
+        AND «10 إلى 12 صفحة» AND «9 مراجع بأسلوب APA» AND a cover page AND an
+        index. This reads those structural asks — the same reasoning
+        `_deliverable_contradicted` applies to the model's typed checklist,
+        applied here to the USER'S OWN WORDS, so it stands even when the model
+        says nothing at all. Last time the model's `full_document` judgement
+        rescued this request; a safeguard that depends on the model having an
+        opinion is not a safeguard.
+
+        Deliberately conservative: a substantial length ALONE never counts — an
+        outline may legitimately be asked for «في ثلاث صفحات» — and neither
+        does one lone ask. It must be a real length JOINED by something an
+        outline never carries. Returns the reasons found, empty when the
+        evidence does not reach that bar. Never raises."""
+        try:
+            _W = WeaverOrchestrator
+            t = " " + (text or "").lower() + " "
+            marks = []
+            lt = _W.extract_length_target(text) or {}
+            _pg = int(lt.get("pages") or lt.get("max_pages") or 0)
+            _wd = int(lt.get("words") or lt.get("max_words") or 0)
+            _long = _pg >= 5 or _wd >= 1500
+            import re as _re
+            if _re.search(r"\d{1,3}\s*(?:مراجع|مرجعاً|مرجعا|مرجع|مصادر|"
+                          r"مصدراً|مصدرا|مصدر|دراسات|references?|sources?)", t):
+                marks.append("عددُ مراجعٍ مطلوب")
+            try:
+                if _W._requested_citation_style(text):
+                    marks.append("نمطُ توثيقٍ مطلوب")
+            except Exception:
+                pass
+            if any(k in t for k in ("صفحة غلاف", "غلاف", "cover page",
+                                    "title page")):
+                marks.append("صفحةُ غلاف")
+            try:
+                if _W._wants_toc(text):
+                    marks.append("فهرس")
+            except Exception:
+                pass
+            try:
+                if _W._wants_table(text):
+                    marks.append("جداول")
+            except Exception:
+                pass
+            if any(k in t for k in ("خاتمة", "توصيات", "نتائج وتوصيات",
+                                    "conclusion", "recommendations")):
+                marks.append("خاتمةٌ أو توصيات")
+            if not _long or len(marks) < 2:
+                return []
+            marks.insert(0, (f"طولٌ مطلوب: {_pg} صفحة" if _pg
+                             else f"طولٌ مطلوب: {_wd} كلمة"))
+            return marks
+        except Exception:
+            return []
 
     @staticmethod
     def _task_scopes(text):
@@ -347,7 +428,17 @@ class WeaverOrchestrator:
         request is NOT a full-document write (so composites like "مراجع وهيكلة
         فقط" work, and "اكتب بحثاً + مراجع" stays a full research)."""
         t = " " + (text or "").lower() + " "
-        writing = any(k in t for k in WeaverOrchestrator._WRITE_FULL_MARK)
+        # A LIMITING SCOPE IS A CLAIM ABOUT WHAT THE USER DOES **NOT** WANT, and
+        # the soft cues make it from a single descriptive word. «الهيكلة مكونة
+        # من ثلاثة مباحث» DESCRIBES the structure the document must have; it
+        # does not ask for a structure INSTEAD of a document. The phrase list
+        # was the only thing standing against it, and it missed «بالكامل».
+        # Now the request's own structural asks answer it too — see
+        # _full_document_marks — so the next unlisted phrasing costs nothing.
+        # The «فقط»/"only" forms below are untouched: they fire unconditionally,
+        # because there the user HAS said what they do not want.
+        writing = any(k in t for k in WeaverOrchestrator._WRITE_FULL_MARK) \
+            or bool(WeaverOrchestrator._full_document_marks(text))
         scopes = set()
 
         # ── references / sources / prior studies ──
@@ -10791,6 +10882,14 @@ def _verify_deterministic(req, draft, card, lang):
                           f"مقابل {_want}"
                     if _cnt < _want:
                         return ("unmet", _ev)
+                    # A SURPLUS WAS PASSING IN SILENCE. The check only ever
+                    # tested the floor, so a request for «9 مراجع» answered with
+                    # thirteen came back «met» and the user read the note and saw
+                    # nothing. More than was asked for is not a failure, but it
+                    # is a deviation, and the note is the one place where the
+                    # user finds out what they actually received.
+                    if _cnt > _want:
+                        _ev += f" — زيادةٌ {_cnt - _want} عن المطلوب"
                     # count is satisfied; the STYLE (APA) is a judgement
                     if any(k in _txt for k in ("apa", "mla", "chicago",
                                                "توثيق", "أسلوب")):
