@@ -1,12 +1,20 @@
 # -*- coding: utf-8 -*-
 """شروح المراجع تخرج من المستند · ولغة الطلب تحكم لغة المراجع."""
 import sys, os, inspect
-sys.path.insert(0, "/home/user/Weaver-Write")
+# THE TESTS ONLY RAN ON THE MACHINE THEY WERE WRITTEN ON. The repository
+# root was hardcoded as an absolute path, so on any other checkout the insert
+# pointed at a directory that does not exist and every file died on
+# "No module named 'pipeline'" before running a single check. The root is
+# where this file lives, one directory up — the way tests/smoke_pipeline.py
+# already computes it — so the suite runs from any clone on any device.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 for k in list(os.environ):
     if k.startswith("WEAVER_"): os.environ.pop(k)
 from pipeline.orchestrator import WeaverOrchestrator as W
 import importlib.util as iu
-sp = iu.spec_from_file_location("fa", "/home/user/Weaver-Write/capabilities/"
+sp = iu.spec_from_file_location("fa", _ROOT + "/capabilities/"
                                 "skills/apa_formatter/scripts/format_apa.py")
 fa = iu.module_from_spec(sp); sp.loader.exec_module(fa)
 ok = True
@@ -73,7 +81,7 @@ for c, want in [({"target_pages": 12}, "3600"), ({"target_pages": 1}, "300"),
 
 print("\n" + "═"*68); print(" ٦) تغطية الجوانب تعبر الاشتقاق"); print("═"*68)
 import re, io
-src = io.open("/home/user/Weaver-Write/pipeline/orchestrator.py", encoding="utf-8").read()
+src = io.open(_ROOT + "/pipeline/orchestrator.py", encoding="utf-8").read()
 m = re.search(r"            def _stem\(w\):.*?\n                return w\n", src, re.S)
 ns = {}; exec("\n".join(l[12:] for l in m.group(0).split("\n")), ns)
 stem = ns["_stem"]

@@ -2,7 +2,15 @@
 """إعادة تشغيل ردود القواعد الحقيقية — بأوراقك أنت — عبر الكود الحقيقي.
 لا شبكة (محجوبة هنا)، لكن كل دالّة تعمل كما تعمل على جهازك."""
 import sys, os, json, asyncio
-sys.path.insert(0, "/home/user/Weaver-Write")
+# THE TESTS ONLY RAN ON THE MACHINE THEY WERE WRITTEN ON. The repository
+# root was hardcoded as an absolute path, so on any other checkout the insert
+# pointed at a directory that does not exist and every file died on
+# "No module named 'pipeline'" before running a single check. The root is
+# where this file lives, one directory up — the way tests/smoke_pipeline.py
+# already computes it — so the suite runs from any clone on any device.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 for k in list(os.environ):
     if k.startswith("WEAVER_"): os.environ.pop(k)
 from pipeline.orchestrator import WeaverOrchestrator as W

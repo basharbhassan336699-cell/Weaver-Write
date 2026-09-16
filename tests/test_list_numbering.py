@@ -1,13 +1,25 @@
 # -*- coding: utf-8 -*-
 """الترقيم: كل قائمةٍ تبدأ من ١، ولا يستمرّ العدّاد عبر الأقسام."""
 import sys, os, zipfile, re
-sys.path.insert(0, "/home/user/Weaver-Write")
-sys.path.insert(0, "/home/user/Weaver-Write/capabilities/skills/docx_builder/scripts")
+# THE TESTS ONLY RAN ON THE MACHINE THEY WERE WRITTEN ON. The repository
+# root was hardcoded as an absolute path, so on any other checkout the insert
+# pointed at a directory that does not exist and every file died on
+# "No module named 'pipeline'" before running a single check. The root is
+# where this file lives, one directory up — the way tests/smoke_pipeline.py
+# already computes it — so the suite runs from any clone on any device.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+import tempfile as _tempfile
+# a scratch directory of the machine RUNNING the test, never a path
+# baked in from the machine that wrote it
+_TMP = _tempfile.mkdtemp(prefix="weaver-test-")
+sys.path.insert(0, _ROOT + "/capabilities/skills/docx_builder/scripts")
 import docx_advanced as DA
 from docx import Document
 from docx.oxml.ns import qn
 ok = True
-OUT = "/tmp/claude-0/-home-user-Weaver-Write/a992d62f-8ba9-5684-a093-d08e7c7f2ad2/scratchpad/num.docx"
+OUT = os.path.join(_TMP, "num.docx")
 
 BODY = """## المبحث الأول
 تمهيدٌ قصير.

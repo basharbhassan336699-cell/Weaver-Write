@@ -5,13 +5,25 @@
 جداولٌ طُلبت ولم تُكتب، وسقفُ طولٍ أذن بتجاوز نفسه، وتقليصٌ لم يجد ما يقلّصه،
 وسجلٌّ ينسب للمستخدم ما لم يقله، وقائمةُ توثيقٍ تُدخل المواقع بين المحكَّم."""
 import sys, os, importlib.util as iu
-sys.path.insert(0, "/home/user/Weaver-Write")
+# THE TESTS ONLY RAN ON THE MACHINE THEY WERE WRITTEN ON. The repository
+# root was hardcoded as an absolute path, so on any other checkout the insert
+# pointed at a directory that does not exist and every file died on
+# "No module named 'pipeline'" before running a single check. The root is
+# where this file lives, one directory up — the way tests/smoke_pipeline.py
+# already computes it — so the suite runs from any clone on any device.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+import tempfile as _tempfile
+# a scratch directory of the machine RUNNING the test, never a path
+# baked in from the machine that wrote it
+_TMP = _tempfile.mkdtemp(prefix="weaver-test-")
 for k in list(os.environ):
     if k.startswith("WEAVER_"):
         os.environ.pop(k)
 from pipeline.orchestrator import WeaverOrchestrator as W
 sp = iu.spec_from_file_location(
-    "wr", "/home/user/Weaver-Write/capabilities/skills/web_research/"
+    "wr", _ROOT + "/capabilities/skills/web_research/"
           "scripts/web_research.py")
 wr = iu.module_from_spec(sp); sp.loader.exec_module(wr)
 ok = True
@@ -210,8 +222,7 @@ print("═" * 70)
 import asyncio
 from pipeline.orchestrator import Task
 os.environ["WEAVER_LLM"] = "offline"
-_o = W(db_path="/tmp/claude-0/-home-user-Weaver-Write/"
-               "a992d62f-8ba9-5684-a093-d08e7c7f2ad2/scratchpad/defects.db")
+_o = W(db_path=os.path.join(_TMP, "defects.db"))
 _t = Task(description=REQ + " أدرج جداول للمصطلحات التقنية وشرحها.",
           input_files=[])
 _m = _o.memory.create_task(_t.task_id)
