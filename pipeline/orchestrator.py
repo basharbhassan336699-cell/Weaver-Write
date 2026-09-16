@@ -1073,7 +1073,8 @@ class WeaverOrchestrator:
         except Exception:
             return default
 
-    def _deepen_structure(self, sections_plan, request, topic, unit, lang="ar"):
+    def _deepen_structure(self, sections_plan, request, topic, unit,
+                          lang="ar", budget_words=None):
         """Let the MODEL add a third level under each level-2 section, deciding
         per section how many (possibly none) — which is exactly what «وكل مطلب
         تقسيمات حسب ما يلزم» asks for. A fixed count cannot express «as needed»,
@@ -1085,6 +1086,29 @@ class WeaverOrchestrator:
             return sections_plan
         try:
             import os, json
+            # HOW MANY SECTIONS THE BUDGET CAN ACTUALLY PAY FOR. A
+            # subdivision is not free: each one is another model call and
+            # another share of the SAME word budget. A run asked for 10–12
+            # pages and the model proposed thirty-six — fifty sections in
+            # all, fifty calls, sixty words each — and spent thirty-three
+            # minutes producing a document nobody would call written.
+            # «حسب ما يلزم» is the model's to decide, and it decides far
+            # better when told what a section is worth; a structure whose
+            # sections cannot hold a paragraph is not a decision but an
+            # arithmetic error. So the budget is stated in the prompt AND
+            # enforced after it. Nothing already in the plan is removed.
+            try:
+                _minw = int(os.environ.get(
+                    "WEAVER_MIN_SECTION_WORDS", "150") or 150)
+            except Exception:
+                _minw = 150
+            try:
+                _bw = int(budget_words or 0)
+            except Exception:
+                _bw = 0
+            _room = None
+            if _bw > 0 and _minw > 0:
+                _room = max(0, max(1, _bw // _minw) - len(sections_plan))
             from core.llm import extract_json
             parents = [s for s in sections_plan
                        if int(s.get("level", 1) or 1) == 2]
@@ -1101,7 +1125,15 @@ class WeaverOrchestrator:
                     '{"subs":[{"index":1,"titles":["…","…"]}]}\n'
                     f"Topic: {topic}\nRequest: {(request or '')[:500]}\n"
                     f"Subsections:\n{listing}\n"
-                    "At most 4 per subsection; specific topical titles, never "
+                    + (f"The whole document is about {_bw} words over "
+                       f"{len(sections_plan)} sections already; every "
+                       f"sub-subsection takes words from the others, and "
+                       f"a section under {_minw} words cannot hold a "
+                       f"paragraph. There is room for about {_room} in "
+                       f"TOTAL across all subsections — add one only "
+                       f"where genuinely needed.\n"
+                       if _room is not None else "")
+                    + "At most 4 per subsection; specific topical titles, never "
                     "empty labels; no numbering in the titles.")
             else:
                 prompt = (
@@ -1111,7 +1143,13 @@ class WeaverOrchestrator:
                     '{"subs":[{"index":1,"titles":["…","…"]}]}\n'
                     f"الموضوع: {topic}\nالطلب: {(request or '')[:500]}\n"
                     f"الأقسام الفرعية:\n{listing}\n"
-                    "بحدٍّ أقصى ٤ لكل قسم؛ عناوين موضوعية محدّدة لا تسميات "
+                    + (f"المستند كلّه نحو {_bw} كلمة موزّعة على "
+                       f"{len(sections_plan)} قسماً أصلاً؛ وكلّ تقسيمٍ "
+                       f"تضيفه يأخذ من نصيب غيره، وقسمٌ دون {_minw} "
+                       f"كلمة لا يتّسع لفقرة. والمتّسع نحو {_room} "
+                       f"تقسيماً للأقسام كلّها — فلا تضف إلا حيث يلزم "
+                       f"حقّاً.\n" if _room is not None else "")
+                    + "بحدٍّ أقصى ٤ لكل قسم؛ عناوين موضوعية محدّدة لا تسميات "
                     "فارغة؛ وبلا ترقيمٍ في العنوان.")
             try:
                 _to = int(os.environ.get("WEAVER_STRUCT_TIMEOUT", "60") or 60)
@@ -1137,6 +1175,27 @@ class WeaverOrchestrator:
                     by_idx[i] = ts[:4]
             if not by_idx:
                 return sections_plan
+            # ENFORCE THE ARITHMETIC. The model may still propose more than
+            # the budget can pay for; the surplus is not dropped at random
+            # but round-robin, one per subsection in turn, so none is
+            # starved while another keeps four.
+            _trimmed = 0
+            if _room is not None:
+                _total = sum(len(v) for v in by_idx.values())
+                if _total > _room:
+                    _keep = {i_: [] for i_ in by_idx}
+                    _left, _depth = _room, 0
+                    while _left > 0 and _depth < 4:
+                        for i_ in sorted(by_idx):
+                            if _left <= 0:
+                                break
+                            if _depth < len(by_idx[i_]):
+                                _keep[i_].append(by_idx[i_][_depth])
+                                _left -= 1
+                        _depth += 1
+                    _trimmed = _total - sum(len(v) for v in _keep.values())
+                    by_idx = {i_: v for i_, v in _keep.items() if v}
+            self._deep_trimmed = _trimmed
             out, seen_parent = [], 0
             for s in sections_plan:
                 out.append(s)
@@ -6924,11 +6983,19 @@ class WeaverOrchestrator:
         try:
             if locals().get("_deep_pending") and scope != "outline":
                 _before = len(sections_plan)
+                self._deep_trimmed = 0
+                _bud = card.get("target_words") or card.get("max_words")
                 sections_plan = self._deepen_structure(
                     sections_plan, self._current_request(task.description),
                     card.get("topic", "") or task.description,
-                    _deep_pending, lang)
+                    _deep_pending, lang, budget_words=_bud)
                 _added = len(sections_plan) - _before
+                if getattr(self, "_deep_trimmed", 0):
+                    self._skip_note(
+                        card, f"تقسيمات «{_deep_pending}»",
+                        f"اقترح النموذج {_added + self._deep_trimmed}، "
+                        f"وأُبقي {_added}: ميزانية {_bud} كلمة لا تتّسع لأكثر "
+                        "— وقسمٌ لا يتّسع لفقرة ليس قسماً")
                 card["sections"] = sections_plan
                 mem.set_status(6, f"تقسيمات ({_deep_pending}) بقرار النموذج: "
                                   f"أُضيف {_added}")
@@ -7234,9 +7301,34 @@ class WeaverOrchestrator:
 
         parts, out_sections = [], []
         _empty_secs = []          # sections that came back with no prose at all
+        import time as _t6
+        _t6_start = _t6.time()
         for _si, sec in enumerate(sections_plan):
             title = sec.get("title") or sec.get("heading") or ""
             body = ""
+            # THIRTY-THREE MINUTES OF A SPINNER THAT SAID NOTHING. The writing
+            # step showed one line, «كتابة المحتوى», for the whole loop — one
+            # model call per section, and with fifty sections on a phone that
+            # is half an hour in which the user cannot tell working from hung.
+            # A count and an elapsed time cost nothing and answer both.
+            try:
+                _el = int(_t6.time() - _t6_start)
+                self._emit("detail", "",
+                           (f"القسم {_si + 1} من {len(sections_plan)}"
+                            + (f" — {_el // 60}:{_el % 60:02d}" if _el >= 30
+                               else "")
+                            + (f" — {title[:40]}" if title else ""))
+                           if lang != "en" else
+                           (f"section {_si + 1} of {len(sections_plan)}"
+                            + (f" — {_el // 60}:{_el % 60:02d}" if _el >= 30
+                               else "")))
+                if _si and _si % 5 == 0 and _el > 120:
+                    _eta = int(_el / _si * (len(sections_plan) - _si))
+                    mem.set_status(6, f"كتابة: {_si}/{len(sections_plan)} — "
+                                      f"مضى {_el // 60} د، ويتبقّى نحو "
+                                      f"{max(1, _eta // 60)} د")
+            except Exception:
+                pass
             # a PARENT section (a المبحث/level-1 immediately followed by its
             # مطالب/level-2 children) must NOT restate what its subsections will
             # cover — that is the direct cause of a المبحث and its المطلب 1.1

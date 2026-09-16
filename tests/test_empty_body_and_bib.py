@@ -228,6 +228,60 @@ _src3 = inspect.getsource(W._layer_3)
 chk("وكلُّ تشغيلٍ يبدأ بسجلٍّ نظيف", "clear_provider_errors" in _src3)
 
 print("\n" + "═" * 70)
+print(" ٨) البنية تُقاس بميزانية الكلمات — لا بشهيّة النموذج")
+print("═" * 70)
+# التشغيل: «تقسيمات: 36 بقرار النموذج» ⟵ 50 قسماً، 50 نداءً، 60 كلمة للقسم،
+# و33 دقيقةً بلا نهاية. التقسيمُ ليس مجّانياً: نداءٌ ونصيبٌ من الميزانية نفسها.
+import json as _json
+
+
+class _Deep(W):
+    def __init__(self, subs):
+        self.llm_fn = lambda *a, **k: _json.dumps({"subs": subs})
+        self.system_main = None
+        self._deep_trimmed = 0
+
+
+_plan = [{"title": "المقدمة", "level": 1}]
+for _a in (1, 2, 3):
+    _plan.append({"title": f"المبحث {_a}", "level": 1})
+    for _b in (1, 2, 3):
+        _plan.append({"title": f"المطلب {_a}.{_b}", "level": 2})
+_plan += [{"title": "الخاتمة", "level": 1}, {"title": "المراجع", "level": 1}]
+_subs = [{"index": i, "titles": [f"ت{i}-{k}" for k in range(1, 5)]}
+         for i in range(1, 10)]
+
+_f = _Deep(_subs)
+_out = _f._deepen_structure(_plan, "طلب", "موضوع", "تقسيم", "ar",
+                            budget_words=3000)
+chk(f"36 تقسيماً مقترحاً ⟶ {len(_out) - len(_plan)} بميزانية 3000",
+    len(_out) <= 20, f"{len(_out)} قسماً، 3000÷{len(_out)}="
+                     f"{3000 // max(1, len(_out))} كلمة/قسم")
+chk("ولا قسمَ دون 150 كلمة", 3000 // max(1, len(_out)) >= 150)
+chk("والمحذوف مُحصىً لا مرميّ", _f._deep_trimmed == 31, str(_f._deep_trimmed))
+
+_f2 = _Deep(_subs)
+_out2 = _f2._deepen_structure(_plan, "طلب", "موضوع", "تقسيم", "ar",
+                              budget_words=12000)
+chk("وميزانيةٌ كبيرة ⟶ النموذج يأخذ ما اقترحه كاملاً",
+    len(_out2) - len(_plan) == 36 and _f2._deep_trimmed == 0)
+
+_f3 = _Deep(_subs)
+_out3 = _f3._deepen_structure(_plan, "طلب", "موضوع", "تقسيم", "ar")
+chk("وبلا ميزانيةٍ مُعلَنة ⟶ السلوك القديم كما هو",
+    len(_out3) - len(_plan) == 36)
+
+# التوزيع عادل: لا يُجوَّع قسمٌ ويُشبَع آخر
+_lv3 = [s for s in _out if int(s.get("level", 1)) == 3]
+_owner = set(t["title"].split("-")[0] for t in _lv3)
+chk(f"والقصاصُ بالتناوب: {len(_lv3)} تقسيماً على {len(_owner)} مطلباً مختلفاً",
+    len(_owner) == len(_lv3), " ".join(sorted(_owner)))
+
+_src6b = inspect.getsource(W._layer_6)
+chk("والتقدّم يُعلَن قسماً قسماً بدل دوّارةٍ صامتة", "القسم {_si + 1} من" in _src6b)
+chk("ويُقدَّر المتبقّي بعد دقيقتين", "ويتبقّى نحو" in _src6b)
+
+print("\n" + "═" * 70)
 print(" النتيجة: " + ("PASS ✅" if ok else "FAIL ❌"))
 print("═" * 70)
 sys.exit(0 if ok else 1)
