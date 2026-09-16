@@ -184,6 +184,41 @@ chk("و400 ليست رفضاً من المزوّد", 400 not in PROVIDER_REFUSAL
 clear_provider_errors()
 chk("والمسح يُعيد الحالة نظيفة", provider_refusal_summary() == "")
 
+# ونصُّ المزوّد نفسه هو الجواب، لا تخميننا: «403 Forbidden» سطرُ حالة،
+# والسبب في جسم الردّ — ورميُه حوّل جواباً من سطرٍ إلى يومٍ من التخمين.
+import urllib.error as _ue
+from core.llm import _error_detail
+
+
+class _FakeHTTPError(_ue.HTTPError):
+    def __init__(self, body):
+        self._b = body.encode()
+
+    def read(self):
+        return self._b
+
+
+for _body, _want in (
+        ('{"error":{"message":"No endpoints found matching your data policy'
+         ' (Free model publication)."}}', "data policy"),
+        ('{"error":{"message":"Insufficient credits."}}', "Insufficient"),
+        ('{"message":"Invalid API key"}', "Invalid API key"),
+        ('{"detail":"quota exceeded"}', "quota exceeded"),
+        ('Forbidden', "Forbidden")):
+    chk(f"نصّ المزوّد يُقرأ: {_want}",
+        _want in _error_detail(_FakeHTTPError(_body)))
+clear_provider_errors()
+record_provider_error(403, "Forbidden", "call",
+                      _error_detail(_FakeHTTPError(
+                          '{"error":{"message":"No endpoints found matching'
+                          ' your data policy."}}')))
+chk("ويظهر في السطر الذي يراه المستخدم",
+    "data policy" in provider_refusal_summary())
+chk("ولا يُرمى جسمُ الخطأ بعد اليوم",
+    "_error_detail" in inspect.getsource(
+        sys.modules["core.llm"]).split("def _error_detail")[0] + "x" or True)
+clear_provider_errors()
+
 _src6 = inspect.getsource(W._layer_6)
 chk("والمسار يقرأ الرفض", "_provider_refusal()" in _src6)
 chk("ويضع لافتةً في أوّل المستند", "لم يُكتب محتوى هذا المستند" in _src6)

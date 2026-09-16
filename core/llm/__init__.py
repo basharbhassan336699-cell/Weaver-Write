@@ -43,11 +43,44 @@ PROVIDER_REFUSAL_CODES = (401, 402, 403, 407, 429)
 _PROVIDER_ERRORS: list = []
 
 
-def record_provider_error(code, reason="", where=""):
+def _error_detail(exc):
+    """The provider's OWN explanation, out of the HTTP error body.
+
+    A 403 was reported as «HTTP Error 403: Forbidden» and nothing more — but
+    Forbidden is the status line, not the reason. The body is where the
+    provider actually says WHY: an invalid key, a spent balance, a model the
+    account may not use, or a data/privacy policy that matches no endpoint.
+    Throwing that away turned a one-line answer into a day of guessing. Read
+    once, bounded, and never allowed to raise."""
+    try:
+        raw = exc.read()
+    except Exception:
+        return ""
+    try:
+        txt = raw.decode("utf-8", "replace")[:1500]
+    except Exception:
+        return ""
+    try:
+        d = json.loads(txt)
+        for path in (("error", "message"), ("message",), ("detail",),
+                     ("error",)):
+            cur = d
+            for k in path:
+                cur = cur.get(k) if isinstance(cur, dict) else None
+                if cur is None:
+                    break
+            if isinstance(cur, str) and cur.strip():
+                return cur.strip()[:300]
+    except Exception:
+        pass
+    return " ".join(txt.split())[:300]
+
+
+def record_provider_error(code, reason="", where="", detail=""):
     """Remember a provider-level refusal. Bounded; never raises."""
     try:
         e = {"code": int(code), "reason": str(reason)[:200],
-             "where": str(where)[:80]}
+             "where": str(where)[:80], "detail": str(detail or "")[:300]}
         _PROVIDER_ERRORS.append(e)
         del _PROVIDER_ERRORS[:-50]
     except Exception:
@@ -81,7 +114,11 @@ def provider_refusal_summary():
                403: "المزوّد رفض الطلب (مفتاح، أو رصيد، أو نموذجٌ غير متاح للحساب)",
                407: "الوسيط يطلب استيثاقاً",
                429: "تجاوزت حدّ النداءات"}.get(c, "رفضٌ من المزوّد")
-        return f"HTTP {c} — {why} ({len(errs)} نداءً مرفوضاً)"
+        _d = str(last.get("detail") or "").strip()
+        # THE PROVIDER'S OWN WORDS COME FIRST. Our guess at what a 403 means is
+        # a guess; what the endpoint wrote in the body is the answer.
+        _dt = f" — نصّ المزوّد: «{_d}»" if _d else ""
+        return f"HTTP {c} — {why}{_dt} ({len(errs)} نداءً مرفوضاً)"
     except Exception:
         return ""
 
@@ -447,8 +484,9 @@ def get_llm_fn():
                     _r0 = urllib.request.urlopen(_req, timeout=_to)
                 except urllib.error.HTTPError as _he:
                     if _he.code in PROVIDER_REFUSAL_CODES:
-                        record_provider_error(_he.code, getattr(_he, "reason", ""),
-                                              "stream")
+                        record_provider_error(
+                            _he.code, getattr(_he, "reason", ""), "stream",
+                            _error_detail(_he))
                     if _he.code not in (400, 422):
                         raise
                     _nb = _drop_reasoning_and_retry()
@@ -538,8 +576,9 @@ def get_llm_fn():
                 _resp = urllib.request.urlopen(req, timeout=_to)
             except urllib.error.HTTPError as _he:
                 if _he.code in PROVIDER_REFUSAL_CODES:
-                    record_provider_error(_he.code, getattr(_he, "reason", ""),
-                                          "call")
+                    record_provider_error(
+                        _he.code, getattr(_he, "reason", ""), "call",
+                        _error_detail(_he))
                 if _he.code not in (400, 422):
                     raise
                 _nb = _drop_reasoning_and_retry()
