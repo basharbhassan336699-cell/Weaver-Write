@@ -7839,6 +7839,21 @@ class WeaverOrchestrator:
         except Exception as e:
             mem.set_status(6, f"كشف التكرار (تخطّي: {e})")
 
+    @staticmethod
+    def _has_markdown_table(text):
+        """True when the text already contains a Markdown table: a pipe row
+        whose NEXT line is a separator. Cheap, deterministic, no model."""
+        try:
+            import re as _re
+            lines = [l.strip() for l in str(text or "").split("\n")]
+            for i in range(len(lines) - 1):
+                if lines[i].startswith("|") and lines[i].count("|") >= 3 \
+                        and _re.match(r'^\|[\s:\-|]+\|?$', lines[i + 1]):
+                    return True
+            return False
+        except Exception:
+            return False
+
     def _enrich_table_chart(self, task, card, lang, mem):
         """When the request asked for a table and/or a chart, derive them from
         the written content and attach them. A table becomes its own section; a
@@ -7859,11 +7874,39 @@ class WeaverOrchestrator:
                                 "لا محتوى مكتوب لاشتقاقه منه")
             return
         if card.get("want_table"):
+            # «أدرج جداول أينما يستدعي ذلك» ASKS FOR TABLES INSIDE THE
+            # SECTIONS — NOT FOR A CHAPTER OF ITS OWN. This step ran on the
+            # flag alone, without ever looking at whether the document already
+            # HAD tables. On a run where the writer had placed three proper
+            # tables inside the مطالب — the request already honoured — this
+            # added a fourth as a top-level section titled «جدول توضيحي»,
+            # sitting between المبحث 3 and الخاتمة: a section the user never
+            # asked for, in a structure they had specified to the مطلب. A
+            # request that is already satisfied is not an instruction to do it
+            # again somewhere else, so this now runs ONLY when the document
+            # contains no table at all — which is the one case where the ask
+            # is genuinely unmet.
+            _already = False
             try:
-                tbl = _content_to_table(self.llm_fn, content, lang)
+                _already = self._has_markdown_table(content) or any(
+                    self._has_markdown_table(s_.get("body", ""))
+                    for s_ in (task.sections or []))
+            except Exception:
+                _already = False
+            if _already:
+                mem.set_status(6, "جداول المتن تكفي — لا قسمَ جدولٍ مستقلّ")
+                self._skip_note(
+                    card, "قسم جدولٍ مستقلّ",
+                    "المتن فيه جداولُ أصلاً، والطلب «أدرج جداول أينما يستدعي» "
+                    "منفَّذٌ داخل الأقسام — فلم يُضَف قسمٌ لم يطلبه المستخدم")
+            try:
+                tbl = None if _already else _content_to_table(
+                    self.llm_fn, content, lang)
                 # pass the document so a "table" whose cells are copied out of
                 # it is recognised as a copy, not just by its row wording
-                if tbl and self._is_outline_dump(tbl, content):
+                if tbl and self._is_outline_dump(
+                        tbl, content,
+                        [s_.get("heading", "") for s_ in (task.sections or [])]):
                     tbl = None          # a summary of the paper, not a table
                     mem.set_status(6, "رُفض جدول: نسخةٌ من المتن لا بيانات")
                 if tbl and tbl.get("headers") and tbl.get("rows"):
@@ -9858,7 +9901,7 @@ class WeaverOrchestrator:
         return None
 
     @staticmethod
-    def _is_outline_dump(tbl, content=None):
+    def _is_outline_dump(tbl, content=None, headings=None):
         """True when a generated "table" is really the document re-tabulated
         rather than data. Rejecting it protects the length budget and the
         no-repetition rule at once.
@@ -9895,6 +9938,32 @@ class WeaverOrchestrator:
             if rep >= max(2, len([c for c in cells
                                   if len(c.split()) >= 12]) // 4):
                 return True
+        # (c′) THE DECISIVE ONE: the first column IS the table of contents.
+        # A seventeen-row «النقطة | التفصيل» passed every test above — its
+        # cells were paraphrases, not copies, so (b) missed; its longest cell
+        # was eighteen words, so (a) missed; and its first cells read «مفهوم
+        # الإعجاز العلمي» and «ثبوت النصّ القرآني وقطعيته», which carry none
+        # of the words in (c). But those cells were the document's OWN SECTION
+        # HEADINGS, one after another. Comparing against the real headings
+        # needs no vocabulary at all and cannot be fooled by paraphrase: a
+        # table whose left column is the outline is the outline.
+        if headings:
+            def _norm(t):
+                import re as _re
+                t = " ".join(str(t or "").split()).lower()
+                t = _re.sub(r'^[^:،]{0,18}[0-9٠-٩][0-9.٠-٩]*\s*[:،\-]\s*', '', t)
+                return _re.sub(r"[\\s،.:\\-«»\"']+", "", t)
+            hs = {_norm(h) for h in headings if str(h or "").strip()}
+            hs.discard("")
+            if hs:
+                hit = 0
+                for r in rows:
+                    f = _norm((r or [""])[0])
+                    if f and (f in hs or any(f in h or h in f for h in hs
+                                             if len(h) > 6 and len(f) > 6)):
+                        hit += 1
+                if hit >= max(2, len(rows) // 3):
+                    return True
         # (c) the original wording signal
         marks = ("المقدمة", "المبحث", "المطلب", "الخاتمة", "التوصيات",
                  "Introduction", "Section", "Conclusion")
