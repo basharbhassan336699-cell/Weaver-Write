@@ -293,7 +293,11 @@ chk("ولغةُ ما لم يفهرسه الفهرسُ تُقرأ قبل العد
     "self._source_lang(" in _src and "لغة المراجع غير المفهرسة" in _src)
 chk("والسجلُّ يُعاد بعد نموّ البِركة", "_say_langs(results)" in _src
     and _src.count("_say_langs(results)") >= 2)
-chk("واللغتان معاً: لكلٍّ حصّتُها", "_share" in _src and "for _wl in _plan" in _src)
+# صارت الحصّةُ تُحسب داخل الحلقة: `_owed` تُرتِّب ما بقي لكلّ لغةٍ في الخطّة،
+# فالسلوكُ باقٍ والتعبيرُ تغيّر — والفحصُ يلاحق السلوكَ لا الصياغة.
+chk("واللغتان معاً: لكلٍّ حصّتُها",
+    "_share" in _src and "_owed" in _src and "for w in _plan" in _src)
+chk("والناقصةُ أوّلاً", "_owed[0]" in _src)
 chk("والتعذّرُ لا يُسقط البحثَ كلَّه", "except Exception as _tue" in _src)
 
 print("\n" + "═" * 70)

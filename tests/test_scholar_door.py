@@ -117,7 +117,10 @@ chk("WEAVER_SCHOLAR=0 ⟶ لا شيء إطلاقاً",
 os.environ.pop("WEAVER_SCHOLAR")
 _src = inspect.getsource(W._academic_search)
 chk("مُستدعىً في طبقة البحث", "self._scholar_harvest(" in _src)
-chk("وبعد أن تعجز الأبواب الستّة فقط", "_n2 < _share" in _src)
+# لم يعد يُفتح بشرطٍ مكتوبٍ في الكود: صار داخل الحلقة، لا تدور إلا وثمّة
+# نقصٌ قائم (`_owed`)، والنموذجُ هو الذي يسمّي البابَ في كلّ جولة.
+chk("ولا يُفتح إلا وثمّة نقصٌ قائم", "if not _owed:" in _src)
+chk("والنموذجُ هو من يسمّي البابَ", '_v.get("door") == "scholar"' in _src)
 chk("ولا يُكرَّر ما بأيدينا", "_seen_k" in _src)
 
 print("\n" + "═" * 70)

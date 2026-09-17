@@ -4944,6 +4944,95 @@ class WeaverOrchestrator:
         return ("arab" if (c in cls._ARABIC_SCRIPT_LANGS
                            or c[:2] in cls._ARABIC_SCRIPT_LANGS) else "latin")
 
+    # ── THE LOOP. This is the root, and it is one line of openclaw ────────
+    #     openclaw/dist/agent-core-B_87jlHI.mjs:541
+    #         while (true) {
+    #           let hasMoreToolCalls = true;
+    #           while (hasMoreToolCalls || pendingMessages.length > 0) {
+    #             ...
+    #             hasMoreToolCalls = streamed.continuationRequired
+    #                  || (executedToolBatch !== void 0 && !executedToolBatch.terminate);
+    #
+    # The loop stops when the MODEL stops asking for a tool. There is no step
+    # counter and no written plan. That is the whole reason an openclaw run for
+    # «٩ مراجع عربية» came home with nine: it searched, saw three, searched
+    # again in other words, opened each page, and stopped at nine.
+    #
+    # This pipeline runs layer 4 ONCE. Search, filter, done — and whatever came
+    # back, came back, because nothing ever showed the model the result and let
+    # it decide to go again. Every fix before this one, `_top_up_language`
+    # included, was a single retry written by hand, because the architecture
+    # had no loop to put it in.
+    #
+    # openclaw carries a guard with its loop (`criticalToolLoopSeen`: "the same
+    # tool+params combination has been called excessively"), so this carries
+    # both halves: the model says when to stop, and the code refuses a repeated
+    # query and a round that added nothing.
+    _MAX_SEARCH_ROUNDS = 4
+
+    def _search_verdict(self, card, want_lang, need, have, lang, tried):
+        """Show the MODEL the gap and let it decide: stop, or go again — where.
+
+        Returns {"done": bool, "door": "api"|"scholar", "query": str,
+        "why": str} or None. Never raises."""
+        if not self.llm_fn:
+            return None
+        _name = self._REF_LANG_AR.get(want_lang, want_lang) if lang != "en" \
+            else want_lang
+        _titles = [" ".join(str(r.get("title") or "").split())[:80]
+                   for r in (have or [])[:14] if r.get("title")]
+        _prompt = (
+            (f"طُلب {need} مرجعاً بـ{_name}، والمتحصَّل الآن {len(have or [])} "
+             f"مرجعاً، منها {sum(1 for r in (have or []) if str(r.get('lang_eff') or r.get('lang') or '').startswith(want_lang))} بـ{_name}.\n\n"
+             + ("ما بأيدينا:\n" + "\n".join(f"- {t}" for t in _titles) + "\n\n"
+                if _titles else "لم نجد شيئاً بعد.\n\n")
+             + ("استعلاماتٌ جُرّبت ولا تُعاد:\n"
+                + "\n".join(f"- {q}" for q in sorted(tried)[:8]) + "\n\n"
+                if tried else "")
+             + "أمامك بابان:\n"
+               "- api: قواعدُ بياناتٍ أكاديمية (OpenAlex وCrossref وDOAJ وغيرها)\n"
+               "- scholar: صفحةُ محرّكِ بحثٍ علميّ تُقرأ كما هي، وفيها "
+               "المستودعاتُ الجامعية والمجلّاتُ التي لا تفهرسها الأولى\n\n"
+               "هل نكتفي بما وجدنا، أم نبحث مرّةً أخرى؟ وإن بحثنا: بأيّ بابٍ "
+               "وبأيّ استعلام؟ اكتب استعلاماً جديداً لم يُجرَّب.\n\n"
+               '{"done": true/false, "door": "api"|"scholar", '
+               '"query": "…", "why": "…"}'
+             if lang != "en" else
+             f"{need} references were asked for in {want_lang}; "
+             f"{len(have or [])} are in hand.\n\n"
+             + ("Held:\n" + "\n".join(f"- {t}" for t in _titles) + "\n\n"
+                if _titles else "Nothing found yet.\n\n")
+             + ("Already tried, do not repeat:\n"
+                + "\n".join(f"- {q}" for q in sorted(tried)[:8]) + "\n\n"
+                if tried else "")
+             + "Two doors:\n- api: scholarly databases\n"
+               "- scholar: a scholarly search PAGE, read as it stands\n\n"
+               "Stop with what we have, or search again? If again: which door "
+               "and which query? Write a query not yet tried.\n\n"
+               '{"done": true/false, "door": "api"|"scholar", '
+               '"query": "…", "why": "…"}'))
+        try:
+            _raw = self.llm_fn(_prompt,
+                               system=getattr(self, "system_main", None),
+                               temperature=0.2, max_tokens=300) or ""
+            try:
+                from core.llm import extract_json
+                _d = extract_json(_raw)
+            except Exception:
+                import json as _j, re as _re
+                _m = _re.search(r"\{.*\}", str(_raw), _re.S)
+                _d = _j.loads(_m.group(0)) if _m else None
+            if not isinstance(_d, dict):
+                return None
+            _q = " ".join(str(_d.get("query") or "").split())[:160]
+            _door = str(_d.get("door") or "").strip().lower()
+            return {"done": self._tri_opt(_d.get("done")) is True,
+                    "door": _door if _door in ("api", "scholar") else "api",
+                    "query": _q,
+                    "why": " ".join(str(_d.get("why") or "").split())[:140]}
+        except Exception:
+            return None
+
     # THE DOOR THE SIX APIs DO NOT OPEN.
     # Measured, not supposed: an openclaw run for «٩ مراجع عربية» on the same
     # kind of topic came back with nine real Arabic works — and every one of
@@ -5130,7 +5219,7 @@ class WeaverOrchestrator:
             return set()
 
     def _top_up_language(self, results, card, want_lang, shortfall,
-                         query, lang, mem=None):
+                         query, lang, mem=None, queries=None):
         """The harvest came up short in the requested language — GO BACK FOR IT.
 
         Ordering can only rank what was already found. A request for «٩ مراجع
@@ -5200,9 +5289,14 @@ class WeaverOrchestrator:
                "that literature itself uses, not a literal translation from "
                "another language. One short line each.\n\n"
                'Return JSON only: {"queries": ["…", "…"]}'))
-        _qs = []
+        # the LOOP above may already have the model's query for this round;
+        # asking it a second time for the same thing is a wasted call.
+        _qs = [" ".join(str(x).split())[:160] for x in (queries or [])
+               if len(" ".join(str(x).split())) >= 3][:3]
         _why = ""
         try:
+            if _qs:
+                raise StopIteration
             _raw = self.llm_fn(_prompt,
                                system=getattr(self, "system_main", None),
                                temperature=0.2, max_tokens=300) or ""
@@ -5220,6 +5314,8 @@ class WeaverOrchestrator:
                     _x = " ".join(str(_x or "").split())
                     if len(_x) >= 3 and _x not in _qs:
                         _qs.append(_x[:160])
+        except StopIteration:
+            pass
         except Exception as _e:
             _why = f"{type(_e).__name__}: {str(_e)[:60]}"
         if not _qs:
@@ -5965,44 +6061,76 @@ class WeaverOrchestrator:
                     _share = (max(1, int(_req_n) // len(_plan))
                               if len(_plan) >= 2 else int(_req_n))
                     _grew = False
-                    for _wl in _plan:
-                        if not self.llm_fn:
+                    _tried, _rounds = set(), 0
+                    _max_r = self._as_int(
+                        os.environ.get("WEAVER_SEARCH_ROUNDS"),
+                        self._MAX_SEARCH_ROUNDS) or self._MAX_SEARCH_ROUNDS
+                    # ── THE LOOP (openclaw agent-core:541) ────────────────
+                    # The model looks at what came back and decides whether to
+                    # go again and through which door. It stops when IT says
+                    # stop — not after a number of steps somebody wrote here.
+                    # The two code guards are openclaw's own: never the same
+                    # query twice, and a round that adds nothing ends it.
+                    while self.llm_fn and _rounds < _max_r:
+                        _rounds += 1
+                        _owed = [(w, _share - _n_lang(results, w))
+                                 for w in _plan
+                                 if _n_lang(results, w) < _share]
+                        if not _owed:
                             break
-                        _n_in = _n_lang(results, _wl)
-                        if _n_in >= _share:
-                            continue
-                        _added = self._top_up_language(
-                            results, card, _wl, _share - _n_in, query, lang,
-                            mem)
-                        if _added:
-                            for _a2 in _added:
-                                _a2.setdefault("lang_eff", _wl)
-                            results = _wr.order_by_quality(results + _added)
-                            _grew = True
-                        # AND IF THE SIX DOORS ARE STILL SHORT, THE SEVENTH.
-                        # The APIs can only hand over what they index, and the
-                        # Arabic literature largely is not in them. This reads
-                        # a scholarly SEARCH PAGE instead — the door openclaw
-                        # actually used for all nine of its Arabic works.
-                        _n2 = _n_lang(results, _wl)
-                        if _n2 < _share:
-                            _sch = await self._scholar_harvest(
-                                _q or query, _wl, _share - _n2, card, lang)
-                            _seen_k = set()
-                            for _r3 in results:
-                                _seen_k |= self._source_keys(_r3)
-                            _new3 = []
-                            for _r4 in (_sch or []):
-                                _k4 = self._source_keys(_r4)
-                                if not _k4 or (_k4 & _seen_k):
-                                    continue
-                                _seen_k |= _k4
-                                _r4["lang_eff"] = _wl
-                                _new3.append(_r4)
-                            if _new3:
-                                results = _wr.order_by_quality(
-                                    results + _new3)
-                                _grew = True
+                        _wl, _gap_n = _owed[0]
+                        _v = self._search_verdict(
+                            card, _wl, _share, results, lang, _tried)
+                        if _v is None or _v.get("done"):
+                            if _v is not None:
+                                self._record_decision(
+                                    card, "قرار إعادة البحث",
+                                    f"توقّف بعد {_rounds - 1} جولة"
+                                    + (f" — {_v.get('why')}" if _v.get("why")
+                                       else ""), "model", "بحث أكاديمي")
+                            break
+                        _q3 = _v.get("query") or ""
+                        if _q3 and _q3 in _tried:
+                            break          # openclaw's repeat guard
+                        if _q3:
+                            _tried.add(_q3)
+                        mem.set_status(
+                            4, f"جولة بحثٍ {_rounds}/{_max_r} "
+                               f"({_v.get('door')}) — {_n_lang(results, _wl)}"
+                               f"/{_share} بـ{_wl}")
+                        _new = []
+                        if _v.get("door") == "scholar":
+                            _new = await self._scholar_harvest(
+                                _q3 or _q or query, _wl, _gap_n, card,
+                                lang) or []
+                        else:
+                            _new = self._top_up_language(
+                                results, card, _wl, _gap_n, _q3 or query,
+                                lang, mem, queries=[_q3] if _q3 else None) or []
+                        _seen_k = set()
+                        for _r3 in results:
+                            _seen_k |= self._source_keys(_r3)
+                        _add = []
+                        for _r4 in _new:
+                            _k4 = self._source_keys(_r4)
+                            if not _k4 or (_k4 & _seen_k):
+                                continue
+                            _seen_k |= _k4
+                            _r4["lang_eff"] = _r4.get("lang_eff") or _wl
+                            _add.append(_r4)
+                        if not _add:
+                            self._record_decision(
+                                card, "قرار إعادة البحث",
+                                f"{_rounds} جولةً، وآخرُها لم تُضِف جديداً",
+                                "measured", "بحث أكاديمي")
+                            break       # a round that added nothing ends it
+                        results = _wr.order_by_quality(results + _add)
+                        _grew = True
+                        self._record_decision(
+                            card, "جولات البحث",
+                            f"{_rounds} جولةً ⟶ +{len(_add)} مرجعاً "
+                            f"(آخرُها: {_v.get('door')})", "model",
+                            "بحث أكاديمي")
                     if _grew:
                         results = _order_langs(results)
                         _say_langs(results)   # the ledger states the NEW count
