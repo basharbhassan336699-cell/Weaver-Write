@@ -168,25 +168,116 @@ class CapabilityRegistry:
     def get_library(self, name: str) -> Optional[LibraryEntry]:
         return self.libraries.get(name)
 
-    # ── Matching (same principle as Claude) ──────────────────
+    # ── Selection: the MODEL reads the catalogue, the code does not match ──
+    #
+    # These two functions used to decide every capability by substring: a tool
+    # was chosen when one of its trigger phrases appeared literally in the
+    # request. That is the root of a month of failures — «جدول» never matching
+    # «جداول», «بحثاً كاملاً» never matching «بحثاً بالكامل», «بالعربي» matching
+    # inside «بالعربية» — and it can never be finished, because a phrase list
+    # only ever holds the phrasings somebody already thought of.
+    #
+    # Measured on the openclaw package (10,616 files): it carries ZERO intent
+    # classifiers — no classifyIntent, no detectIntent, no intentRouter — and
+    # its skill catalogue ships one instruction to the model:
+    #     "Read a skill's file at its listed location when the task
+    #      matches its description."
+    # The MODEL matches. The code only prints the catalogue and executes what
+    # comes back. That is the whole difference.
+    #
+    # `catalogue()` prints it. `select()` asks the model. The substring pass
+    # survives underneath as `match_*_by_trigger` — the SILENT FALLBACK for
+    # when there is no model or its reply is unusable, never the ruler.
 
+    def catalogue(self, layer: Optional[int] = None, lang: str = "ar") -> str:
+        """The capability catalogue, as the model reads it. Name + one line."""
+        lines = []
+        tools = [t for t in self.tools.values()
+                 if layer is None or layer in (t.layers or [])]
+        if tools:
+            lines.append("الأدوات المتاحة:" if lang != "en"
+                         else "Available tools:")
+            for t in sorted(tools, key=lambda x: x.name):
+                lines.append(f"- {t.name}: {(t.description or '')[:160]}")
+        if self.skills:
+            lines.append("")
+            lines.append("المهارات المتاحة:" if lang != "en"
+                         else "Available skills:")
+            for s in sorted(self.skills.values(), key=lambda x: x.name):
+                lines.append(f"- {s.name}: {(s.description or '')[:160]}")
+        return "\n".join(lines)
+
+    def select(self, task_text: str, llm_fn=None, layer: Optional[int] = None,
+               lang: str = "ar", system=None):
+        """Ask the MODEL which tools and skills this task needs.
+
+        Returns (tools, skills, how) where `how` is "model" or "fallback".
+        Any failure — no model, bad JSON, unknown names — falls back to the
+        substring pass, so behaviour is never worse than it was."""
+        names_t = {t.name for t in self.tools.values()}
+        names_s = {s.name for s in self.skills.values()}
+        if llm_fn:
+            try:
+                cat = self.catalogue(layer, lang)
+                prompt = (
+                    ("اقرأ طلب المستخدم، واختر من الكتالوج أدناه ما يحتاجه "
+                     "فعلاً — بما تفهمه من الطلب، لا بمطابقة كلمات. اترك "
+                     "القائمة فارغة إن لم يلزم شيء.\n\n"
+                     f"طلب المستخدم:\n«{str(task_text or '')[:1500]}»\n\n"
+                     f"{cat}\n\n"
+                     'أعِد JSON فقط: {"tools":["..."],"skills":["..."]}'
+                     if lang != "en" else
+                     "Read the user's request and choose, from the catalogue "
+                     "below, what it genuinely needs — by what the request "
+                     "MEANS, not by matching words. Return empty lists if "
+                     "nothing is needed.\n\n"
+                     f"User's request:\n\"{str(task_text or '')[:1500]}\"\n\n"
+                     f"{cat}\n\n"
+                     'Return JSON only: {"tools":["..."],"skills":["..."]}'))
+                raw = llm_fn(prompt, system=system, temperature=0.1,
+                             max_tokens=700) or ""
+                data = None
+                try:
+                    from core.llm import extract_json
+                    data = extract_json(raw)
+                except Exception:
+                    import json as _j
+                    import re as _re
+                    m = _re.search(r"\{.*\}", str(raw), _re.S)
+                    if m:
+                        data = _j.loads(m.group(0))
+                if isinstance(data, dict):
+                    tw = [self.tools[n] for n in (data.get("tools") or [])
+                          if isinstance(n, str) and n in names_t]
+                    sk = [self.skills[n] for n in (data.get("skills") or [])
+                          if isinstance(n, str) and n in names_s]
+                    if tw or sk:
+                        return tw, sk, "model"
+            except Exception:
+                pass
+        return (self.match_tools_by_trigger(task_text),
+                self.match_skills_by_trigger(task_text), "fallback")
+
+    def match_tools_by_trigger(self, task_text: str) -> list[ToolEntry]:
+        """SILENT FALLBACK ONLY — substring match, kept for when no model is
+        reachable. It is no longer the thing that decides."""
+        task_lower = (task_text or "").lower()
+        return [t for t in self.tools.values()
+                if any(x.lower() in task_lower for x in t.triggers)]
+
+    def match_skills_by_trigger(self, task_text: str) -> list[SkillEntry]:
+        """SILENT FALLBACK ONLY — see match_tools_by_trigger."""
+        task_lower = (task_text or "").lower()
+        return [s for s in self.skills.values()
+                if any(x.lower() in task_lower for x in s.triggers)]
+
+    # backward-compatible aliases: every existing caller keeps working, and
+    # keeps getting exactly what it got before, until it is moved to select()
     def match_tools(self, task_text: str) -> list[ToolEntry]:
-        """Match the task text against tool descriptions/triggers."""
-        task_lower = task_text.lower()
-        matched = []
-        for tool in self.tools.values():
-            if any(t.lower() in task_lower for t in tool.triggers):
-                matched.append(tool)
-        return matched
+        return self.match_tools_by_trigger(task_text)
 
     def match_skills(self, task_text: str) -> list[SkillEntry]:
-        """Match the task text against skill triggers."""
-        task_lower = task_text.lower()
-        matched = []
-        for skill in self.skills.values():
-            if any(t.lower() in task_lower for t in skill.triggers):
-                matched.append(skill)
-        return matched
+        return self.match_skills_by_trigger(task_text)
 
     def tools_for_layer(self, layer: int) -> list[ToolEntry]:
         """Return every tool available to a given layer."""

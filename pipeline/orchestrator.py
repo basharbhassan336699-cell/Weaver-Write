@@ -2619,8 +2619,37 @@ class WeaverOrchestrator:
                f"{self._strip_injected_memory(task.description)} " \
                f"{card.get('task_type','')} {' '.join(str(x) for x in of)}"
         if self.caps:
-            task.tools = [t.name for t in self.caps.match_tools(text)]
-            task.skills = [s.name for s in self.caps.match_skills(text)]
+            # THE MODEL READS THE CATALOGUE — the code no longer matches words.
+            # Until now every capability was chosen by substring: a tool fired
+            # when one of its trigger phrases appeared literally in the request.
+            # That single mechanism produced a month of failures — «جدول» never
+            # matching «جداول», «بحثاً كاملاً» never matching «بحثاً بالكامل» —
+            # and it can never be finished, because a phrase list only holds the
+            # phrasings someone already thought of. Measured on the openclaw
+            # package: zero intent classifiers, and its catalogue carries one
+            # instruction — "when the task matches its description" — addressed
+            # to the MODEL. So the catalogue is printed and the model chooses;
+            # the substring pass stays underneath as the silent fallback for
+            # when no model is reachable, never as the ruler.
+            try:
+                _tw, _sk, _how = self.caps.select(
+                    text, llm_fn=self.llm_fn, lang=card.get("language", "ar"),
+                    system=getattr(self, "system_main", None))
+            except Exception:
+                _tw, _sk, _how = (self.caps.match_tools(text),
+                                  self.caps.match_skills(text), "fallback")
+            task.tools = [t.name for t in _tw]
+            task.skills = [s.name for s in _sk]
+            try:
+                card["capability_source"] = _how
+                self._record_decision(
+                    card, "اختيار الأدوات والمهارات",
+                    f"{len(task.tools)} أداة، {len(task.skills)} مهارة",
+                    "model" if _how == "model" else "fallback",
+                    "كتالوجٌ يقرأه النموذج" if _how == "model"
+                    else "مطابقةٌ احتياطية — تعذّر النموذج")
+            except Exception:
+                pass
         else:
             task.tools, task.skills = [], []
         # Recency: the model now reports whether the answer changes with time.
