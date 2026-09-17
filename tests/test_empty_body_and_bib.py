@@ -258,7 +258,13 @@ chk(f"36 تقسيماً مقترحاً ⟶ {len(_out) - len(_plan)} بميزان
     len(_out) <= 20, f"{len(_out)} قسماً، 3000÷{len(_out)}="
                      f"{3000 // max(1, len(_out))} كلمة/قسم")
 chk("ولا قسمَ دون 150 كلمة", 3000 // max(1, len(_out)) >= 150)
-chk("والمحذوف مُحصىً لا مرميّ", _f._deep_trimmed == 31, str(_f._deep_trimmed))
+# كان التوقّعُ 31 محذوفاً (٥ تبقى، واحدٌ لكلّ مطلب) — ثم بيّن تشغيلٌ لاحقٌ أن
+# «واحداً لكلّ مطلب» قسمةٌ على واحد، وهي ليست قسمة. فصارت القاعدة «اثنان أو
+# صفر»: ٥ أماكنَ لا تكفي اثنين لكلّ مطلبٍ من تسعة، فلا يأخذ أحد — وبنيةٌ
+# متّسقةٌ من ٩ مطالبَ كاملةٍ خيرٌ من خمسةٍ مبتورةٍ وأربعةٍ عارية.
+chk("والمحذوف مُحصىً لا مرميّ", _f._deep_trimmed == 36, str(_f._deep_trimmed))
+_lv3 = [x for x in _out if int(x.get("level", 1)) == 3]
+chk("ولا مطلبَ بتقسيمٍ واحد", not _lv3 or len(_lv3) >= 2, str(len(_lv3)))
 
 _f2 = _Deep(_subs)
 _out2 = _f2._deepen_structure(_plan, "طلب", "موضوع", "تقسيم", "ar",
@@ -272,10 +278,19 @@ chk("وبلا ميزانيةٍ مُعلَنة ⟶ السلوك القديم كم
     len(_out3) - len(_plan) == 36)
 
 # التوزيع عادل: لا يُجوَّع قسمٌ ويُشبَع آخر
-_lv3 = [s for s in _out if int(s.get("level", 1)) == 3]
-_owner = set(t["title"].split("-")[0] for t in _lv3)
-chk(f"والقصاصُ بالتناوب: {len(_lv3)} تقسيماً على {len(_owner)} مطلباً مختلفاً",
-    len(_owner) == len(_lv3), " ".join(sorted(_owner)))
+# والقصاصُ بالتناوب يظهر عند ميزانيةٍ تتّسع لاثنين فأكثر
+_f4 = _Deep(_subs)
+_o4 = _f4._deepen_structure(_plan, "طلب", "موضوع", "تقسيم", "ar",
+                            budget_words=5400)
+_cnt, _cur = {}, None
+for _s4 in _o4:
+    _l4 = int(_s4.get("level", 1))
+    if _l4 == 2:
+        _cur = _s4["title"]; _cnt.setdefault(_cur, 0)
+    elif _l4 == 3 and _cur:
+        _cnt[_cur] += 1
+chk(f"ميزانية 5400 ⟶ توزيعٌ عادلٌ بلا يتيم: {sorted(_cnt.values())}",
+    all(v >= 2 for v in _cnt.values()) and len(_cnt) == 9)
 
 _src6b = inspect.getsource(W._layer_6)
 chk("والتقدّم يُعلَن قسماً قسماً بدل دوّارةٍ صامتة", "القسم {_si + 1} من" in _src6b)

@@ -1195,6 +1195,38 @@ class WeaverOrchestrator:
                         _depth += 1
                     _trimmed = _total - sum(len(v) for v in _keep.values())
                     by_idx = {i_: v for i_, v in _keep.items() if v}
+            # A DIVISION INTO ONE PART IS NOT A DIVISION. The round-robin trim
+            # above hands one subdivision to each subsection in turn, so with
+            # room for five across nine مطالب the first five each got exactly
+            # ONE — a section with a single child, and four subsections with
+            # none: a structure that is neither divided nor undivided. This
+            # defect was introduced BY the budget fix, and it is the budget
+            # fix's to correct: a subsection keeps its subdivisions only if it
+            # has at least two, and the places freed go back to the ones that
+            # can use them.
+            _MIN_PARTS = 2
+            if _room is not None:
+                _keep2, _freed = {}, 0
+                for i_ in sorted(by_idx):
+                    if len(by_idx[i_]) >= _MIN_PARTS:
+                        _keep2[i_] = by_idx[i_]
+                    else:
+                        _freed += len(by_idx[i_])
+                        _trimmed += len(by_idx[i_])
+                # give the freed places to subsections still holding a proposal
+                if _freed and _keep2:
+                    _pool = {i_: v for i_, v in by_idx.items()
+                             if i_ not in _keep2 or len(_keep2.get(i_, [])) < 4}
+                    for i_ in sorted(_keep2):
+                        if _freed <= 0:
+                            break
+                        _extra = [t for t in by_idx.get(i_, [])
+                                  if t not in _keep2[i_]][:_freed]
+                        if _extra:
+                            _keep2[i_] = _keep2[i_] + _extra
+                            _freed -= len(_extra)
+                            _trimmed -= len(_extra)
+                by_idx = _keep2
             self._deep_trimmed = _trimmed
             out, seen_parent = [], 0
             for s in sections_plan:
@@ -6448,6 +6480,29 @@ class WeaverOrchestrator:
             if not total:
                 return {}
             total = int(total)
+            # THE GENERATED PARTS COST PAGES AND WERE GIVEN ZERO WORDS. The
+            # plan hands the references list nothing — correctly, nobody writes
+            # it — and then the length check counts it against the prose budget
+            # all the same: a body of 3,645 words sat AT its 3,600 ceiling while
+            # the document measured 4,114 (≈13.7 pages) because nine APA
+            # entries, a cover and a contents page add ~470 words nobody
+            # budgeted. The system was holding itself to a total it had not
+            # planned. Reserve their real cost first, and divide what is left.
+            try:
+                _n_refs = len([x for x in (card.get("sources") or [])
+                               if isinstance(x, dict)])
+                _reserve = 0
+                if _n_refs:
+                    _reserve += min(_n_refs, 60) * 28      # ~28 words an entry
+                if card.get("cover"):
+                    _reserve += 40
+                if card.get("toc"):
+                    _reserve += 80
+                if _reserve:
+                    total = max(int(total * 0.55), total - _reserve)
+                    card["length_reserved"] = _reserve
+            except Exception:
+                pass
             secs = [s for s in (sections_plan or []) if isinstance(s, dict)]
             if not secs:
                 return {}
@@ -9676,6 +9731,63 @@ class WeaverOrchestrator:
         except Exception:
             return ""
 
+    def _note_refs_language(self, card, body, lang="ar"):
+        """Say, by count, whether the printed list is in the language asked
+        for — and say plainly when it is not. Never raises."""
+        try:
+            want = [x for x in ((card or {}).get("refs_lang_plan") or [])
+                    if x in ("ar", "en")]
+            ar, en, total = self._printed_refs_language(body)
+            if not total:
+                return
+            card["refs_printed_ar"], card["refs_printed_en"] = ar, en
+            if not want or len(want) > 1:
+                self._record_decision(
+                    card, "لغة المراجع المطبوعة",
+                    f"عربية {ar}، إنجليزية {en} — من {total}", "measured",
+                    "عدٌّ للمدخلات المطبوعة")
+                return
+            hit = ar if want[0] == "ar" else en
+            self._record_decision(
+                card, "لغة المراجع المطبوعة",
+                f"{hit} من {total} باللغة المطلوبة", "measured",
+                "عدٌّ للمدخلات المطبوعة")
+            if hit < total:
+                self._skip_note(
+                    card, "لغة المراجع",
+                    f"طُلبت المراجع بلغةٍ واحدة، والمطبوع منها {hit} من "
+                    f"{total} — ولم تُوجد بدائلُ محكّمةٌ كافية بتلك اللغة؛ "
+                    "والباقي أُبقي لأنّ قائمةً ناقصةً أسوأ من قائمةٍ مختلطة")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _printed_refs_language(body):
+        """Count the printed entries by SCRIPT — Arabic vs Latin.
+
+        «9 مراجع عربية» came back with four entries typeset in Latin. The
+        language rule steered the SEARCH (`refs_lang=ar`) and nothing ever
+        looked at what was finally PRINTED — so the request was recorded as
+        honoured while the page said otherwise. What the reader sees is the
+        only thing that can be checked: the entries themselves, counted.
+
+        Returns (ar, en, total). Never raises."""
+        try:
+            import re as _re
+            ar = en = 0
+            for line in str(body or "").split("\n"):
+                t = line.strip()
+                if not _re.match(r"^\d{1,3}[.)]\s+\S", t):
+                    continue
+                t = _re.sub(r"https?://\S+", " ", t)
+                a = len(_re.findall(r"[\u0621-\u064a]", t))
+                l = len(_re.findall(r"[A-Za-z]", t))
+                if a or l:
+                    (ar, en) = (ar + 1, en) if a >= l else (ar, en + 1)
+            return ar, en, ar + en
+        except Exception:
+            return 0, 0, 0
+
     @staticmethod
     def _requested_source_count(card):
         """How many references the user asked for — None when unstated.
@@ -9736,10 +9848,32 @@ class WeaverOrchestrator:
                 head = (k.split("،")[0].split(",")[0] or "").strip()
                 return bool(head) and len(head) > 2 and head in txt
 
+            # THE LANGUAGE THE USER ASKED FOR IS PART OF THE RANKING, not an
+            # afterthought: when nine of twenty-eight must be dropped, the ones
+            # that match the requested language are the ones to keep.
+            _want = [x for x in ((card or {}).get("refs_lang_plan") or [])
+                     if x in ("ar", "en")]
+
+            def _lang_ok(s_):
+                if not _want:
+                    return 0
+                try:
+                    import re as _re_l
+                    t = " ".join(str(s_.get(f) or "") for f in
+                                 ("title", "venue", "journal", "author"))
+                    t += " ".join(str(x) for x in (s_.get("authors") or []))
+                    a = len(_re_l.findall(r"[\u0621-\u064a]", t))
+                    l = len(_re_l.findall(r"[A-Za-z]", t))
+                    got = "ar" if a >= l else "en"
+                    return 1 if got in _want else 0
+                except Exception:
+                    return 0
+
             def _rank(s_):
                 v = str(s_.get("verify_state") or "").lower()
                 return (
                     1 if _cited(s_) else 0,
+                    _lang_ok(s_),
                     1 if v in ("verified", "registry") else 0,
                     (wr.quality_tier(s_) if wr else 0),
                     1 if s_.get("doi") else 0,
@@ -9965,6 +10099,7 @@ class WeaverOrchestrator:
             _ghead, _gbody = _grp
             task.sections = [x for x in (task.sections or [])
                              if not self._is_ref_heading(x.get("heading", ""))]
+            self._note_refs_language(card, _gbody, lang)
             task.sections.append({"heading": _ghead, "body": _gbody,
                                   "level": 1})
             # Rebuild the chat draft FROM the sections. Appending to the old
@@ -9997,6 +10132,7 @@ class WeaverOrchestrator:
         # drop any earlier placeholder references section, then append the real one
         task.sections = [s for s in (task.sections or [])
                          if not self._is_ref_heading(s.get("heading", ""))]
+        self._note_refs_language(card, refs, lang)
         task.sections.append({"heading": head, "body": refs})
         # rebuild the chat draft from the sections (see note above) so the web
         # view and the exported document never diverge.
