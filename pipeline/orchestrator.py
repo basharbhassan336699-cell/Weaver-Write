@@ -8867,6 +8867,50 @@ class WeaverOrchestrator:
                 "image": {"path": chart_png, "caption": card.get("topic", "")}}]
             card["chart_path"] = chart_png
 
+        # ── THE MODEL BUILDS THE FILE ITSELF — WHEN THE USER HAS ALLOWED IT ──
+        # Everything below this point is a builder written before the request
+        # existed, so the ceiling of any document is whatever its author
+        # thought of: «اجعل التصميم احترافياً» has no hand to carry it out, a
+        # numbering template nobody coded falls on the floor, and each new
+        # format needs another file of mine — which is the patch-by-patch loop
+        # the user has been stuck in. Measured on the openclaw package (65MB,
+        # 10,616 files): no pptx skill, no xlsx skill, no references skill —
+        # zero by word-boundary search — and it produces all of them, because
+        # the model holds `exec`, writes the script, reads its own error and
+        # fixes it. The model's real strength is that it programs; with no hand
+        # it cannot use it.
+        #
+        # The switch stays in the USER'S hand, and the cost stays at zero until
+        # they flip it: with WEAVER_EXEC unset nothing here runs and the model
+        # is never even called, so no one pays for a feature they did not ask
+        # for. When it IS set, the script is written to disk beside the output
+        # BEFORE it runs — nothing executes here that the user cannot open and
+        # read — and any failure falls straight through to the builders below,
+        # which behave exactly as they do today.
+        try:
+            from capabilities.tools.tool_exec_python import exec_enabled
+            if exec_enabled() and self.llm_fn:
+                from pipeline.model_build import build_with_model
+                _mb = build_with_model(
+                    self.llm_fn, sections, card, lang,
+                    os.path.join(out_dir, safe + "." + (fmt or "docx")),
+                    request_text=self._current_request(task.description),
+                    system=getattr(self, "system_main", None))
+                if _mb.get("script"):
+                    card["build_script"] = _mb["script"]
+                if _mb.get("ok") and _mb.get("path"):
+                    card["built_by_model"] = _mb.get("attempts", 1)
+                    return _mb["path"]
+                if _mb.get("reason"):
+                    self._skip_note(
+                        card, "بناء الملفّ بالنموذج",
+                        f"لم ينجح ({str(_mb['reason'])[:120]}) — "
+                        "فبُني بالمُصدِّر المعتاد"
+                        + (f"، والسكربت محفوظ: {_mb['script']}"
+                           if _mb.get("script") else ""))
+        except Exception:
+            pass
+
         try:
             if fmt == "docx":
                 out = os.path.join(out_dir, safe + ".docx")

@@ -171,6 +171,20 @@ chk("``` … ```", _strip_code_fence("```\ny = 2\n```") == "y = 2")
 chk("وبلا سياج", _strip_code_fence("z = 3") == "z = 3")
 
 print("\n" + "═" * 70)
+print(" ٧) والمسار يستدعيه — مشروطاً بإذن المستخدم")
+print("═" * 70)
+import inspect
+from pipeline.orchestrator import WeaverOrchestrator as _W
+_src = inspect.getsource(_W._export)
+chk("النداء داخل _export", "build_with_model" in _src)
+chk("مشروطٌ بـexec_enabled — فبلا إذنٍ لا نموذجَ يُنادى ولا كلفة",
+    "exec_enabled()" in _src)
+chk("ويسبق المُصدِّر المعتاد، فالفشلُ يسقط إليه",
+    _src.index("build_with_model") < _src.index('if fmt == "docx"'))
+chk("ومسارُ السكربت يُحفظ على البطاقة", "build_script" in _src)
+chk("والإخفاق يُسجَّل للمستخدم", "بُني بالمُصدِّر المعتاد" in _src)
+
+print("\n" + "═" * 70)
 print(" النتيجة: " + ("PASS ✅" if ok else "FAIL ❌"))
 print("═" * 70)
 sys.exit(0 if ok else 1)
