@@ -1,172 +1,322 @@
 # -*- coding: utf-8 -*-
-"""الأدواتُ التي تُعطى لحلقة الوكيل — هي عينُها التي استعملها أوبن كلاو.
+"""الأدواتُ الأساسيةُ لأوبن كلاو — منقولةٌ بأسمائها من سجلّها الرسميّ.
 
-في تشغيلِ أوبن كلاو الذي عاد بتسعةِ مراجعَ عربيةٍ حقيقية، كانت الأدواتُ:
-    web_fetch  ⟶ Google Scholar بالعربية، ثمّ صفحةُ كلِّ مرجعٍ للتحقّق
-    exec       ⟶ OpenAlex API بـPython
-    exec       ⟶ Crossref API بـcurl
-ولا أداةَ اسمُها «ابحث عن مراجع». أدواتٌ عامّة، والنموذجُ يركّبها.
+السجلّ: openclaw/dist/core-tool-factory-descriptors-DvHWmRcY.mjs
+أربعٌ وخمسون أداةً في ثلاث عائلات:
 
-فهذه أربعُ أدواتٍ عامّةٍ مبنيّةٌ على ما في المشروع أصلاً:
-    web_fetch        ← `_extract_full` (تمرّ على UniWeb/curl_impersonate)
-    scholarly_api    ← الدوالُّ الستُّ الموجودة
-    run_python       ← `tool_exec_python` (مطفأةٌ ما لم يُؤذَن لها)
-    finish           ← لا شيء؛ وجودُها في الكتالوج يُعلِم النموذجَ كيف يقف
+    [base-coding]  read، write، edit، ls
+    [shell]        exec، apply_patch، process
+    [openclaw]     web_search، web_fetch، ask_user، view_image، pdf،
+                   structured_output … و٤٠ أخرى خاصّةٌ بمنصّته (sessions،
+                   gateway، github، tts، music، mobile_ui) لا معنى لها هنا.
 
-ولا واحدةٌ منها تعرف شيئاً عن «المراجع العربية». النموذجُ هو الذي يعرف."""
+فالمنقولُ هو العائلتان الأُوليان كاملتين، ومن الثالثة ما هو عامٌّ فعلاً.
+وهذه هي كلُّ عُدّة أوبن كلاو حين يُسأل أيَّ سؤال: لا أداةَ «ابحث عن مراجع»
+ولا أداةَ «اكتب بحثاً». أدواتٌ عامّة، والنموذجُ يُركّبها كيف شاء.
 
+    core-tool-factory-descriptors-DvHWmRcY.mjs:236
+      "Core coding primitives (file + shell families). Tool-search compaction
+       keeps these directly visible: hiding them behind search adds a lookup
+       round-trip to nearly every coding turn."
+
+وكلُّ أداةٍ هنا تُعيد نصّاً، وخطؤها يعود إلى النموذج نتيجةً لا انهياراً."""
+
+import os
 import json
 
+MAX_READ = 120000
 
-def _tool(cls):
+
+def _err(msg):
+    return "error: " + str(msg)
+
+
+def _safe_path(path):
+    p = os.path.abspath(os.path.expanduser(str(path or "")))
+    return p
+
+
+# ── عائلة base-coding ────────────────────────────────────────────────────
+def make_read():
     from pipeline.agent_loop import Tool
-    return Tool
 
-
-def make_web_fetch(orch, loop=None):
-    """افتح صفحةً واقرأ نصَّها. هذه هي `web_fetch` عند أوبن كلاو."""
-    from pipeline.agent_loop import Tool
-
-    def _run(args):
-        url = str((args or {}).get("url") or "").strip()
-        if not url.startswith("http"):
-            return "error: url must start with http"
-        import asyncio
+    def _run(a):
+        p = _safe_path(a.get("path"))
+        if not os.path.isfile(p):
+            return _err(f"not a file: {p}")
         try:
-            _l = loop or asyncio.get_event_loop()
-            txt = _l.run_until_complete(orch._extract_full(url)) \
-                if not _l.is_running() else None
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
         except Exception as e:
-            return f"error: {type(e).__name__}: {str(e)[:120]}"
-        if txt is None:
-            return ("error: page could not be read (blocked, or an async "
-                    "context already running)")
-        txt = str(txt)
-        n = int((args or {}).get("max_chars") or 8000)
-        return txt[:max(500, min(n, 20000))] or "error: empty page"
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
+        off = max(0, int(a.get("offset") or 0))
+        lim = int(a.get("limit") or 2000)
+        sel = lines[off:off + max(1, min(lim, 4000))]
+        out = "".join(f"{off + i + 1}\t{l}" for i, l in enumerate(sel))
+        return out[:MAX_READ] or "(empty file)"
 
-    return Tool(
-        name="web_fetch",
-        description=("افتح رابطاً واقرأ نصَّ الصفحة كاملاً (يتجاوز حجبَ "
-                     "الآليّات ببصمة متصفّح حقيقيّ). استعمله لصفحات البحث "
-                     "العلمي، ولمستودعات الجامعات، وللتحقّق من وجود مرجعٍ "
-                     "بفتح صفحته."),
-        parameters={"type": "object", "properties": {
-            "url": {"type": "string", "description": "الرابط الكامل"},
-            "max_chars": {"type": "integer",
-                          "description": "أقصى عددِ حروفٍ يُعاد (افتراضياً 8000)"}},
-            "required": ["url"]},
-        execute=_run)
+    return Tool("read",
+                "اقرأ ملفّاً من القرص. يُعيد السطورَ مرقّمة.",
+                {"type": "object", "properties": {
+                    "path": {"type": "string"},
+                    "offset": {"type": "integer"},
+                    "limit": {"type": "integer"}}, "required": ["path"]},
+                _run)
+
+
+def make_write():
+    from pipeline.agent_loop import Tool
+
+    def _run(a):
+        p = _safe_path(a.get("path"))
+        content = a.get("content")
+        if content is None:
+            return _err("content is required")
+        try:
+            os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(str(content))
+        except Exception as e:
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
+        return f"wrote {len(str(content))} chars to {p}"
+
+    return Tool("write", "اكتب ملفّاً على القرص (يستبدل الموجود).",
+                {"type": "object", "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"}},
+                    "required": ["path", "content"]},
+                _run, execution_mode="sequential")
+
+
+def make_edit():
+    from pipeline.agent_loop import Tool
+
+    def _run(a):
+        p = _safe_path(a.get("path"))
+        old, new = str(a.get("old_string") or ""), str(a.get("new_string") or "")
+        if not old:
+            return _err("old_string is required")
+        if not os.path.isfile(p):
+            return _err(f"not a file: {p}")
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                src = f.read()
+        except Exception as e:
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
+        n = src.count(old)
+        if n == 0:
+            return _err("old_string not found")
+        if n > 1 and not a.get("replace_all"):
+            return _err(f"old_string appears {n} times; make it unique or "
+                        "pass replace_all")
+        try:
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(src.replace(old, new) if a.get("replace_all")
+                        else src.replace(old, new, 1))
+        except Exception as e:
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
+        return f"replaced {n if a.get('replace_all') else 1} occurrence(s)"
+
+    return Tool("edit", "استبدل نصّاً في ملفّ استبدالاً حرفياً دقيقاً.",
+                {"type": "object", "properties": {
+                    "path": {"type": "string"},
+                    "old_string": {"type": "string"},
+                    "new_string": {"type": "string"},
+                    "replace_all": {"type": "boolean"}},
+                    "required": ["path", "old_string", "new_string"]},
+                _run, execution_mode="sequential")
+
+
+def make_ls():
+    from pipeline.agent_loop import Tool
+
+    def _run(a):
+        p = _safe_path(a.get("path") or ".")
+        if not os.path.isdir(p):
+            return _err(f"not a directory: {p}")
+        try:
+            names = sorted(os.listdir(p))[:400]
+        except Exception as e:
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
+        rows = []
+        for n in names:
+            fp = os.path.join(p, n)
+            rows.append(("dir  " if os.path.isdir(fp) else "file ") + n)
+        return "\n".join(rows) or "(empty)"
+
+    return Tool("ls", "اسرد ما في مجلّد.",
+                {"type": "object", "properties": {"path": {"type": "string"}}},
+                _run)
+
+
+# ── عائلة shell ──────────────────────────────────────────────────────────
+def make_exec():
+    """`exec` عند أوبن كلاو. هنا لا تعمل إلا بإذنٍ صريح WEAVER_EXEC=1."""
+    from pipeline.agent_loop import Tool
+
+    def _run(a):
+        try:
+            from capabilities.tools.tool_exec_python import exec_enabled
+        except Exception:
+            def exec_enabled():
+                return (os.environ.get("WEAVER_EXEC", "") or "").strip() == "1"
+        if not exec_enabled():
+            return _err("execution is off; it is enabled only with WEAVER_EXEC=1")
+        cmd = str(a.get("command") or "").strip()
+        if not cmd:
+            return _err("command is required")
+        import subprocess
+        try:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True,
+                               timeout=int(a.get("timeout") or 60),
+                               cwd=_safe_path(a.get("cwd") or "."))
+        except subprocess.TimeoutExpired:
+            return _err("timed out")
+        except Exception as e:
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
+        return (f"exit={r.returncode}\n--- stdout ---\n{(r.stdout or '')[:7000]}"
+                f"\n--- stderr ---\n{(r.stderr or '')[:2000]}")
+
+    return Tool("exec", "نفِّذ أمراً في الصَدَفة واقرأ مُخرَجه.",
+                {"type": "object", "properties": {
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "timeout": {"type": "integer"}},
+                    "required": ["command"]},
+                _run, execution_mode="sequential")
+
+
+# ── عائلة openclaw: العامُّ منها ─────────────────────────────────────────
+def make_web_fetch(orch=None):
+    from pipeline.agent_loop import Tool
+
+    def _run(a):
+        url = str(a.get("url") or "").strip()
+        if not url.startswith("http"):
+            return _err("url must start with http")
+        n = max(500, min(int(a.get("max_chars") or 8000), 20000))
+        # ١) المسارُ الذي يتجاوز الحجب، إن وُجد المُنسِّق
+        if orch is not None:
+            try:
+                import asyncio
+                loop = asyncio.new_event_loop()
+                try:
+                    txt = loop.run_until_complete(orch._extract_full(url))
+                finally:
+                    loop.close()
+                if txt and len(str(txt).strip()) > 80:
+                    return str(txt)[:n]
+            except Exception:
+                pass
+        # ٢) وإلّا فجلبٌ مباشر
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0", "Accept": "*/*"})
+            raw = urllib.request.urlopen(req, timeout=25).read()
+            txt = raw.decode("utf-8", "replace")
+        except Exception as e:
+            return _err(f"{type(e).__name__}: {str(e)[:140]}")
+        try:
+            import re
+            txt = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", txt)
+            txt = re.sub(r"(?s)<[^>]+>", " ", txt)
+            import html as _h
+            txt = _h.unescape(txt)
+            txt = "\n".join(l.strip() for l in txt.split("\n") if l.strip())
+            txt = re.sub(r"[ \t]{2,}", " ", txt)
+        except Exception:
+            pass
+        return txt[:n] or _err("empty page")
+
+    return Tool("web_fetch",
+                "افتح رابطاً واقرأ نصَّ الصفحة.",
+                {"type": "object", "properties": {
+                    "url": {"type": "string"},
+                    "max_chars": {"type": "integer"}}, "required": ["url"]},
+                _run)
+
+
+def make_web_search(orch=None):
+    """`web_search`. أوبن كلاو يصله بمزوّدٍ بمفتاح؛ وبلا مفتاحٍ يُقرأ محرّكٌ
+    لا يشترط مفتاحاً، ويُقال حين يُحجَب — لا يُقال «لا نتائج»."""
+    from pipeline.agent_loop import Tool
+    _wf = make_web_fetch(orch)
+
+    def _run(a):
+        q = str(a.get("query") or "").strip()
+        if len(q) < 2:
+            return _err("query too short")
+        import urllib.parse as up
+        params = {"q": q}
+        lg = str(a.get("language") or "").strip().lower()[:2]
+        if lg:
+            params["kl"] = ("wt-wt" if lg not in ("ar", "en")
+                            else ("xa-ar" if lg == "ar" else "us-en"))
+        url = "https://html.duckduckgo.com/html/?" + up.urlencode(params)
+        txt = _wf.execute({"url": url, "max_chars": 9000})
+        if str(txt).startswith("error:"):
+            return (str(txt) + "  | note: no search-provider key is "
+                    "configured; this reads a keyless engine, which may "
+                    "block automated requests. Try web_fetch on a specific "
+                    "site instead.")
+        return txt
+
+    return Tool("web_search",
+                "ابحث في الويب وأعِد العناوينَ والروابط.",
+                {"type": "object", "properties": {
+                    "query": {"type": "string"},
+                    "language": {"type": "string",
+                                 "description": "رمزُ لغةٍ من حرفين"}},
+                    "required": ["query"]},
+                _run)
 
 
 def make_scholarly_api(orch):
-    """اسأل قواعدَ البيانات الأكاديمية. `lang_filter` يضيِّق باللغة حيث يُدعَم."""
+    """زيادةٌ على عُدّة أوبن كلاو: القواعدُ الستُّ الموجودةُ في هذا المشروع
+    تُعرَض كأداةٍ عامّةٍ أخرى — والنموذجُ يستعملها إن رآها أنسب."""
     from pipeline.agent_loop import Tool
 
-    def _run(args):
-        q = str((args or {}).get("query") or "").strip()
+    def _run(a):
+        q = str(a.get("query") or "").strip()
         if len(q) < 3:
-            return "error: query too short"
-        lg = str((args or {}).get("lang") or "").strip().lower()[:2]
-        n = int((args or {}).get("limit") or 8)
+            return _err("query too short")
         try:
             res = orch._scholarly_search(
-                q, lg or "ar", max(3, min(n, 20)),
-                lang_filter=bool((args or {}).get("lang_filter"))) or []
+                q, str(a.get("lang") or "ar")[:2],
+                max(3, min(int(a.get("limit") or 8), 20)),
+                lang_filter=bool(a.get("lang_filter"))) or []
         except Exception as e:
-            return f"error: {type(e).__name__}: {str(e)[:120]}"
+            return _err(f"{type(e).__name__}: {str(e)[:120]}")
         out = []
         for r in res:
             r.pop("_prefilter", None)
             out.append({k: r.get(k) for k in
                         ("title", "authors", "year", "venue", "doi", "url",
                          "lang", "source") if r.get(k)})
-        if not out:
-            gap = ", ".join(orch._lang_filter_gap())
-            return ("no results. note: language filtering is not supported by "
-                    f"these engines ({gap}); only openalex and doaj apply it.")
-        return json.dumps(out, ensure_ascii=False)[:9000]
+        return (json.dumps(out, ensure_ascii=False)[:9000] if out
+                else "no results")
 
-    return Tool(
-        name="scholarly_api",
-        description=("ابحث في قواعد البيانات الأكاديمية المجّانية (OpenAlex، "
-                     "Crossref، arXiv، Semantic Scholar، DOAJ، Europe PMC). "
-                     "تُغطّي الإنجليزيةَ أكثر بكثيرٍ من غيرها."),
-        parameters={"type": "object", "properties": {
-            "query": {"type": "string"},
-            "lang": {"type": "string", "description": "رمزُ لغةٍ من حرفين"},
-            "lang_filter": {"type": "boolean",
-                            "description": "ضيِّق باللغة (openalex وdoaj فقط)"},
-            "limit": {"type": "integer"}}, "required": ["query"]},
-        execute=_run)
+    return Tool("scholarly_api",
+                "ابحث في قواعد البيانات الأكاديمية المجّانية.",
+                {"type": "object", "properties": {
+                    "query": {"type": "string"},
+                    "lang": {"type": "string"},
+                    "lang_filter": {"type": "boolean"},
+                    "limit": {"type": "integer"}}, "required": ["query"]},
+                _run)
 
 
-def make_run_python():
-    """نفِّذ سكربت Python. `exec` عند أوبن كلاو — مطفأةٌ ما لم يُؤذَن لها."""
-    from pipeline.agent_loop import Tool
-
-    def _run(args):
+def core_tools(orch=None, allow_write=True):
+    """عُدّةُ أوبن كلاو الأساسية. هذه هي كلُّ ما يُعطاه لأيّ سؤالٍ كان."""
+    tools = [make_read(), make_ls(), make_web_fetch(orch),
+             make_web_search(orch)]
+    if allow_write:
+        tools += [make_write(), make_edit()]
+    tools.append(make_exec())
+    if orch is not None:
         try:
-            from capabilities.tools.tool_exec_python import (
-                exec_enabled, run_python)
+            tools.append(make_scholarly_api(orch))
         except Exception:
-            return "error: exec tool unavailable"
-        if not exec_enabled():
-            return ("error: execution is off. It is enabled only with "
-                    "WEAVER_EXEC=1.")
-        code = str((args or {}).get("code") or "")
-        if len(code.strip()) < 5:
-            return "error: no code"
-        try:
-            res = run_python(code, out_path=None, payload_text=None,
-                             timeout=int((args or {}).get("timeout") or 40))
-        except Exception as e:
-            return f"error: {type(e).__name__}: {str(e)[:150]}"
-        return json.dumps(res, ensure_ascii=False, default=str)[:6000]
-
-    return Tool(
-        name="run_python",
-        description=("نفِّذ سكربت Python واقرأ مُخرَجه. استعمله لسؤال واجهةِ "
-                     "برمجةٍ لا تغطّيها الأدواتُ الأخرى."),
-        parameters={"type": "object", "properties": {
-            "code": {"type": "string"},
-            "timeout": {"type": "integer"}}, "required": ["code"]},
-        execution_mode="sequential",
-        execute=_run)
-
-
-def reference_tools(orch, loop=None):
-    """الأدواتُ التي تُعطى لمهمّة إيجاد المراجع. عامّةٌ كلُّها."""
-    tools = [make_web_fetch(orch, loop), make_scholarly_api(orch)]
-    try:
-        from capabilities.tools.tool_exec_python import exec_enabled
-        if exec_enabled():
-            tools.append(make_run_python())
-    except Exception:
-        pass
+            pass
     return tools
-
-
-def reference_task(topic, want_lang, need, lang="ar"):
-    """المهمّةُ كما تُعطى للنموذج — لا خطواتٌ تُملى عليه، بل ما هو مطلوب.
-
-    أوبن كلاو لم يُملَ عليه «افتح جوجل سكولار»: قيل له ما المطلوبُ فاختار
-    الطريق. فهنا كذلك — الأدواتُ في الكتالوج، والقرارُ له."""
-    _n = {"ar": "العربية", "en": "الإنجليزية"}.get(want_lang, want_lang)
-    if lang == "en":
-        return (f"Find {need} real, verifiable academic references in "
-                f"{want_lang} on this topic:\n\"{topic}\"\n\n"
-                "Each must be peer-reviewed or an academic thesis, and must "
-                "actually exist — open its page and confirm before counting "
-                "it. Do not invent a reference and do not count one you could "
-                "not open.\n\n"
-                'When done return: {"done":true,"answer":"<JSON list of '
-                '{title,authors,year,venue,url,verified}>"}')
-    return (f"جِد {need} مرجعاً أكاديمياً حقيقياً بـ{_n} في هذا الموضوع:\n"
-            f"«{topic}»\n\n"
-            "شرطُها: محكَّمةٌ أو رسائلُ جامعية، وموجودةٌ فعلاً — افتح صفحةَ "
-            "كلِّ مرجعٍ وتأكّد قبل أن تعدَّه. لا تخترع مرجعاً، ولا تعُدَّ "
-            "مرجعاً لم تستطع فتحَ صفحته.\n\n"
-            "وإذا اكتملت أعِد:\n"
-            '{"done":true,"answer":"<قائمة JSON من '
-            '{title,authors,year,venue,url,verified}>"}')

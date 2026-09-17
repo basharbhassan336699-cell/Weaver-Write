@@ -151,21 +151,22 @@ chk("وردٌّ غيرُ صالح ⟶ توقّف",
 chk("وسقفٌ مطلقٌ موجود", AL.MAX_STEPS >= 8)
 
 print("\n" + "═" * 70)
-print(" ٨) والأدواتُ عامّةٌ — لا واحدةَ تعرف «المراجع العربية»")
+print(" ٨) والعُدّةُ عامّةٌ — لا أداةَ تعرف بحثاً ولا مراجع")
 print("═" * 70)
+# كانت هنا أدواتٌ خاصّةٌ بإيجاد المراجع، وحُذفت: المطلوب وكيلٌ
+# عامٌّ لا نظامٌ باحث. والعُدّةُ صارت عينَ عائلتي أوبن كلاو
+# الأساسيّتين: base-coding و shell، زائداً العامّ من عائلته الثالثة.
 from pipeline import agent_tools as AT
-from pipeline.orchestrator import WeaverOrchestrator as W
-o = W.__new__(W)
-tools = AT.reference_tools(o)
-names = [t.name for t in tools]
-chk(f"الأدوات: {names}", "web_fetch" in names and "scholarly_api" in names)
-chk("ولا أداةَ اسمُها «ابحث عن مراجع عربية»",
-    all("arabic" not in t.name.lower() and "عرب" not in t.description
-        for t in tools))
-_t = AT.reference_task("الإعجاز العلمي", "ar", 9, "ar")
-chk("والمهمّةُ تقول ما المطلوب لا كيف يُفعل",
-    "9" in _t and "افتح صفحةَ" in _t and "scholar.google" not in _t)
-chk("وتنهاه عن الاختراع", "لا تخترع" in _t)
+_names = [t.name for t in AT.core_tools(None)]
+chk(f"العُدّة: {_names}",
+    all(n in _names for n in ("read", "write", "edit", "ls", "exec",
+                              "web_fetch", "web_search")))
+chk("ولا أداةَ تعرف «مراجع» ولا «بحثاً أكاديمياً»",
+    not any(w in n for n in _names
+            for w in ("reference", "research", "essay", "outline")))
+chk("والكاتبةُ متسلسلةٌ كما عنده (executionMode)",
+    all(t.execution_mode == "sequential"
+        for t in AT.core_tools(None) if t.name in ("write", "edit", "exec")))
 
 print("\n" + "═" * 70)
 print(" النتيجة: " + ("PASS ✅" if ok else "FAIL ❌"))
