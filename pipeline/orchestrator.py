@@ -5832,6 +5832,27 @@ class WeaverOrchestrator:
 
         srcs = card.setdefault("sources", [])
         full_reads = 0
+        # ── READING A PAGE MUST NOT BE ABLE TO HANG THE WHOLE RUN ──────────
+        # `_extract_full` walks a chain of fetchers — UniWeb, then
+        # tool_web_document with OCR over "ara+eng" — and NOT ONE of them
+        # carries a timeout. One slow host, one large scanned PDF, one OCR
+        # pass, and the await never returns: a run sat on «بحث في الويب» for
+        # thirteen minutes with no message, no limit, and no way for the user
+        # to tell working from hung. Nothing is lost by cutting it short —
+        # the search snippet is already in hand and is what gets used — so
+        # each page gets its own budget, the phase gets a total one, and both
+        # are reported. WEAVER_FETCH_TIMEOUT / WEAVER_FETCH_BUDGET tune them.
+        import asyncio as _aio8, time as _t8, os as _o8
+        try:
+            _per = int(_o8.environ.get("WEAVER_FETCH_TIMEOUT", "45") or 45)
+        except Exception:
+            _per = 45
+        try:
+            _budget = int(_o8.environ.get("WEAVER_FETCH_BUDGET", "150") or 150)
+        except Exception:
+            _budget = 150
+        _t0 = _t8.time()
+        _timeouts = []
         for i, r in enumerate(results):
             url = r.get("url", "")
             title = r.get("title", "")
@@ -5843,18 +5864,42 @@ class WeaverOrchestrator:
             if _wr and _wr.source_is_blocked(url):
                 continue
             if i < 3:  # read the top 3 links in full (general path cap: KEPT)
-                text = await self._extract_full(url)
-                if text:
-                    content = text
-                    is_full = True
-                    full_reads += 1
+                _left = _budget - int(_t8.time() - _t0)
+                if _left <= 5:
+                    _timeouts.append((url or "")[:60])
+                    mem.set_status(4, f"تخطّي القراءة الكاملة — نفدت مهلة "
+                                      f"{_budget} ثانية")
+                else:
+                    mem.set_status(4, f"قراءة المصدر {i + 1} من 3 "
+                                      f"({int(_t8.time() - _t0)} ث)")
+                    try:
+                        text = await _aio8.wait_for(self._extract_full(url),
+                                                    timeout=min(_per, _left))
+                    except (_aio8.TimeoutError, Exception) as _fe:
+                        text = None
+                        if isinstance(_fe, _aio8.TimeoutError):
+                            _timeouts.append((url or "")[:60])
+                            mem.set_status(4, f"تجاوز قراءةَ صفحةٍ بطيئة "
+                                              f"({min(_per, _left)} ث): "
+                                              f"{(title or url)[:40]}")
+                    if text:
+                        content = text
+                        is_full = True
+                        full_reads += 1
             srcs.append({"key": (title or url)[:60], "url": url, "title": title,
                          "content": content, "full": is_full})
             mem.add_reference(f"[ويب] {title} — {content[:300]} ({url})",
                               source_key=url)
         card["web_full_reads"] = full_reads
         mem.set_status(4, f"بحث ويب ({used}): {len(results)} نتيجة، "
-                          f"قراءة كاملة لـ {full_reads} صفحة")
+                          f"قراءة كاملة لـ {full_reads} صفحة "
+                          f"({int(_t8.time() - _t0)} ث)")
+        if _timeouts:
+            self._skip_note(
+                card, "قراءة المصادر كاملةً",
+                f"تُخطّيت {len(_timeouts)} صفحةً لبطئها أو لنفاد مهلة الجلب "
+                f"({_budget} ث للمرحلة، {_per} ث للصفحة) — واستُعمل مقتطفُ "
+                "نتيجة البحث بدلاً منها، ولم يسقط مصدر")
 
     async def _layer_5(self, task: Task, mem: TaskMemory):
         """٥: المصداقية — تمرير كل مصدر عبر check_source وإسقاط المرفوض."""
