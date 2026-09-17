@@ -4886,6 +4886,232 @@ class WeaverOrchestrator:
             return None, None
 
     @staticmethod
+    def _source_lang(r):
+        """The language of ONE candidate: what the index said, else its title.
+
+        Indexes leave `language` empty far more often than they fill it —
+        measured on one run, every Arabic-titled work that came back from
+        Crossref carried no language field at all, so the count that decided
+        «١ من ٨» was counting the INDEX'S bookkeeping, not the literature.
+        A title written in Arabic script is Arabic; that is evidence, not a
+        guess. The index is still believed first when it speaks. Returns a
+        two-letter code or "". Never raises."""
+        try:
+            import re as _re
+            lg = str((r or {}).get("lang") or "").strip().lower()[:2]
+            if lg:
+                return lg
+            t = str((r or {}).get("title") or "")
+            t = _re.sub(r"https?://\S+", " ", t)
+            a = len(_re.findall(r"[\u0621-\u064a]", t))
+            l = len(_re.findall(r"[A-Za-z]", t))
+            if a and a >= l:
+                return "ar"
+            if l and l > a:
+                return "en"
+            return ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _source_keys(r):
+        """The identity of a candidate: its identifier AND its normalised title.
+
+        Same two keys `_scholarly_search` dedupes on, lifted out so a second
+        pass cannot re-add a work the first pass already has under a different
+        DOI. Returns a set — empty when the record carries no title."""
+        try:
+            t = " ".join(str((r or {}).get("title") or "").split())
+            if not t:
+                return set()
+            keys = {"t:" + " ".join("".join(
+                c for c in t.lower() if c.isalnum() or c.isspace()).split())}
+            i = str((r or {}).get("doi") or (r or {}).get("url")
+                    or "").strip().lower().rstrip("/")
+            if i:
+                keys.add(i)
+            return keys
+        except Exception:
+            return set()
+
+    def _top_up_language(self, results, card, want_lang, shortfall,
+                         query, lang, mem=None):
+        """The harvest came up short in the requested language — GO BACK FOR IT.
+
+        Ordering can only rank what was already found. A request for «٩ مراجع
+        عربية» that came home with one Arabic work in the pool was reported
+        honestly — «١ من ٨» — and then simply printed, because nothing in the
+        pipeline ever went back for more. Reporting a shortfall is not
+        answering it.
+
+        And the reason the first pass missed that literature is not that it
+        does not exist: it is that the query was written in the words of the
+        other one. Arabic scholarship on a topic is indexed under the terms
+        Arabic scholarship uses — a translation of an English phrase is not
+        those terms, and no list of phrases in this file will ever hold them
+        for every topic. So this asks the MODEL, which knows that vocabulary,
+        to compose the queries itself: the same shape as the capability
+        catalogue and the options catalogue — the gap is shown, the model
+        decides, the code only carries out and counts.
+
+        Returns the NEW candidates only (never the ones already held), all of
+        them in `want_lang`. Returns [] when there is no model, when the model
+        says nothing usable, or when the databases have nothing to add — and
+        records which of those it was. Never raises."""
+        import os as _os
+        if (_os.environ.get("WEAVER_LANG_TOPUP", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return []
+        try:
+            _need = max(1, int(shortfall or 0))
+        except Exception:
+            _need = 1
+        _wl = str(want_lang or "").strip().lower()[:2]
+        if not _wl:
+            return []
+        _name = self._REF_LANG_AR.get(_wl, _wl) if lang != "en" else _wl
+        if not getattr(self, "llm_fn", None):
+            self._skip_note(
+                card, "استدراك لغة المراجع",
+                f"نقصت المراجع بـ{_name} ولم يكن ثمّة نموذجٌ يصوغ استعلاماً "
+                "بتلك اللغة، فبقي المتاح كما هو")
+            return []
+        # ① the MODEL composes the queries — in that literature's own terms.
+        _have_titles = [" ".join(str(r.get("title") or "").split())[:90]
+                        for r in (results or [])[:12]
+                        if r.get("title")]
+        _req = self._current_request(str(query or ""))
+        _prompt = (
+            (f"بحثنا عن مراجع أكاديمية في هذا الموضوع، فعاد البحثُ ناقصاً "
+             f"بـ{_name}: ينقصنا {_need} مرجعاً بها.\n\n"
+             f"الموضوع كما طلبه المستخدم:\n«{str(_req)[:400]}»\n\n"
+             + ("وهذه عناوينُ ما وجدناه فعلاً حتى الآن (لا تُعِدها):\n"
+                + "\n".join(f"- {t}" for t in _have_titles) + "\n\n"
+                if _have_titles else "")
+             + f"اكتب من واحدٍ إلى ثلاثة استعلاماتِ بحثٍ بـ{_name} تُرجّح أن "
+               "تجد هذه الأدبيات في قواعد البيانات الأكاديمية: بالمصطلحات "
+               "التي تستعملها هذه الأدبيات نفسُها، لا بترجمةٍ حرفيّة عن لغةٍ "
+               "أخرى. كلُّ استعلامٍ سطرٌ قصير.\n\n"
+               'أعِد JSON فقط: {"queries": ["…", "…"]}'
+             if lang != "en" else
+             f"An academic search for this topic came back short in {_wl}: "
+             f"{_need} more are needed in that language.\n\n"
+             f"The user's topic:\n\u201c{str(_req)[:400]}\u201d\n\n"
+             + ("Titles already found (do not repeat them):\n"
+                + "\n".join(f"- {t}" for t in _have_titles) + "\n\n"
+                if _have_titles else "")
+             + f"Write one to three search queries in {_wl} most likely to "
+               "find that literature in scholarly databases — in the terms "
+               "that literature itself uses, not a literal translation from "
+               "another language. One short line each.\n\n"
+               'Return JSON only: {"queries": ["…", "…"]}'))
+        _qs = []
+        _why = ""
+        try:
+            _raw = self.llm_fn(_prompt,
+                               system=getattr(self, "system_main", None),
+                               temperature=0.2, max_tokens=300) or ""
+            _data = None
+            try:
+                from core.llm import extract_json
+                _data = extract_json(_raw)
+            except Exception:
+                import json as _j, re as _re
+                _m = _re.search(r"\{.*\}", str(_raw), _re.S)
+                if _m:
+                    _data = _j.loads(_m.group(0))
+            if isinstance(_data, dict):
+                for _x in (_data.get("queries") or [])[:3]:
+                    _x = " ".join(str(_x or "").split())
+                    if len(_x) >= 3 and _x not in _qs:
+                        _qs.append(_x[:160])
+        except Exception as _e:
+            _why = f"{type(_e).__name__}: {str(_e)[:60]}"
+        if not _qs:
+            self._skip_note(
+                card, "استدراك لغة المراجع",
+                f"نقصت المراجع بـ{_name} ولم يُعِد النموذجُ استعلاماً صالحاً"
+                + (f" ({_why})" if _why else "")
+                + "، فبقي المتاح كما هو")
+            return []
+        # ② the code only carries the queries out, and counts what came back.
+        _held = set()
+        for _r in (results or []):
+            _held |= self._source_keys(_r)
+        _out = []
+        _pulled = False            # withdrawn by the judge, not absent
+        _cap = max(_need, 4) * 2
+        for _i, _q2 in enumerate(_qs):
+            if len(_out) >= _cap:
+                break
+            if mem is not None:
+                try:
+                    mem.set_status(4, f"استدراك مراجع بـ{_name} "
+                                      f"({_i + 1}/{len(_qs)})")
+                except Exception:
+                    pass
+            try:
+                _more = self._scholarly_search(
+                    _q2, _wl, max(6, _need + 4),
+                    wide=bool(self.llm_fn)) or []
+            except Exception:
+                _more = []
+            for _m2 in _more:
+                _k = self._source_keys(_m2)
+                if not _k or (_k & _held):
+                    continue
+                # ONLY the language that was short. A top-up that brings back
+                # more of the language we already had has answered nothing.
+                if self._source_lang(_m2) != _wl:
+                    continue
+                _m2.pop("_prefilter", None)
+                if not str(_m2.get("lang") or "").strip():
+                    _m2["lang"] = _wl      # read from its own title, above
+                _held |= _k
+                _out.append(_m2)
+                if len(_out) >= _cap:
+                    break
+        if _out:
+            # THE SAME JUDGE, ON THE NEW ONES TOO. A second pass that skipped
+            # the relevance judgement would walk straight past the guard the
+            # first pass has: a wider net catching more of the wrong fish. And
+            # when the judge does not answer, the additions are WITHDRAWN, not
+            # admitted unjudged — the same rule the widened pool already obeys
+            # thirty lines below.
+            _k2, _d2 = self._judge_relevance(_out, str(query or ""), _req, lang)
+            if _k2 is not None:
+                if _d2:
+                    self._record_decision(
+                        card, "فرز استدراك اللغة",
+                        f"أُبقي {len(_k2)}، استُبعد {len(_d2)}", "model",
+                        "بحث أكاديمي")
+                _out = list(_k2)
+            else:
+                self._skip_note(
+                    card, "فرز استدراك اللغة",
+                    "لم يحكم النموذج على صلة المراجع المستدركة ("
+                    + (getattr(self, "_last_judge_reason", "")
+                       or "بلا سبب معلوم")
+                    + ")، فسُحبت بدل إدخالها بلا حكم")
+                _out = []
+                _pulled = True
+        if _out:
+            self._record_decision(
+                card, "استدراك لغة المراجع",
+                f"{len(_qs)} استعلاماً بـ{_name} ⟶ +{len(_out)} مرجعاً",
+                "model", "بحث أكاديمي")
+        elif not _pulled:
+            # and only when the databases really had nothing: a list the judge
+            # withdrew has already said why, and saying it twice, differently,
+            # would be two accounts of one event.
+            self._skip_note(
+                card, "استدراك لغة المراجع",
+                f"أُعيد البحثُ بـ{len(_qs)} استعلاماً بـ{_name} ولم تُعِد "
+                "قواعدُ البيانات جديداً بتلك اللغة — النقصُ معلَنٌ ولم يُسدَّ "
+                "بلغةٍ أخرى")
+        return _out
+
+    @staticmethod
     def _wr():
         """The GENERAL research layer (Sections 2-5). One import point, so the
         web path and the academic path share it instead of each carrying a copy.
@@ -5428,30 +5654,100 @@ class WeaverOrchestrator:
             # within it, a work in the language the user asked for comes first,
             # so a nine-item list is filled with Arabic work before it reaches
             # for English — «قدر الإمكان» made mechanical instead of hoped for.
-            _plan = list(card.get("refs_lang_plan") or [])
-            if len(_plan) >= 2:
-                # BOTH: take turns, so a nine-item list cannot come back in one
-                # language because that language happened to rank higher.
-                results = _wr.interleave_by_lang(results, _plan)
-                _cnt = {w: sum(1 for r in results
-                               if str(r.get("lang") or "").lower().startswith(w))
-                        for w in _plan}
+            # AND THE COUNT MUST MEASURE THE LITERATURE, NOT THE INDEX'S
+            # BOOKKEEPING. «١ من ٨ بـar» was counted off the `language` field,
+            # which Crossref and OpenAlex leave empty far more often than they
+            # fill it — so an Arabic-titled work was counted as not-Arabic,
+            # ranked last, and the shortfall that everything below reacts to
+            # was partly an artefact of a missing field rather than a fact
+            # about the literature. A title written in Arabic script is in
+            # Arabic; that is evidence, not a guess, and the index is still
+            # believed first whenever it says anything at all.
+            _stamped = 0
+            for _r in results:
+                if not str(_r.get("lang") or "").strip():
+                    _lg0 = self._source_lang(_r)
+                    if _lg0:
+                        _r["lang"] = _lg0
+                        _stamped += 1
+            if _stamped:
                 self._record_decision(
-                    card, "ترتيب لغة المراجع",
-                    "تناوبٌ بين " + "، ".join(f"{w}={_cnt[w]}" for w in _plan),
+                    card, "لغة المراجع غير المفهرسة",
+                    f"{_stamped} مرجعاً بلا حقل لغة ⟶ قُرئت من خطّ العنوان",
                     "measured", "بحث أكاديمي")
-            elif _plan:
-                _wl = _plan[0]
-                _idx = {id(r): i for i, r in enumerate(results)}
-                results = sorted(
-                    results,
-                    key=lambda r: (0 if str(r.get("lang") or "").lower()
-                                   .startswith(_wl) else 1, _idx.get(id(r), 0)))
-                _n_in = sum(1 for r in results
-                            if str(r.get("lang") or "").lower().startswith(_wl))
-                self._record_decision(card, "ترتيب لغة المراجع",
-                                      f"{_n_in} من {len(results)} بـ{_wl} أولاً",
-                                      "measured", "بحث أكاديمي")
+            _plan = list(card.get("refs_lang_plan") or [])
+
+            def _n_lang(_rs, _w):
+                return sum(1 for _x in _rs
+                           if str(_x.get("lang") or "").lower().startswith(_w))
+
+            def _order_langs(_rs):
+                """The plan's own ordering, re-appliable after the pool grows."""
+                if len(_plan) >= 2:
+                    # BOTH: take turns, so a nine-item list cannot come back in
+                    # one language because that language happened to rank
+                    # higher.
+                    return _wr.interleave_by_lang(_rs, _plan)
+                _w0 = _plan[0]
+                _ix = {id(_x): _i for _i, _x in enumerate(_rs)}
+                return sorted(_rs, key=lambda _x: (
+                    0 if str(_x.get("lang") or "").lower().startswith(_w0)
+                    else 1, _ix.get(id(_x), 0)))
+
+            def _say_langs(_rs):
+                """One ledger line, re-stated whenever the count changes."""
+                if len(_plan) >= 2:
+                    _c = {_w: _n_lang(_rs, _w) for _w in _plan}
+                    self._record_decision(
+                        card, "ترتيب لغة المراجع",
+                        "تناوبٌ بين " + "، ".join(f"{_w}={_c[_w]}"
+                                                  for _w in _plan),
+                        "measured", "بحث أكاديمي")
+                elif _plan:
+                    self._record_decision(
+                        card, "ترتيب لغة المراجع",
+                        f"{_n_lang(_rs, _plan[0])} من {len(_rs)} "
+                        f"بـ{_plan[0]} أولاً", "measured", "بحث أكاديمي")
+
+            if _plan:
+                results = _order_langs(results)
+                _say_langs(results)
+                # ── AND WHEN THE HARVEST IS SHORT, SEARCH AGAIN FOR IT ──
+                # Ordering can only rank what was already found. A request for
+                # «٩ مراجع عربية» that came home with one Arabic work in the
+                # pool was reported honestly — «١ من ٨» — and then simply
+                # printed, because nothing in the pipeline ever went back for
+                # more. Reporting a shortfall is not answering it.
+                #
+                # So the MODEL is shown the gap and composes fresh queries
+                # aimed at that literature in its own terms — the same shape as
+                # the capability catalogue and the options catalogue, no phrase
+                # list anywhere — and what comes back is judged for relevance,
+                # merged, de-duplicated and re-ordered. When both languages
+                # were asked for, each is owed its share and each is topped up
+                # on its own. The outcome is recorded either way.
+                try:
+                    _req_n = self._requested_source_count(card) or limit
+                    _share = (max(1, int(_req_n) // len(_plan))
+                              if len(_plan) >= 2 else int(_req_n))
+                    _grew = False
+                    for _wl in _plan:
+                        if not self.llm_fn:
+                            break
+                        _n_in = _n_lang(results, _wl)
+                        if _n_in >= _share:
+                            continue
+                        _added = self._top_up_language(
+                            results, card, _wl, _share - _n_in, query, lang,
+                            mem)
+                        if _added:
+                            results = _wr.order_by_quality(results + _added)
+                            _grew = True
+                    if _grew:
+                        results = _order_langs(results)
+                        _say_langs(results)   # the ledger states the NEW count
+                except Exception as _tue:
+                    mem.set_status(4, f"استدراك لغة المراجع (تخطّي: {_tue})")
             _drop = [r for r in results
                      if _wr.quality_tier(r) == _wr.TIER_EXCLUDED]
             if _drop:
