@@ -2698,9 +2698,13 @@ class WeaverOrchestrator:
             task.tools.append("academic_search")
         # news/recency intent enables web_search even for non-academic tasks
         # (never academic_search — news isn't academic). Respect "none" mode below.
-        if mode != "none" and self._is_recency_query(
-                f"{card.get('topic','')} "
-                f"{self._strip_injected_memory(task.description)}"):
+        # THE SETTLED DECISION FIRST. `recency_intent` already carries what the
+        # model judged (and the user's own words above it); re-running the
+        # phrase list here let a list of words overrule a decision that had
+        # already been made properly one layer up.
+        if mode != "none" and self._recency_now(
+                card, f"{card.get('topic','')} "
+                      f"{self._strip_injected_memory(task.description)}"):
             task.tools.append("web_search")
         if mode == "none":
             # explicit no-sources request: strip every source-gathering tool
@@ -3194,13 +3198,33 @@ class WeaverOrchestrator:
 
         # scope that LIMITS the task: references-only / outline-only / part-only.
         _cur_req = self._current_request(task.description)
-        task.task_card["scope"] = self._task_scope(_cur_req)
-        # full composable set (references/outline/plan/part) for combined asks
-        # like "مراجع وهيكلة فقط". Single-scope consumers keep using ["scope"].
-        try:
-            task.task_card["scopes"] = sorted(self._task_scopes(_cur_req))
-        except Exception:
+        # THE MODEL READS THE REQUEST FIRST — see _decide_options. The phrase
+        # lists below stay as the silent fallback for when it has no view or
+        # cannot be reached; they no longer decide on their own.
+        _opt = self._decide_options(_cur_req, task.task_card.get("language", "ar"))
+        _sc_m = str(_opt.get("scope") or "").strip().lower()
+        if _sc_m in ("references", "outline", "plan", "part"):
+            task.task_card["scope"] = _sc_m
+            task.task_card["scopes"] = [_sc_m]
+            self._record_decision(task.task_card, "نطاق الطلب", _sc_m,
+                                  "model", "قراءة الطلب لا مطابقة كلمات")
+        elif _sc_m in ("null", "none", "full", "full_document", "document"):
+            # an EXPLICIT «no limiting scope» from the model is an answer, not
+            # a silence — it outranks a phrase list that saw «هيكلة» and
+            # narrowed a whole research request to an outline
+            task.task_card["scope"] = None
             task.task_card["scopes"] = []
+            self._record_decision(task.task_card, "نطاق الطلب", "مستندٌ كامل",
+                                  "model", "قراءة الطلب لا مطابقة كلمات")
+        else:
+            task.task_card["scope"] = self._task_scope(_cur_req)
+            # full composable set (references/outline/plan/part) for combined
+            # asks like "مراجع وهيكلة فقط". Single-scope consumers keep
+            # using ["scope"].
+            try:
+                task.task_card["scopes"] = sorted(self._task_scopes(_cur_req))
+            except Exception:
+                task.task_card["scopes"] = []
 
         # requested slide count (e.g. "اعمل عرض 30 شريحة") → reaches
         # design_slides. Absent → None → default behaviour unchanged.
@@ -3219,17 +3243,24 @@ class WeaverOrchestrator:
                 # action and the table flag are settled after the plan merge,
                 # where the model's own answer is finally on the card.
                 _act = task.task_card.get("action")
-                if self._wants_chart(_cur_req):
-                    task.task_card["want_chart"] = True
-                if self._wants_data(_cur_req):
-                    task.task_card["want_data"] = True
-                # explicit cover page / table-of-contents requests → set the
-                # flags the docx builder reads (they were never wired, so
-                # "صفحة غلاف وفهرس" produced neither). Additive.
-                if self._wants_cover(_cur_req):
-                    task.task_card["cover"] = True
-                if self._wants_toc(_cur_req):
-                    task.task_card["toc"] = True
+                # MODEL FIRST, PHRASE LIST AS THE SILENT FALLBACK. Each of
+                # these used to be a bare `if <phrase in text>` that set the
+                # flag outright, so a wording nobody listed produced nothing at
+                # all — «فهرس» was listed, «جدول محتويات» in another form was
+                # not, and the user got no contents page and no explanation.
+                for _key, _det in (("want_chart", self._wants_chart),
+                                   ("want_data", self._wants_data),
+                                   ("cover", self._wants_cover),
+                                   ("toc", self._wants_toc)):
+                    _m = self._tri_opt(_opt.get(_key))
+                    if _m is not None:
+                        task.task_card[_key] = _m
+                        self._record_decision(task.task_card, _key, _m,
+                                              "model", "قراءة الطلب")
+                    elif _det(_cur_req):
+                        task.task_card[_key] = True
+                        self._record_decision(task.task_card, _key, True,
+                                              "fallback", "مطابقةٌ احتياطية")
         except Exception:
             pass
 
@@ -3649,7 +3680,7 @@ class WeaverOrchestrator:
                 or _scope in ("references", "plan")
                 or ({"references", "plan"} & _scs)
                 or _c.get("want_data")
-                or self._is_recency_query(_td)
+                or self._recency_now(_c, _td)
                 or any(w in _txt for w in _src_words))
             if not _explicit:
                 task.tools = [t for t in task.tools
@@ -9905,6 +9936,113 @@ class WeaverOrchestrator:
             return ar, en, ar + en
         except Exception:
             return 0, 0, 0
+
+    # ── THE OPTIONS CATALOGUE — the same shape as the capability catalogue ──
+    # Every option below used to be decided by a list of phrases: «فهرس» for a
+    # contents page, «رسم بياني» for a chart, «هيكلة» for an outline-only ask.
+    # Seven call sites set them DIRECTLY, ahead of anything the model said, so
+    # a phrasing nobody listed simply did not exist — which is the whole month
+    # of failures in one sentence. Measured on the openclaw package: zero
+    # intent classifiers, one catalogue, one instruction to the model.
+    #
+    # So the options are printed like a catalogue, the model reads the user's
+    # own words and answers, and `_settle` keeps the standing precedence:
+    # what the user stated > what the model judged > what the phrase list
+    # guessed. The lists stay underneath as the silent fallback; they never
+    # rule again.
+    _OPTIONS = (
+        ("scope", "نطاقٌ محدود: references (مراجع فقط) / outline (هيكل فقط) / "
+                  "plan (خطة بحثية) / part (جزء واحد) — أو null لمستندٍ كامل"),
+        ("want_chart", "رسمٌ بيانيّ من بيانات (صحيح/خطأ)"),
+        ("want_data", "جلبُ بياناتٍ رقميّة (صحيح/خطأ)"),
+        ("cover", "صفحةُ غلاف (صحيح/خطأ)"),
+        ("toc", "صفحةُ فهرسٍ أو جدولُ محتويات (صحيح/خطأ)"),
+        ("recency", "الجوابُ يتغيّر بمرور الوقت فيلزم الأحدث (صحيح/خطأ)"),
+        ("citation_style", "نمطُ التوثيق المطلوب: APA / MLA / Chicago / null"),
+    )
+
+    def _decide_options(self, request, lang="ar"):
+        """Ask the MODEL to read the request and answer the option catalogue.
+
+        Returns a dict of the options it answered — absent keys simply mean it
+        had no opinion, and the deterministic reading stands in. Cached per
+        request text so the call happens once. Never raises: any failure
+        returns {} and behaviour is exactly what it was."""
+        try:
+            key = " ".join(str(request or "").split())[:400]
+            cache = getattr(self, "_opt_cache", None)
+            if cache is None:
+                cache = self._opt_cache = {}
+            if key in cache:
+                return cache[key]
+            if not self.llm_fn or not key:
+                cache[key] = {}
+                return {}
+            cat = "\n".join(f"- {n}: {d}" for n, d in self._OPTIONS)
+            prompt = (
+                ("اقرأ طلب المستخدم، وأجب عن كلّ خيارٍ في القائمة بما يفهمه "
+                 "الطلبُ فعلاً — لا بمطابقة كلمات. واتركِ الخيار خارج الجواب "
+                 "إن لم يذكره الطلبُ ولم يلزم ضمناً.\n\n"
+                 f"طلب المستخدم:\n«{key}»\n\nالخيارات:\n{cat}\n\n"
+                 "أعِد JSON فقط بالمفاتيح التي لك رأيٌ فيها."
+                 if lang != "en" else
+                 "Read the user's request and answer each option below by what "
+                 "the request MEANS — not by matching words. Leave an option "
+                 "out entirely when the request neither states nor implies "
+                 f"it.\n\nUser's request:\n\"{key}\"\n\nOptions:\n{cat}\n\n"
+                 "Return JSON only, with the keys you have an opinion on."))
+            raw = self.llm_fn(prompt, system=getattr(self, "system_main", None),
+                              temperature=0.1, max_tokens=500) or ""
+            data = None
+            try:
+                from core.llm import extract_json
+                data = extract_json(raw)
+            except Exception:
+                import json as _j, re as _re
+                m = _re.search(r"\{.*\}", str(raw), _re.S)
+                if m:
+                    data = _j.loads(m.group(0))
+            out = {}
+            if isinstance(data, dict):
+                _names = {n for n, _ in self._OPTIONS}
+                for k, v in data.items():
+                    if k in _names and v is not None:
+                        out[k] = v
+            cache[key] = out
+            return out
+        except Exception:
+            return {}
+
+    @classmethod
+    def _recency_now(cls, card, text):
+        """Does this task need the newest sources? The SETTLED decision wins.
+
+        `recency_intent` on the card already went through the full precedence —
+        the user's own words, then the model's reading, then the phrase list.
+        Two call sites re-ran the phrase list from scratch, so a list of words
+        could overrule a decision that had already been made properly one layer
+        up. The card is read first; the detector only speaks when the card is
+        silent. Never raises."""
+        try:
+            v = (card or {}).get("recency_intent")
+            if isinstance(v, bool):
+                return v
+            return bool(cls._is_recency_query(text))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _tri_opt(v):
+        """A model answer read as a tri-state: True / False / None (no view)."""
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            t = v.strip().lower()
+            if t in ("true", "yes", "1", "نعم", "صحيح"):
+                return True
+            if t in ("false", "no", "0", "لا", "خطأ"):
+                return False
+        return None
 
     @staticmethod
     def _requested_source_count(card):
