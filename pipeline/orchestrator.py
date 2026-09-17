@@ -10271,15 +10271,52 @@ class WeaverOrchestrator:
                 # not evidence of review, so on its own it no longer carries an
                 # entry into the list — an official page informed the prose and
                 # stays in the writer's context, exactly as a general page does.
-                _rec_ = bool(s_.get("venue") or s_.get("journal")) and bool(
-                    s_.get("authors") or s_.get("author"))
-                _is_acad = bool(s_.get("doi") or (_t and _t >= 4) or _rec_)
+                _ven_ = bool(s_.get("venue") or s_.get("journal"))
+                _au_ = bool(s_.get("authors") or s_.get("author"))
+                _rec_ = _ven_ and _au_
+                # AND A RULE WRITTEN FOR ENGLISH DOI-BEARING LITERATURE WAS
+                # DELETING ARABIC SCHOLARSHIP. Measured by replaying nine
+                # ordinary Arabic references through this function: TWO were
+                # printed and SEVEN were dropped. Most Arabic scholarly work
+                # carries no DOI, and the indexes return a venue OR a list of
+                # authors far more often than both together — so demanding
+                # both was, in practice, demanding a DOI. That is the «٩ مراجع
+                # فعاد باثنين» in one line of code.
+                #
+                # The test that keeps a ministry page or an upload site out of
+                # a bibliography is not «does it have two fields»: it is WHERE
+                # IT CAME FROM. A record returned by OpenAlex, Crossref, DOAJ,
+                # arXiv, Semantic Scholar or Europe PMC is an indexed scholarly
+                # record; a page the web layer scraped is not, however many
+                # fields it happens to carry. So provenance decides, and a
+                # scholarly record needs a venue OR named authors — never both.
+                # A web result is judged exactly as strictly as before.
+                _prov_ = str(s_.get("source") or "").strip().lower()
+                _indexed_ = any(k in _prov_ for k in cls._ACAD_PROVENANCE)
+                _is_acad = bool(s_.get("doi") or (_t and _t >= 4) or _rec_
+                                or (_indexed_ and (_ven_ or _au_)))
                 (acad if _is_acad else general).append(s_)
             if acad:
                 try:
                     card["refs_general_dropped"] = len(general)
                 except Exception:
                     pass
+                # AND NEVER IN SILENCE. This number was written to the card and
+                # read by NOTHING in the whole project: the reader asked for
+                # nine, received two, and was told nothing at all about the
+                # seven. RULE 2 covers every step that cancels part of itself;
+                # this one site had slipped out from under it.
+                if general:
+                    try:
+                        cls._skip_note(
+                            card, "قائمة المراجع",
+                            f"طُبِع {len(acad)} مرجعاً، واستُبعد {len(general)} "
+                            "مصدراً من القائمة لأنه لا يحمل ما يُثبت كونه "
+                            "عملاً محكَّماً (لا مُعرِّف DOI، ولا اسمَ جهةِ نشر، "
+                            "ولا مؤلِّفاً مُسمّى) — وقد بقيت هذه المصادر في "
+                            "سياق الكتابة ولم تُحذف من البحث")
+                    except Exception:
+                        pass
                 return acad, general
             try:
                 card["refs_no_academic"] = True
