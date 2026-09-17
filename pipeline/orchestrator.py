@@ -4222,14 +4222,24 @@ class WeaverOrchestrator:
     _ACAD_UA = "WeaverWrite/1.0 (mailto:research@weaver.local)"
 
     @staticmethod
-    def _openalex_search(query, lang, limit=6, timeout=12):
+    def _openalex_search(query, lang, limit=6, timeout=12, lang_filter=False):
+        """`lang_filter=True` asks OpenAlex for THAT language — `filter=
+        language:ar`. Until now `lang` was a parameter this function accepted
+        and threw away: the request that left for the network carried no trace
+        of the language the user asked for, so «مراجع عربية» was searched
+        exactly as if nothing had been said. Default False ⟶ byte-identical to
+        what this sent before."""
         import urllib.parse
         import json as _json
         q = (query or "").strip()
         if not q:
             return None
+        _params = {"search": q, "per_page": min(int(limit) or 6, 10)}
+        _lg = str(lang or "").strip().lower()[:2]
+        if lang_filter and _lg.isalpha() and len(_lg) == 2:
+            _params["filter"] = "language:" + _lg
         url = "https://api.openalex.org/works?" + urllib.parse.urlencode(
-            {"search": q, "per_page": min(int(limit) or 6, 10)})
+            _params)
         raw = WeaverOrchestrator._http_get(
             url, {"User-Agent": WeaverOrchestrator._ACAD_UA,
                   "Accept": "application/json"}, timeout)
@@ -4390,12 +4400,17 @@ class WeaverOrchestrator:
         return out or None
 
     @staticmethod
-    def _doaj_search(query, lang, limit=6, timeout=12):
+    def _doaj_search(query, lang, limit=6, timeout=12, lang_filter=False):
+        """`lang_filter=True` adds DOAJ's own language clause to the query.
+        Same dead parameter as OpenAlex had. Default False ⟶ unchanged."""
         import urllib.parse
         import json as _json
         q = (query or "").strip()
         if not q:
             return None
+        _lg = str(lang or "").strip().lower()[:2]
+        if lang_filter and _lg.isalpha() and len(_lg) == 2:
+            q = f"({q}) AND bibjson.journal.language:{_lg.upper()}"
         url = ("https://doaj.org/api/search/articles/" + urllib.parse.quote(q)
                + "?" + urllib.parse.urlencode({"pageSize": min(int(limit) or 6, 10)}))
         raw = WeaverOrchestrator._http_get(
@@ -4469,8 +4484,33 @@ class WeaverOrchestrator:
                         "source": "europepmc"})
         return out or None
 
+    # WHICH ENGINE CAN HONOUR A LANGUAGE REQUEST — DECLARED, NOT ASSUMED.
+    # Read out of openclaw's own web-search code, which never drops a filter it
+    # cannot apply. When the model asks for one the provider lacks, openclaw
+    # answers the MODEL:
+    #     {"error": "unsupported_language",
+    #      "message": "language filtering is not supported by the <X> provider.
+    #                  Only Brave and Perplexity support language filtering."}
+    # — so the model learns the limit and changes its approach. Here `lang` was
+    # a parameter all six fetchers accepted and silently threw away; the
+    # request that left for the network carried no trace of «مراجع عربية», and
+    # nothing anywhere ever said so. Two of the six can filter by language;
+    # this says which, and the four that cannot are RECORDED rather than
+    # passed over in silence.
+    _ACAD_LANG_FILTER = {"openalex": True, "doaj": True, "crossref": False,
+                         "arxiv": False, "s2": False, "europepmc": False}
+
     @classmethod
-    def _scholarly_search(cls, query, lang, limit, timeout=14, wide=False):
+    def _lang_filter_gap(cls):
+        """The engines that cannot narrow by language, named. Never raises."""
+        try:
+            return tuple(n for n, ok in cls._ACAD_LANG_FILTER.items() if not ok)
+        except Exception:
+            return ()
+
+    @classmethod
+    def _scholarly_search(cls, query, lang, limit, timeout=14, wide=False,
+                          lang_filter=False):
         """Query all free scholarly sources IN PARALLEL (OpenAlex, Crossref,
         arXiv, Semantic Scholar, DOAJ, Europe PMC) and merge/dedupe by DOI/URL/
         title. Total time ≈ the slowest source. Each degrades safely. Returns a
@@ -4485,11 +4525,13 @@ class WeaverOrchestrator:
         import concurrent.futures as _cf
         import itertools
         engines = [
-            ("openalex", lambda: cls._openalex_search(query, lang, limit)),
+            ("openalex", lambda: cls._openalex_search(
+                query, lang, limit, lang_filter=lang_filter)),
             ("crossref", lambda: cls._crossref_search(query, lang, limit)),
             ("arxiv", lambda: cls._arxiv_search(query, lang, limit)),
             ("s2", lambda: cls._semanticscholar_search(query, lang, limit)),
-            ("doaj", lambda: cls._doaj_search(query, lang, limit)),
+            ("doaj", lambda: cls._doaj_search(
+                query, lang, limit, lang_filter=lang_filter)),
             ("europepmc", lambda: cls._europepmc_search(query, lang, limit)),
         ]
         res = {}
@@ -5079,6 +5121,7 @@ class WeaverOrchestrator:
             _held |= self._source_keys(_r)
         _out = []
         _pulled = False            # withdrawn by the judge, not absent
+        _used_filter = False       # did any index actually narrow by language
         _cap = max(_need, 4) * 2
         for _i, _q2 in enumerate(_qs):
             if len(_out) >= _cap:
@@ -5089,12 +5132,22 @@ class WeaverOrchestrator:
                                       f"({_i + 1}/{len(_qs)})")
                 except Exception:
                     pass
-            try:
-                _more = self._scholarly_search(
-                    _q2, _wl, max(6, _need + 4),
-                    wide=bool(self.llm_fn)) or []
-            except Exception:
-                _more = []
+            # ASK THE DATABASES FOR THAT LANGUAGE — the request finally
+            # carries it. The filtered pass runs first; if it comes back empty
+            # (a filter syntax an index does not accept, or simply nothing in
+            # that language) the unfiltered pass runs as it always did, so this
+            # can only ADD. Never a silent loss.
+            _more = []
+            for _flt in (True, False):
+                try:
+                    _more = self._scholarly_search(
+                        _q2, _wl, max(6, _need + 4),
+                        wide=bool(self.llm_fn), lang_filter=_flt) or []
+                except Exception:
+                    _more = []
+                if _more:
+                    _used_filter = _used_filter or _flt
+                    break
             for _m2 in _more:
                 _k = self._source_keys(_m2)
                 if not _k or (_k & _held):
@@ -5113,6 +5166,18 @@ class WeaverOrchestrator:
                 _out.append(_m2)
                 if len(_out) >= _cap:
                     break
+        # openclaw answers the MODEL when a provider cannot honour a filter;
+        # here the same fact is put where the user can read it, instead of
+        # `lang` being dropped six times without a word.
+        _gap = self._lang_filter_gap()
+        if _gap:
+            self._skip_note(
+                card, "ترشيح اللغة في قواعد البيانات",
+                f"طُلبت المراجع بـ{_name}، و{len(_gap)} من قواعد البيانات لا "
+                "تدعم التضييق باللغة أصلاً ("
+                + "، ".join(_gap) + ") — فما جاء منها لم يُضيَّق، وإنّما "
+                + ("ضُيّق ما جاء من openalex وdoaj" if _used_filter
+                   else "لم يُضيَّق شيء لأن المُضيِّقتين لم تُعيدا نتيجة"))
         if _out:
             # THE SAME JUDGE, ON THE NEW ONES TOO. A second pass that skipped
             # the relevance judgement would walk straight past the guard the

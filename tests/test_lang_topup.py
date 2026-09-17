@@ -13,7 +13,7 @@
      المصطلحات لكلّ موضوع — فالنموذجُ هو الذي يصوغها، كما في الكتالوج.
 
 هذه الاختبارات تثبت الأمرين، وتثبت أن كلَّ تعذّرٍ يُسجَّل ولا ينهار."""
-import sys, os, json, inspect
+import sys, os, json, inspect, urllib.parse
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
@@ -224,6 +224,65 @@ chk("WEAVER_LANG_TOPUP=0 ⟶ السلوكُ القديم بحرفه",
     o._top_up_language([], {}, "ar", 5, "ن", "ar") == []
     and not o.searched and o.llm_fn.calls == 0)
 os.environ.pop("WEAVER_LANG_TOPUP")
+
+print("\n" + "═" * 70)
+print(" ٧ب) ونيّةُ اللغة تصل إلى قاعدةِ البيانات فعلاً — على السلك")
+print("═" * 70)
+# كان `lang` معطًى ميتاً في الدوالّ الستّ: يُؤخذ ثمّ يُرمى، فالطلبُ الذي
+# يخرج إلى الشبكة لا يحمل أثراً لـ«مراجع عربية». هذا هو الفحصُ الوحيد
+# الذي كان سيكشفه — فهو يقرأ العنوانَ الخارج لا نيّةَ الكود.
+_SEEN = []
+_real_http = W._http_get
+W._http_get = staticmethod(lambda url, h, t: _SEEN.append(url) or None)
+_Q = "أحكام الزواج في الفقه الإسلامي"
+_SEEN.clear()
+W._openalex_search(_Q, "ar", 8)
+W._doaj_search(_Q, "ar", 8)
+_before = list(_SEEN)
+_SEEN.clear()
+W._openalex_search(_Q, "ar", 8, lang_filter=True)
+W._doaj_search(_Q, "ar", 8, lang_filter=True)
+_after = list(_SEEN)
+W._http_get = _real_http
+chk("الطلبُ القديم لا يحمل لغةً ألبتة",
+    not any("language" in u for u in _before), str(_before)[:90])
+chk("وOpenAlex صارت تُسأل filter=language:ar",
+    any("filter=language%3Aar" in u or "filter=language:ar" in u
+        for u in _after), str(_after[0])[:110])
+chk("وDOAJ صارت تُسأل بشرطِ لغتها",
+    any("bibjson.journal.language" in urllib.parse.unquote(u)
+        for u in _after), str(_after[-1])[:110])
+chk("وبلا طلبٍ صريح الطلبُ كما كان حرفاً (لا ارتداد)",
+    _before != _after and all("language" not in u for u in _before))
+chk("والقواعدُ التي لا تدعم التضييق مُسمّاةٌ لا مسكوتٌ عنها",
+    set(W._lang_filter_gap()) == {"crossref", "arxiv", "s2", "europepmc"},
+    str(W._lang_filter_gap()))
+
+
+class _FilterAware:
+    """قاعدةٌ ترفض صيغةَ التضييق — كما قد يحدث حقّاً."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, q, lg, lim, **kw):
+        self.calls.append(bool(kw.get("lang_filter")))
+        return [] if kw.get("lang_filter") else [AR1]
+
+
+o = W.__new__(W)
+o.llm_fn = _Model(json.dumps({"queries": ["النوم"]}, ensure_ascii=False))
+o.system_main = None
+o._scholarly_search = _FilterAware()
+o._judge_relevance = lambda rs, *a, **k: (list(rs), [])
+card = {}
+out = o._top_up_language([], card, "ar", 5, "ن", "ar")
+chk("والمُضيّقُ يُجرّب أوّلاً", o._scholarly_search.calls[0] is True)
+chk("فإن عاد فارغاً رجع إلى ما كان — فلا خسارة",
+    o._scholarly_search.calls == [True, False] and len(out) == 1)
+chk("ويُقال للمستخدم ما لم يُضيّق ولماذا",
+    any("ترشيح اللغة" in str(n.get("step")) for n in
+        (card.get("skipped_steps") or [])), str(card.get("skipped_steps"))[:130])
 
 print("\n" + "═" * 70)
 print(" ٨) والمسارُ يستدعيه فعلاً، ويُصحّح سجلَّه بعد الاستدراك")
