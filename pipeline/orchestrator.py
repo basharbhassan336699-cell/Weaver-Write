@@ -4944,6 +4944,120 @@ class WeaverOrchestrator:
         return ("arab" if (c in cls._ARABIC_SCRIPT_LANGS
                            or c[:2] in cls._ARABIC_SCRIPT_LANGS) else "latin")
 
+    # THE DOOR THE SIX APIs DO NOT OPEN.
+    # Measured, not supposed: an openclaw run for «٩ مراجع عربية» on the same
+    # kind of topic came back with nine real Arabic works — and every one of
+    # them came from Google Scholar and from Arabic university repositories
+    # (جامعة الخليل، بغداد، بابل، الكويت، بنك المعرفة المصري). Its OpenAlex
+    # pass returned twenty works «بالإنجليزية أساساً». So the shortfall was
+    # never the model's and never the query's: this system knocks on six doors,
+    # and the Arabic literature is behind a seventh.
+    #
+    # And openclaw did not use an API for it. It fetched a SEARCH PAGE and let
+    # the model read it. Both halves of that already exist here: `_extract_full`
+    # goes through UniWeb (curl_impersonate — a real browser fingerprint, which
+    # is what gets past Scholar's bot blocking), and the model reads the page.
+    # They were simply never wired to the academic path.
+    _SCHOLAR_URL = "https://scholar.google.com/scholar"
+
+    async def _scholar_harvest(self, query, want_lang, need, card, lang="ar"):
+        """Read a scholarly SEARCH PAGE and let the model lift the works off it.
+
+        Returns records shaped like the API fetchers' (title/authors/year/
+        venue/url/source), or [] — and says why it is [] rather than going
+        quiet. Never raises."""
+        import os as _os
+        if (_os.environ.get("WEAVER_SCHOLAR", "1") or "1").strip() in (
+                "0", "false", "no"):
+            return []
+        _wl = str(want_lang or "").strip().lower()[:2]
+        _q = " ".join(str(query or "").split())
+        _name = self._REF_LANG_AR.get(_wl, _wl) if lang != "en" else _wl
+        if not _q or not self.llm_fn:
+            return []
+        try:
+            import urllib.parse as _up
+            _url = self._SCHOLAR_URL + "?" + _up.urlencode(
+                {"q": _q, "hl": _wl or "ar", "as_sdt": "0,5",
+                 "lr": "lang_" + (_wl or "ar")})
+            _txt = await self._extract_full(_url)
+        except Exception as _e:
+            _txt = None
+            self._skip_note(card, "بحث في محرّك المراجع العلمي",
+                            f"تعذّر فتح صفحة البحث ({type(_e).__name__})")
+            return []
+        if not _txt or len(_txt.strip()) < 200:
+            # Scholar blocks what looks like a robot. Say so — a blocked door
+            # is a fact about the run, not a reason to report «لم أجد».
+            self._skip_note(
+                card, "بحث في محرّك المراجع العلمي",
+                "لم تُفتح صفحةُ البحث العلمي (حجبٌ للآليّات على الأرجح)، "
+                f"فلم يُضَف من هذا الباب شيء بـ{_name}")
+            return []
+        _prompt = (
+            (f"هذه صفحةُ نتائجِ بحثٍ علميّ. استخرج منها الأعمالَ الأكاديمية "
+             f"بـ{_name} التي تخصّ هذا الموضوع:\n«{_q[:200]}»\n\n"
+             "لكلّ عمل: العنوان كما هو، والمؤلِّفون، والسنة، واسمُ المجلّة أو "
+             "الجهة، والرابط إن ظهر. لا تخترع شيئاً غيرَ موجودٍ في الصفحة، "
+             "واترك أيَّ حقلٍ لم يظهر فارغاً.\n\n"
+             f"الصفحة:\n{_txt[:12000]}\n\n"
+             'أعِد JSON فقط: {"works": [{"title":"…","authors":["…"],'
+             '"year":"…","venue":"…","url":"…"}]}'
+             if lang != "en" else
+             f"This is a scholarly search results page. Extract the academic "
+             f"works in {_wl} that concern this topic:\n\u201c{_q[:200]}\u201d\n\n"
+             "For each: the title as written, the authors, the year, the "
+             "journal or institution, and the link if shown. Invent nothing "
+             "that is not on the page; leave a missing field empty.\n\n"
+             f"Page:\n{_txt[:12000]}\n\n"
+             'Return JSON only: {"works": [{"title":"…","authors":["…"],'
+             '"year":"…","venue":"…","url":"…"}]}'))
+        try:
+            _raw = self.llm_fn(_prompt,
+                               system=getattr(self, "system_main", None),
+                               temperature=0.1, max_tokens=1600) or ""
+            try:
+                from core.llm import extract_json
+                _data = extract_json(_raw)
+            except Exception:
+                import json as _j, re as _re
+                _m = _re.search(r"\{.*\}", str(_raw), _re.S)
+                _data = _j.loads(_m.group(0)) if _m else None
+        except Exception as _e2:
+            self._skip_note(
+                card, "بحث في محرّك المراجع العلمي",
+                f"فُتحت الصفحةُ ولم يقرأها النموذج ({type(_e2).__name__})")
+            return []
+        _out = []
+        if isinstance(_data, dict):
+            for _w in (_data.get("works") or [])[:max(4, int(need or 4) * 2)]:
+                if not isinstance(_w, dict):
+                    continue
+                _t = " ".join(str(_w.get("title") or "").split())
+                if len(_t) < 8:
+                    continue
+                _au = [" ".join(str(a).split()) for a in
+                       (_w.get("authors") or []) if str(a).strip()][:6]
+                _rec = {"title": _t[:220],
+                        "authors": _au,
+                        "year": str(_w.get("year") or "")[:4],
+                        "venue": " ".join(str(_w.get("venue") or "").split())[:120],
+                        "url": str(_w.get("url") or "").strip()[:400],
+                        "content": "", "doi": "",
+                        "source": "scholar", "academic": True}
+                if self._source_lang(_rec, _wl) == _wl:
+                    _out.append(_rec)
+        if _out:
+            self._record_decision(
+                card, "بحث في محرّك المراجع العلمي",
+                f"صفحةُ بحثٍ بـ{_name} ⟶ {len(_out)} عملاً",
+                "model", "بحث أكاديمي")
+        else:
+            self._skip_note(
+                card, "بحث في محرّك المراجع العلمي",
+                f"فُتحت صفحةُ البحث ولم يستخرج النموذجُ منها عملاً بـ{_name}")
+        return _out
+
     @staticmethod
     def _source_script(r):
         """The writing system of a candidate's TITLE — measured, never named.
@@ -5865,6 +5979,30 @@ class WeaverOrchestrator:
                                 _a2.setdefault("lang_eff", _wl)
                             results = _wr.order_by_quality(results + _added)
                             _grew = True
+                        # AND IF THE SIX DOORS ARE STILL SHORT, THE SEVENTH.
+                        # The APIs can only hand over what they index, and the
+                        # Arabic literature largely is not in them. This reads
+                        # a scholarly SEARCH PAGE instead — the door openclaw
+                        # actually used for all nine of its Arabic works.
+                        _n2 = _n_lang(results, _wl)
+                        if _n2 < _share:
+                            _sch = await self._scholar_harvest(
+                                _q or query, _wl, _share - _n2, card, lang)
+                            _seen_k = set()
+                            for _r3 in results:
+                                _seen_k |= self._source_keys(_r3)
+                            _new3 = []
+                            for _r4 in (_sch or []):
+                                _k4 = self._source_keys(_r4)
+                                if not _k4 or (_k4 & _seen_k):
+                                    continue
+                                _seen_k |= _k4
+                                _r4["lang_eff"] = _wl
+                                _new3.append(_r4)
+                            if _new3:
+                                results = _wr.order_by_quality(
+                                    results + _new3)
+                                _grew = True
                     if _grew:
                         results = _order_langs(results)
                         _say_langs(results)   # the ledger states the NEW count
@@ -9835,7 +9973,7 @@ class WeaverOrchestrator:
     # work, not a web page. Used as a MODEL-FREE fallback so the type grouping
     # still engages when the model can't classify.
     _ACAD_PROVENANCE = ("openalex", "crossref", "arxiv", "semanticscholar",
-                        "doaj", "europepmc", "paperqa", "pubmed")
+                        "doaj", "europepmc", "paperqa", "pubmed", "scholar")
 
     @classmethod
     def _fallback_ref_type(cls, s):
