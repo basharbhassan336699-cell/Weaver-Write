@@ -1577,6 +1577,151 @@ class WeaverOrchestrator:
                      "level": 1})
         return secs
 
+    _ORDINALS_AR = ("الأول", "الثاني", "الثالث", "الرابع", "الخامس", "السادس",
+                    "السابع", "الثامن", "التاسع", "العاشر", "الحادي عشر",
+                    "الثاني عشر", "الثالث عشر", "الرابع عشر", "الخامس عشر")
+
+    @classmethod
+    def _label_style(cls, request, lang="ar"):
+        """READ THE USER'S OWN EXAMPLE OF THE NUMBERING — do not match it
+        against a vocabulary of ours.
+
+        The user wrote, in their request, the exact shape they wanted:
+
+            المبحث الأول: ......
+                المطلب الأول: ......
+                    1.1 .......  1.2 .......  1.3 .......
+
+        and the document came back «المبحث 1 / المطلب 1.1 / (بلا رقم)» — the
+        numbering INVERTED and the level they numbered left bare. Not because
+        the model failed: because `_counted_structure` mints every label from
+        three hard-coded f-strings (`f"{u[0]} {i}"`, `f"{u[1]} {i}.{j}"`) that
+        never see the request at all. A template the user typed out in full is
+        the least ambiguous instruction there is, and nothing read it.
+
+        This reads THEIR text: for every structural unit word that appears in
+        it, what follows that word — an ordinal («الأول») or a digit? And does
+        a bare dotted number («1.1») stand on its own anywhere, without a unit
+        word in front of it? That is a level they want numbered that way. No
+        list of phrasings to keep extending: the example carries its own
+        meaning, whatever words it is written with.
+
+        Returns {"ordinal": {unit: bool}, "dotted_bare": bool} — empty when the
+        request shows no example, so the current behaviour is untouched. Never
+        raises."""
+        try:
+            import re as _re
+            txt = " " + " ".join(str(request or "").split()) + " "
+            if not txt.strip():
+                return {}
+            units = set()
+            try:
+                for u, _n in (cls._structure_units(txt, lang) or []):
+                    if u:
+                        units.add(str(u).strip())
+            except Exception:
+                pass
+            units |= {"المبحث", "المطلب", "الفصل", "الباب", "الفرع", "الجزء",
+                      "المسألة", "المحور", "مبحث", "مطلب", "فصل", "باب"}
+            ordinal = {}
+            for u in units:
+                for m in _re.finditer(_re.escape(u) + r"\s+(\S+)", txt):
+                    nxt = m.group(1).strip(":،.-")
+                    if not nxt:
+                        continue
+                    if nxt in cls._ORDINALS_AR or (
+                            nxt == "الحادي" or nxt == "الثاني"):
+                        ordinal[u.lstrip("ال") if u.startswith("ال") else u] = True
+                        ordinal[u] = True
+                    elif _re.fullmatch(r"[0-9\u0660-\u0669]+", nxt):
+                        ordinal.setdefault(u, False)
+            # a bare «1.1» with no unit word in front of it
+            dotted = False
+            for m in _re.finditer(r"(\S*)\s+([0-9\u0660-\u0669]+\.[0-9\u0660-\u0669]+)", txt):
+                before = (m.group(1) or "").strip(":،.-")
+                if before not in units and not before.endswith(tuple(units)):
+                    dotted = True
+                    break
+            out = {}
+            if ordinal:
+                out["ordinal"] = ordinal
+            if dotted:
+                out["dotted_bare"] = True
+            return out
+        except Exception:
+            return {}
+
+    @classmethod
+    def _apply_label_style(cls, plan, style, lang="ar"):
+        """Re-mint the structural labels to match the user's own example.
+
+        One pass over the finished plan — after the descriptive titles and
+        after the subdivisions — so it works no matter which path built the
+        sections. The SUBJECT of every heading is preserved untouched; only
+        the label in front of it is rebuilt. Intro, conclusion and the
+        references list are never numbered. Returns the plan unchanged when no
+        style was read from the request. Never raises."""
+        if not style or not plan:
+            return plan
+        try:
+            import re as _re
+            ordinal = style.get("ordinal") or {}
+            dotted_bare = bool(style.get("dotted_bare"))
+            _lbl = _re.compile(
+                r"^\s*((?:ال)?[^\W\d_]{2,12})\s+"
+                r"((?:[0-9\u0660-\u0669]+(?:[.\-][0-9\u0660-\u0669]+)*)|"
+                + "|".join(_re.escape(o) for o in cls._ORDINALS_AR) +
+                r")\s*[:：]?\s*", _re.UNICODE)
+
+            def _split(t):
+                m = _lbl.match(str(t or ""))
+                if not m:
+                    return None, str(t or "").strip()
+                return m.group(1), str(t or "")[m.end():].strip()
+
+            out, i = [], 0
+            j = k = 0
+            for sec in plan:
+                s2 = dict(sec)
+                key = str(s2.get("key") or "")
+                lvl = int(s2.get("level", 1) or 1)
+                title = s2.get("title") or s2.get("heading") or ""
+                if key in ("intro", "conclusion", "references") or \
+                        cls._is_ref_heading(title):
+                    out.append(s2)
+                    continue
+                unit, subject = _split(title)
+                if lvl <= 1:
+                    i += 1
+                    j = k = 0
+                    if unit:
+                        _o = ordinal.get(unit, ordinal.get(
+                            unit.lstrip("ال"), None))
+                        num = (cls._ORDINALS_AR[i - 1]
+                               if _o and i <= len(cls._ORDINALS_AR) else str(i))
+                        s2["title"] = f"{unit} {num}" + (f": {subject}"
+                                                         if subject else "")
+                elif lvl == 2:
+                    j += 1
+                    k = 0
+                    if unit:
+                        _o = ordinal.get(unit, ordinal.get(
+                            unit.lstrip("ال"), None))
+                        num = (cls._ORDINALS_AR[j - 1]
+                               if _o and j <= len(cls._ORDINALS_AR)
+                               else f"{i}.{j}")
+                        s2["title"] = f"{unit} {num}" + (f": {subject}"
+                                                         if subject else "")
+                else:
+                    k += 1
+                    if dotted_bare:
+                        # the level the user numbered «1.1 / 1.2 / 1.3»
+                        s2["title"] = f"{j}.{k} {subject}".strip()
+                out.append(s2)
+            return out
+        except Exception:
+            return plan
+
     @staticmethod
     def _proposal_sections(lang):
         """The standard sections of a research proposal (خطة بحثية)."""
@@ -7006,6 +7151,34 @@ class WeaverOrchestrator:
                                     "لم يُضِف النموذج تقسيماتٍ (أو تعذّر النداء)")
         except Exception as e:
             mem.set_status(6, f"تقسيمات (تخطّي: {e})")
+
+        # ── THE USER'S OWN TEMPLATE, APPLIED LAST ──────────────────────────
+        # It runs HERE, after the titles and after the subdivisions, so it does
+        # not matter which path built the plan: whatever the sections ended up
+        # being, their labels are re-minted to the shape the user typed out.
+        # Their subject text is never touched. When the request shows no
+        # template, `_label_style` returns nothing and the plan passes through
+        # exactly as before.
+        try:
+            _lbl_style = self._label_style(
+                self._current_request(task.description), lang)
+            if _lbl_style:
+                sections_plan = self._apply_label_style(
+                    sections_plan, _lbl_style, lang)
+                card["sections"] = sections_plan
+                card["label_style"] = _lbl_style
+                _shape = []
+                if (_lbl_style.get("ordinal") or {}):
+                    _shape.append("ألفاظٌ لا أرقام")
+                if _lbl_style.get("dotted_bare"):
+                    _shape.append("ترقيمٌ نقطيّ للتقسيمات")
+                mem.set_status(6, "ترقيمٌ على مثال المستخدم: "
+                                  + "، ".join(_shape))
+                self._record_decision(card, "نمط الترقيم",
+                                      "، ".join(_shape), "user",
+                                      "من مثالٍ في نصّ الطلب")
+        except Exception as e:
+            mem.set_status(6, f"نمط الترقيم (تخطّي: {e})")
 
         # outline-only → a COMPLETE, richly-detailed outline authored by the model
         # itself (title, structured intro, annotated sub-points, suggested refs) —
