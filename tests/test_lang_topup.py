@@ -31,18 +31,38 @@ def chk(label, good, detail=""):
 
 
 print("═" * 70)
-print(" ١) لغةُ المرجع تُقرأ من الفهرس، فإن سكت فمن خطّ عنوانه")
+print(" ١) الدليلُ يقف حيث ينتهي: الخطُّ يُقاس، واللغةُ لا تُخمَّن")
+print("═" * 70)
+chk("خطُّ العنوان يُقاس لا يُسمّى: عربيٌّ ⟶ arab",
+    W._source_script({"title": "أثر النوم على التحصيل"}) == "arab")
+chk("ولاتينيٌّ ⟶ latin",
+    W._source_script({"title": "Étude sur le sommeil"}) == "latin")
+chk("وبلا حروف ⟶ لا ادّعاء",
+    W._source_script({"title": "2024 — 10.1/8 (\u0661\u0662)"}) == "")
+chk("والرابطُ لا يُحسب حروفاً لاتينية",
+    W._source_script({"title": "النوم https://example.com/sleep-study"}) == "arab")
+chk("ونظامُ كتابةِ اللغةِ معروفٌ: ar/fa/ur ⟶ arab",
+    all(W._lang_script(c) == "arab" for c in ("ar", "fa", "ur", "ckb")))
+chk("و en/fr/es/de ⟶ latin",
+    all(W._lang_script(c) == "latin" for c in ("en", "fr", "es", "de")))
+
+print("\n" + "═" * 70)
+print(" ١ب) ولغةُ المرجع: الفهرسُ أوّلاً، ولا يُدّعى ما لا دليلَ عليه")
 print("═" * 70)
 chk("الفهرسُ يقول en ⟶ en مهما كان العنوان",
-    W._source_lang({"lang": "en", "title": "أثر النوم على التحصيل"}) == "en")
-chk("وسكت الفهرسُ وعنوانُه عربيّ ⟶ ar",
-    W._source_lang({"title": "أثر النوم على التحصيل الدراسي"}) == "ar")
-chk("وسكت وعنوانُه لاتينيّ ⟶ en",
-    W._source_lang({"title": "Sleep and academic achievement"}) == "en")
-chk("ولا عنوانَ ولا فهرس ⟶ لا ادّعاء", W._source_lang({"title": "2024 —"}) == "")
-chk("وسجلٌّ فارغ لا ينهار", W._source_lang(None) == "")
-chk("والرابطُ لا يُحسب حروفاً لاتينية",
-    W._source_lang({"title": "النوم https://example.com/sleep-study"}) == "ar")
+    W._source_lang({"lang": "en", "title": "أثر النوم"}, "ar") == "en")
+chk("وسكت الفهرسُ وطُلِبت ar والعنوانُ عربيّ ⟶ ar",
+    W._source_lang({"title": "أثر النوم على التحصيل"}, "ar") == "ar")
+chk("وطُلِبت ar والعنوانُ لاتينيّ ⟶ لا شيء",
+    W._source_lang({"title": "Sleep and achievement"}, "ar") == "")
+# هذا هو العطبُ الذي كان في أوّلِ كتابتي: «en» لكلّ خطٍّ لاتينيّ،
+# فتُرفض كلُّ ورقةٍ فرنسيةٍ ثمّ يُطبع «لم تُعِد القواعدُ جديداً».
+FR = {"title": "Étude sur la qualité du sommeil chez les étudiants"}
+chk("وطُلِبت fr والعنوانُ فرنسيّ ⟶ fr لا en",
+    W._source_lang(FR, "fr") == "fr")
+chk("ولم يُطلب شيءٌ ⟶ لا تُسمّى لغةٌ من خطّ وحده",
+    W._source_lang(FR) == "" and W._source_lang({"title": "Sleep"}) == "")
+chk("وسجلٌّ فارغ لا ينهار", W._source_lang(None, "ar") == "")
 
 print("\n" + "═" * 70)
 print(" ٢) وهويةُ المرجع معرّفُه وعنوانُه معاً — فلا يدخل مرّتين")
@@ -119,8 +139,10 @@ chk(f"وعاد بالعربيّ وحده ({len(out)})",
                           for x in out))
 chk("والإنجليزيُّ لم يُحشَ في نقصٍ عربيّ",
     all(x.get("doi") != "10.9/en1" for x in out))
-chk("ولغةُ الجديد مثبتةٌ كي يراها العدّ",
-    all(x.get("lang") == "ar" for x in out))
+chk("ولغةُ الجديد مقروءةٌ في حقلٍ خاصٍّ بها كي يراها العدّ",
+    all(x.get("lang_eff") == "ar" for x in out))
+chk("وحقلُ الناشر لم يُكتب فوقه استدلالٌ يُطبع كأنّه تصريح",
+    all(not x.get("lang") for x in out))
 chk("ولا تكرارَ بين الاستعلامين", len({x["doi"] for x in out}) == len(out))
 _d = (card.get("decisions") or {}).get("استدراك لغة المراجع") or {}
 chk(f"والقرارُ مسجَّلٌ باسم النموذج: {_d.get('value')}",

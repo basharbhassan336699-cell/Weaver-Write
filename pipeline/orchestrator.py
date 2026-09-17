@@ -4885,31 +4885,70 @@ class WeaverOrchestrator:
             self._last_judge_reason = f"{type(e).__name__}: {str(e)[:60]}"
             return None, None
 
-    @staticmethod
-    def _source_lang(r):
-        """The language of ONE candidate: what the index said, else its title.
+    # WRITING SYSTEMS, NOT PHRASES. The only thing a title can PROVE is the
+    # script it is written in. Naming the LANGUAGE from a script is a claim the
+    # evidence does not carry — «Étude sur la qualité du sommeil» is Latin
+    # script and is not English. The codes below are the languages that use the
+    # Arabic script: a fixed fact about alphabets, not a guess about how anyone
+    # phrases a request, and nothing here is ever matched against user text.
+    _ARABIC_SCRIPT_LANGS = ("ar", "fa", "ur", "ps", "sd", "ug", "ckb")
 
-        Indexes leave `language` empty far more often than they fill it —
-        measured on one run, every Arabic-titled work that came back from
-        Crossref carried no language field at all, so the count that decided
-        «١ من ٨» was counting the INDEX'S bookkeeping, not the literature.
-        A title written in Arabic script is Arabic; that is evidence, not a
-        guess. The index is still believed first when it speaks. Returns a
-        two-letter code or "". Never raises."""
+    @classmethod
+    def _lang_script(cls, code):
+        """The writing system a language code is written in. "" when unknown."""
+        c = str(code or "").strip().lower()[:3]
+        if not c:
+            return ""
+        return ("arab" if (c in cls._ARABIC_SCRIPT_LANGS
+                           or c[:2] in cls._ARABIC_SCRIPT_LANGS) else "latin")
+
+    @staticmethod
+    def _source_script(r):
+        """The writing system of a candidate's TITLE — measured, never named.
+
+        Returns "arab", "latin" or "" — and stops there, because that is where
+        the evidence stops. Never raises."""
         try:
             import re as _re
+            t = str((r or {}).get("title") or "")
+            t = _re.sub(r"https?://\S+", " ", t)
+            a = len(_re.findall(r"[\u0621-\u064a\u0671-\u06d3]", t))
+            l = len(_re.findall(r"[A-Za-z]", t))
+            if a and a >= l:
+                return "arab"
+            if l and l > a:
+                return "latin"
+            return ""
+        except Exception:
+            return ""
+
+    @classmethod
+    def _source_lang(cls, r, want=""):
+        """The language to attribute to a candidate — the index first.
+
+        Indexes leave `language` empty far more often than they fill it:
+        measured on one run, Arabic-titled works came back from Crossref with
+        no language field at all, so the count that decided «١ من ٨» was
+        counting the INDEX'S bookkeeping and not the literature.
+
+        When the index is silent, the title's SCRIPT is read — but only ever
+        against a language that was actually ASKED for, and only when the two
+        share a writing system. An earlier version of this returned "en" for
+        any Latin-script title: that made a French paper English, and, worse,
+        made a request for French references reject every French paper it found
+        and then report «لم تُعِد قواعدُ البيانات جديداً» — a false report
+        wearing the clothes of an honest one. With nothing asked for, nothing
+        is claimed: "" is returned rather than a language the script cannot
+        prove. Never raises."""
+        try:
             lg = str((r or {}).get("lang") or "").strip().lower()[:2]
             if lg:
                 return lg
-            t = str((r or {}).get("title") or "")
-            t = _re.sub(r"https?://\S+", " ", t)
-            a = len(_re.findall(r"[\u0621-\u064a]", t))
-            l = len(_re.findall(r"[A-Za-z]", t))
-            if a and a >= l:
-                return "ar"
-            if l and l > a:
-                return "en"
-            return ""
+            w = str(want or "").strip().lower()[:3]
+            if not w:
+                return ""
+            _sc = cls._source_script(r)
+            return w[:2] if (_sc and _sc == cls._lang_script(w)) else ""
         except Exception:
             return ""
 
@@ -5062,11 +5101,14 @@ class WeaverOrchestrator:
                     continue
                 # ONLY the language that was short. A top-up that brings back
                 # more of the language we already had has answered nothing.
-                if self._source_lang(_m2) != _wl:
+                if self._source_lang(_m2, _wl) != _wl:
                     continue
                 _m2.pop("_prefilter", None)
-                if not str(_m2.get("lang") or "").strip():
-                    _m2["lang"] = _wl      # read from its own title, above
+                # AN INFERENCE IS NOT A STATEMENT. What the publisher declared
+                # stays in `lang` untouched, so the reference annotation never
+                # prints a guess as if the index had said it; the reading used
+                # for counting and ordering lives in its own field.
+                _m2["lang_eff"] = _wl
                 _held |= _k
                 _out.append(_m2)
                 if len(_out) >= _cap:
@@ -5663,23 +5705,36 @@ class WeaverOrchestrator:
             # about the literature. A title written in Arabic script is in
             # Arabic; that is evidence, not a guess, and the index is still
             # believed first whenever it says anything at all.
-            _stamped = 0
+            _plan = list(card.get("refs_lang_plan") or [])
+            # AND THE COUNT MUST MEASURE THE LITERATURE, NOT THE INDEX'S
+            # BOOKKEEPING — WITHOUT INVENTING WHAT IT CANNOT SEE. The reading
+            # used for counting and ordering is kept in `lang_eff`, beside
+            # whatever the publisher declared, and never on top of it: `lang`
+            # stays exactly as the index returned it, so the annotation under a
+            # reference never prints an inference as a statement. And the
+            # inference itself is bounded — a title's script is only read
+            # against a language that was actually ASKED for, and only when the
+            # two share a writing system.
+            _inferred = 0
             for _r in results:
-                if not str(_r.get("lang") or "").strip():
-                    _lg0 = self._source_lang(_r)
-                    if _lg0:
-                        _r["lang"] = _lg0
-                        _stamped += 1
-            if _stamped:
+                _eff = str(_r.get("lang") or "").strip().lower()[:2]
+                if not _eff:
+                    for _w in _plan:
+                        _eff = self._source_lang(_r, _w)
+                        if _eff:
+                            _inferred += 1
+                            break
+                _r["lang_eff"] = _eff
+            if _inferred:
                 self._record_decision(
                     card, "لغة المراجع غير المفهرسة",
-                    f"{_stamped} مرجعاً بلا حقل لغة ⟶ قُرئت من خطّ العنوان",
-                    "measured", "بحث أكاديمي")
-            _plan = list(card.get("refs_lang_plan") or [])
+                    f"{_inferred} مرجعاً بلا حقل لغة ⟶ نُسِب بخطّ عنوانه "
+                    "(استدلالٌ لا تصريحٌ من الناشر)", "measured",
+                    "بحث أكاديمي")
 
             def _n_lang(_rs, _w):
                 return sum(1 for _x in _rs
-                           if str(_x.get("lang") or "").lower().startswith(_w))
+                           if str(_x.get("lang_eff") or "").startswith(_w))
 
             def _order_langs(_rs):
                 """The plan's own ordering, re-appliable after the pool grows."""
@@ -5687,11 +5742,11 @@ class WeaverOrchestrator:
                     # BOTH: take turns, so a nine-item list cannot come back in
                     # one language because that language happened to rank
                     # higher.
-                    return _wr.interleave_by_lang(_rs, _plan)
+                    return _wr.interleave_by_lang(_rs, _plan, key="lang_eff")
                 _w0 = _plan[0]
                 _ix = {id(_x): _i for _i, _x in enumerate(_rs)}
                 return sorted(_rs, key=lambda _x: (
-                    0 if str(_x.get("lang") or "").lower().startswith(_w0)
+                    0 if str(_x.get("lang_eff") or "").startswith(_w0)
                     else 1, _ix.get(id(_x), 0)))
 
             def _say_langs(_rs):
@@ -5741,6 +5796,8 @@ class WeaverOrchestrator:
                             results, card, _wl, _share - _n_in, query, lang,
                             mem)
                         if _added:
+                            for _a2 in _added:
+                                _a2.setdefault("lang_eff", _wl)
                             results = _wr.order_by_quality(results + _added)
                             _grew = True
                     if _grew:
@@ -5891,8 +5948,13 @@ class WeaverOrchestrator:
                   if len(card.get("refs_lang_plan") or []) == 1
                   else "").lower()
         if _tl and _tl not in ("any", "all", ""):
+            # the SAME reading the ordering and the top-up used. Counting the
+            # index field again here would announce a shortfall that the
+            # top-up had already answered — the note and the ledger telling
+            # the reader two different numbers about one list.
             _in = sum(1 for r in results
-                      if str(r.get("lang") or "").lower().startswith(_tl))
+                      if str(r.get("lang_eff") or r.get("lang") or "")
+                      .lower().startswith(_tl))
             if _in < len(results):
                 _note = card.get("refs_lang_note") or ""
                 self._skip_note(
