@@ -65,6 +65,75 @@ DEFAULT_PORT = 18789        # منفذُ المحرّك الافتراضيّ (DE
 OUR_PORT = 18889            # ومنفذُنا، بعيداً عنه وعن منفذ --dev (19001)
 
 
+# ── مفتاحٌ واحدٌ في نظامك، يكفي المحرّكَ أيضاً ────────────────────────────
+#
+# السببُ الذي كشفه السجلّ:
+#     "model": null, "provider": null
+#     "No route-compatible authentication source is configured for openai."
+#     requested=openai/gpt-5.6-sol  reason=auth  next=none
+# أي أنّ المحرّكَ سقط إلى نموذجه الافتراضيّ لأنّه لا يعرف مزوّدك.
+#
+# ونظامُك يحمل الإعدادَ أصلاً في `WEAVER_PROVIDER/BASE_URL/API_KEY/MODEL`
+# (core/llm/__init__.py:403-408). والمحرّكُ يقرأ متغيّراً لكلّ مزوّد:
+#     config-provider-contract-BdOif1pq.mjs:89   openrouter: "OPENROUTER_API_KEY"
+# فالوصلُ أن يُترجَم ما عندك إلى ما يفهمه — فلا تضبط مفتاحك مرّتين.
+#
+# ولا يُخمَّن المزوّد: يُقرأ من `WEAVER_PROVIDER` إن صُرّح به، وإلّا فمن
+# اسم المضيف في `WEAVER_BASE_URL` — وهو دليلٌ لا حدس.
+_PROVIDER_ENV = {
+    "openrouter": "OPENROUTER_API_KEY", "deepseek": "DEEPSEEK_API_KEY",
+    "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
+    "groq": "GROQ_API_KEY", "mistral": "MISTRAL_API_KEY",
+    "google": "GOOGLE_API_KEY", "xai": "XAI_API_KEY",
+    "cerebras": "CEREBRAS_API_KEY", "together": "TOGETHER_API_KEY",
+    "fireworks": "FIREWORKS_API_KEY", "kimi": "KIMI_API_KEY",
+    "minimax": "MINIMAX_API_KEY", "zai": "ZAI_API_KEY",
+}
+
+
+def provider_id():
+    """مزوّدُك كما يسمّيه المحرّك، أو "". لا يرفع استثناءً."""
+    try:
+        p = (os.environ.get("WEAVER_PROVIDER") or "").strip().lower()
+        if p in _PROVIDER_ENV:
+            return p
+        host = (os.environ.get("WEAVER_BASE_URL") or "").strip().lower()
+        for name in _PROVIDER_ENV:
+            if name in host:
+                return name
+        if "anthropic.com" in host:
+            return "anthropic"
+        return ""
+    except Exception:
+        return ""
+
+
+def model_id():
+    """النموذجُ بصيغة `<مزوّد>/<نموذج>` كما يطلبها المحرّك، أو ""."""
+    try:
+        m = (os.environ.get("WEAVER_MODEL") or "").strip()
+        if not m:
+            return ""
+        prov = provider_id()
+        if not prov:
+            return ""
+        return m if m.startswith(prov + "/") else f"{prov}/{m}"
+    except Exception:
+        return ""
+
+
+def credentials():
+    """{اسمُ المتغيّر: المفتاح} كما يفهمها المحرّك — أو {}."""
+    try:
+        key = (os.environ.get("WEAVER_API_KEY") or "").strip()
+        prov = provider_id()
+        if not key or not prov:
+            return {}
+        return {_PROVIDER_ENV[prov]: key}
+    except Exception:
+        return {}
+
+
 def engine_env(extra=None):
     """بيئةُ تشغيل المحرّك — معزولةٌ تماماً عن أيّ نسخةٍ أخرى على الجهاز.
 
@@ -107,6 +176,8 @@ def engine_env(extra=None):
     env.setdefault("OPENCLAW_STATE_DIR", _STATE_DIR)                   # ③
     env.setdefault("OPENCLAW_GATEWAY_PORT", str(OUR_PORT))
     env["HOME"] = _ENGINE_HOME
+    for _k, _v in credentials().items():      # مفتاحُك، باسمٍ يفهمه المحرّك
+        env.setdefault(_k, _v)
     for k, v in (extra or {}).items():
         env[str(k)] = str(v)
     try:
@@ -375,6 +446,11 @@ def ask(text, timeout=300, cwd=None, fallback=True):
     if available() and node_bin():
         args = ["agent", "exec", str(text or ""), "--json",
                 "--timeout", str(max(30, int(timeout) - 20))]
+        _m = model_id()
+        if _m:
+            # بلا هذا يسقط المحرّكُ إلى نموذجه الافتراضيّ (openai/…) ثمّ
+            # يفشل بـauth — وهو بالضبط ما رآه المستخدم.
+            args += ["--model", _m]
         if cwd:
             args += ["--cwd", str(cwd)]
         code, out, err = run(args, timeout=timeout, cwd=cwd)
@@ -419,6 +495,20 @@ def _cli():
     if argv == ["--where"]:
         for k, v in state_paths().items():
             print(f"  {k:6s} {v}")
+        return
+    if argv == ["--provider"]:
+        _p, _m, _c = provider_id(), model_id(), credentials()
+        print(f"  المزوّد   : {_p or '— غير معروف'}")
+        print(f"  النموذج   : {_m or '— غير محدَّد (سيسقط المحرّكُ لافتراضيّه)'}")
+        print("  المفتاح   : " + (", ".join(
+            f"{k}=…{v[-4:]}" for k, v in _c.items())
+            if _c else "— لا مفتاح (WEAVER_API_KEY فارغ)"))
+        if not _c:
+            print()
+            print("  اضبط في نظامك (وهي نفسُها التي يستعملها المسارُ البايثونيّ):")
+            print("     export WEAVER_PROVIDER=openrouter")
+            print("     export WEAVER_API_KEY=...")
+            print("     export WEAVER_MODEL=deepseek/deepseek-v4-flash")
         return
     if argv == ["--last"]:
         if os.path.isfile(LAST_LOG):

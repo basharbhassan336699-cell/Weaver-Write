@@ -349,6 +349,64 @@ chk("and an existing install can be repaired without reinstalling",
 
 print()
 print("=" * 70)
+print(" 12) ONE KEY: your provider reaches the engine too")
+print("=" * 70)
+# From the real log, not a guess:
+#   "model": null, "provider": null
+#   "No route-compatible authentication source is configured for openai."
+#   requested=openai/gpt-5.6-sol  reason=auth  next=none
+# The engine fell back to ITS default model because it knew nothing of the
+# user's provider. The bridge translates what the python side already holds
+# (core/llm/__init__.py:403-408) into the name the engine reads
+# (config-provider-contract-BdOif1pq.mjs:89  openrouter: "OPENROUTER_API_KEY").
+for _k in ("WEAVER_PROVIDER", "WEAVER_API_KEY", "WEAVER_MODEL",
+           "WEAVER_BASE_URL"):
+    os.environ.pop(_k, None)
+chk("with nothing configured, nothing is claimed",
+    W.provider_id() == "" and W.model_id() == "" and W.credentials() == {})
+
+os.environ["WEAVER_PROVIDER"] = "openrouter"
+os.environ["WEAVER_API_KEY"] = "sk-or-test"
+os.environ["WEAVER_MODEL"] = "deepseek/deepseek-v4-flash"
+chk("provider is read from WEAVER_PROVIDER", W.provider_id() == "openrouter")
+chk("model gets the provider prefix the engine wants",
+    W.model_id() == "openrouter/deepseek/deepseek-v4-flash", W.model_id())
+chk("and the key is renamed to what the engine reads",
+    W.credentials() == {"OPENROUTER_API_KEY": "sk-or-test"})
+chk("and it actually reaches the engine env",
+    W.engine_env().get("OPENROUTER_API_KEY") == "sk-or-test")
+
+# no double prefix when the model already carries it
+os.environ["WEAVER_MODEL"] = "openrouter/some/model"
+chk("an already-prefixed model is not prefixed twice",
+    W.model_id() == "openrouter/some/model")
+
+# the provider may be inferred from the base URL -- evidence, not a hunch
+os.environ.pop("WEAVER_PROVIDER")
+os.environ["WEAVER_BASE_URL"] = "https://openrouter.ai/api/v1"
+chk("provider inferred from the base URL host",
+    W.provider_id() == "openrouter")
+os.environ["WEAVER_BASE_URL"] = "https://api.deepseek.com/v1"
+chk("  -> and a different host gives a different provider",
+    W.provider_id() == "deepseek")
+os.environ["WEAVER_BASE_URL"] = "https://example.invalid/v1"
+chk("  -> an unknown host claims nothing", W.provider_id() == "")
+
+# a key with no provider must never be exported under a guessed name
+os.environ.pop("WEAVER_BASE_URL")
+chk("a key without a known provider is not exported blindly",
+    W.credentials() == {})
+
+_wc = open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+           encoding="utf-8").read()
+chk("--model is passed so the engine cannot fall back to its own default",
+    '"--model", _m' in _wc)
+for _k in ("WEAVER_PROVIDER", "WEAVER_API_KEY", "WEAVER_MODEL",
+           "WEAVER_BASE_URL"):
+    os.environ.pop(_k, None)
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if ok else "FAIL"))
 print("=" * 70)
 sys.exit(0 if ok else 1)
