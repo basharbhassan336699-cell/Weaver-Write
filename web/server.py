@@ -2122,11 +2122,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         sse({"t": "done"})
                         return
                     # export failed → fall through to normal handling
+            # البوّابةُ محذوفة. كانت قائمةُ كلماتٍ (`_TASK_TRIGGERS`) تقرأ
+            # رسالتَك وتقرّر — قبل أن يرى النموذجُ حرفاً — أتذهب إلى الوكيل أم
+            # إلى الطبقات القديمة؛ فكلمةُ «بحث» أو «اعمل» أو «ملف» كانت تكفي
+            # لتحويل سؤالٍ عاديٍّ إلى مشروع مستند. وأوبن كلاو ليس فيه بوّابة:
+            # كلُّ رسالةٍ تذهب إلى الوكيل، والوكيلُ يقرّر. فهكذا صارت هنا.
+            #
+            # وتبقى الأنابيبُ كما هي لمن لا محرّكَ عنده — حذفُ البوّابة ليس
+            # حذفَ الطريق.
             try:
-                from pipeline.orchestrator import is_document_task, run_pipeline_sync
-                _is_task = _apply_intent_task(is_document_task(msg), _wiv)
+                from pipeline.orchestrator import run_pipeline_sync
             except Exception:
-                _is_task = True
+                run_pipeline_sync = None
+            if _engine_ready():
+                _is_task = False
+            else:
+                try:
+                    from pipeline.orchestrator import is_document_task
+                    _is_task = _apply_intent_task(is_document_task(msg), _wiv)
+                except Exception:
+                    _is_task = True
 
             # attached files → perform the user's instruction on them
             attach_text, attach_names = "", []
@@ -2270,11 +2285,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         return
             # Quick question → fast direct answer (keeps history + effort).
             # Document/generation task → the FULL pipeline below.
-            try:
-                from pipeline.orchestrator import is_document_task
-                _is_task = _apply_intent_task(is_document_task(msg), _wiv)
-            except Exception:
-                _is_task = True
+            # البوّابةُ محذوفة هنا أيضاً — انظر التعليق في مسار SSE أعلاه.
+            if _engine_ready():
+                _is_task = False
+            else:
+                try:
+                    from pipeline.orchestrator import is_document_task
+                    _is_task = _apply_intent_task(is_document_task(msg), _wiv)
+                except Exception:
+                    _is_task = True
             attach_text, attach_names = "", []
             try:
                 attach_text, attach_names = _attach_extract(body.get("files"))
