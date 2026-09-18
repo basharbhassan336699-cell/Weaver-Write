@@ -141,6 +141,7 @@ echo "  ⚙ الاعتماديات (٣٢٠ حزمة، قد تطول)…"
 _OC () { OPENCLAW_STATE_DIR="$STATE_DIR" OPENCLAW_PROFILE=weaver \
          "$NODE" "$DEST/openclaw.mjs" "$@" >/dev/null 2>&1; }
 STATE_DIR="${WEAVER_STATE_DIR:-$HOME/.weaver-write/state}"
+ROOT="$(cd "$HERE/../.." && pwd)"
 echo "  ⌕ بحثُ الويب (إضافتا أوبن كلاو الرسميّتان)…"
 for _P in duckduckgo perplexity; do
   if _OC plugins install "@openclaw/${_P}-plugin" --accept-capabilities; then
@@ -149,9 +150,11 @@ for _P in duckduckgo perplexity; do
     echo "    ⚠ ${_P} — لم تُركَّب (شبكة؟). البحثُ يعمل بما تبقّى"
   fi
 done
-_OC config set tools.web.search.enabled true \
-  && echo "    ✓ tools.web.search.enabled = true" \
-  || echo "    ⚠ تعذّر تفعيلُ بحثِ الويب"
+# والتفعيلُ وحده لا يكفي: المحرّكُ يختار المزوّدَ بمفتاحه، وduckduckgo بلا
+# مفتاحٍ فلا يُكتشَف تلقائياً أبداً. فيُترك الإتمامُ للجسر: يفحص أيُّ مزوّدٍ
+# حُلّ، ويُعيّن duckduckgo صراحةً إن لم يُحَلّ شيء.
+( cd "$ROOT" && WEAVER_NODE="$NODE" python3 -m pipeline.weaver_core --web-search 2>&1 \
+  | sed 's/^/    /' ) || echo "    ⚠ تعذّر إعدادُ بحثِ الويب"
 
 echo
 echo "── تمّ ──"

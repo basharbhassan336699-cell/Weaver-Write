@@ -542,6 +542,16 @@ def gateway_start(wait=None):
         _t0 = time.time()
         while time.time() - _t0 < wait:
             if gateway_health():
+                # إقلاعةٌ جديدة ⟶ تُضمَن صلاحيةُ البحث مرّةً واحدة. والبوّابةُ
+                # تحمل بيئتَها من لحظة إقلاعها، فهذا أوانُه الصحيح.
+                try:
+                    if not probe_search("اختبار").get("chosen"):
+                        run(["config", "set", "tools.web.search.enabled",
+                             "true"], timeout=60)
+                        run(["config", "set", "tools.web.search.provider",
+                             "duckduckgo"], timeout=60)
+                except Exception:
+                    pass
                 return True, f"أقلعت في {time.time() - _t0:.1f} ث"
             time.sleep(1)
         return False, f"لم تسمع خلال {wait} ث — انظر {GATEWAY_LOG}"
@@ -652,6 +662,30 @@ def enable_web_search():
     code, out, err = run(["config", "set", WEB_SEARCH_KEY, "true"], timeout=90)
     rows.append((WEB_SEARCH_KEY, code == 0,
                  _real_error(err) or (err or "").strip()[:160]))
+
+    # ── وضمانُ مزوّدٍ صالح ────────────────────────────────────────────────
+    #
+    # التركيبُ وحده لا يكفي. المحرّكُ يختار المزوّدَ **بإشارةِ اعتماد** —
+    # أي بمفتاحٍ موجود:
+    #     runtime-CFtRzJUE.mjs:101  resolveWebSearchProviderId
+    #     └─ hasImplicitProviderSelectionSignal(provider, …)
+    # وduckduckgo بلا مفتاح، فلا إشارةَ له، فلا يُكتشَف تلقائياً أبداً مهما
+    # رُكّب. مقيسٌ بدوالّ المحرّك: chosen="" و usable=false.
+    #
+    # فإن لم يُحَلّ مزوّدٌ — لا من مفتاحك ولا من تعيينٍ سابق — يُعيَّن
+    # duckduckgo صراحةً، فيعمل البحثُ بلا مفتاحٍ ولا سؤال. وإن كان مفتاحُك
+    # موجوداً فُضِّل مزوّدُه (perplexity برتبة ٥٠ قبل ddg برتبة ١٠٠) ولا
+    # نلمس شيئاً.
+    st = probe_search("اختبار")
+    if not st.get("chosen"):
+        code2, _o2, err2 = run(["config", "set",
+                                "tools.web.search.provider", "duckduckgo"],
+                               timeout=90)
+        rows.append(("tools.web.search.provider = duckduckgo", code2 == 0,
+                     _real_error(err2) or "لا مفتاحَ يُكتشَف — عُيِّن صراحةً"))
+        st = probe_search("اختبار")
+    rows.append(("المزوّدُ المختار: " + (st.get("chosen") or "لا شيء"),
+                 bool(st.get("usable")), st.get("error", "")))
     return rows
 
 

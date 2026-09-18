@@ -24,19 +24,33 @@ import { fileURLToPath } from "node:url";
 const query = process.argv[2] || "الإعجاز العلمي في القرآن";
 const here = dirname(fileURLToPath(import.meta.url));
 const rt = join(here, "runtime", "dist", "runtime-BjhiVv_x.mjs");
+const io = join(here, "runtime", "dist", "io.runtime-4x3HMjSp.mjs");
+
+// تُحمَّل إعداداتُ المحرّك من ملفّها. وبلا هذا كانت الدوالُّ تُنادى بلا
+// إعداد، فلا ترى `tools.web.search.provider` المحفوظ وتقول «لا مزوّد» —
+// وهو ما خدعني: ضبطتُ المزوّدَ ثمّ قال الفحصُ إنّه غيرُ مضبوط.
+async function loadEngineConfig() {
+  try {
+    const m = await import(io);
+    const c = await m.loadConfig?.({});
+    return c?.config ?? c ?? undefined;
+  } catch { return undefined; }
+}
 
 const out = { providers: [], configured: [], chosen: "", usable: false,
               ok: false, count: 0, first: "", error: "" };
 try {
   const m = await import(rt);
-  out.providers = (m.listWebSearchProviders({}) || []).map((p) => p.id);
-  out.configured = (m.listConfiguredWebSearchProviders({}) || []).map((p) => p.id);
-  out.chosen = m.resolveWebSearchProviderId({}) || "";
-  out.usable = !!m.hasUsableWebSearchProvider({});
+  const config = await loadEngineConfig();
+  const P = { config };
+  out.providers = (m.listWebSearchProviders(P) || []).map((p) => p.id);
+  out.configured = (m.listConfiguredWebSearchProviders(P) || []).map((p) => p.id);
+  out.chosen = m.resolveWebSearchProviderId(P) || "";
+  out.usable = !!m.hasUsableWebSearchProvider(P);
   if (!out.usable) {
     out.error = "لا مزوّدَ صالح: لا مفتاحَ يُكتشَف، ولا مزوّدَ مُعيَّنٌ صراحةً";
   } else {
-    const r = await m.runWebSearch({ query, maxResults: 5 });
+    const r = await m.runWebSearch({ config, args: { query, maxResults: 5 } });
     const arr = Array.isArray(r?.results) ? r.results : Array.isArray(r) ? r : [];
     out.count = arr.length;
     out.first = String(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
