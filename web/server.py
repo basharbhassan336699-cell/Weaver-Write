@@ -1430,6 +1430,56 @@ def _sources_md(sources, isar: bool) -> str:
     return "\n\n---\n\n**" + head + ":**\n\n" + "\n".join(lines)
 
 
+def _chat_via_engine(message, history=None, timeout=120, context=None,
+                     memory=None, attachments=None):
+    """المحرّكُ أوّلاً: فيه الأدواتُ والحلقة، و`_chat` نداءٌ واحدٌ بلا شيءٍ منها.
+
+    `_chat` ترسل رسالةً إلى المزوّد وتعيد الردّ — نداءٌ واحدٌ لا يفتح صفحةً
+    ولا يقرأ ملفّاً ولا يُعيد المحاولة. والمحرّكُ (Weaver Write core) يحمل
+    حلقةَ أوبن كلاو وعُدَّتَها: يبحث، ويفتح، وينفّذ، ويعيد حتى يُنجز.
+
+    فهذا هو موضعُ الوصل: يُجرَّب المحرّكُ، فإن لم يكن مركَّباً أو لم يُجب
+    عاد المسارُ القديمُ كما هو حرفاً. إضافةٌ لا استبدال.
+
+    ولا يُمَسُّ مسارُ المستندات (`run_pipeline_sync`) بحال — وهو الذي يبني
+    البحوثَ والملفّات، وله طبقاتُه.
+
+    يُعيد dict عند النجاح، أو None ليتولّى القديم. ولا يرفع استثناءً."""
+    import os as _os
+    if (_os.environ.get("WEAVER_ENGINE_CHAT", "1") or "1").strip() in (
+            "0", "false", "no"):
+        return None
+    try:
+        from pipeline import weaver_core as _wc
+    except Exception:
+        return None
+    try:
+        if not (_wc.available() and _wc.node_bin()):
+            return None
+        parts = []
+        if memory and str(memory).strip():
+            parts.append("[ذاكرة]\n" + str(memory).strip()[:4000])
+        if context and str(context).strip():
+            parts.append("[سياق]\n" + str(context).strip()[:4000])
+        for h in (history or [])[-6:]:
+            if isinstance(h, dict) and h.get("content"):
+                parts.append(f"{h.get('role', 'user')}: "
+                             + str(h["content"])[:1200])
+        if attachments and str(attachments).strip():
+            parts.append("[مرفقات]\n" + str(attachments).strip()[:8000])
+        parts.append("[الطلب]\n" + str(message or ""))
+        r = _wc.ask("\n\n".join(parts), timeout=max(60, int(timeout or 120)),
+                    fallback=False)
+    except Exception:
+        return None
+    ans = (r or {}).get("answer") or ""
+    if not ans.strip() or ans.startswith("error:"):
+        return None                       # ليتولّى القديمُ ولا يضيع الطلب
+    return {"reply": ans, "engine": "weaver-core",
+            "provider": "weaver-core", "model": _wc.model_id() or "",
+            "effort": "engine"}
+
+
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
           context: str = None, memory: str = None, attachments: str = None) -> dict:
     """Send a message to the configured provider using the saved key and return
@@ -1438,6 +1488,12 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     `effort` (low/medium/high/max) changes real generation settings."""
     import urllib.request
     import urllib.error
+
+    # ① المحرّك إن كان مركَّباً — وإلّا فالمسارُ القديمُ كما هو تماماً
+    _eng = _chat_via_engine(message, history, timeout, context, memory,
+                            attachments)
+    if _eng is not None:
+        return _eng
 
     s = keysync.get_settings()  # reads config/.env fresh (CLI + web share it)
     key = (s.get("WEAVER_API_KEY") or "").strip()
