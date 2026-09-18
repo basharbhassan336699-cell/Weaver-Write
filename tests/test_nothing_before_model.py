@@ -55,7 +55,7 @@ def _install(engine_on):
     """يستبدل كلَّ محطّةٍ برصّادٍ يسجّل مرورَها."""
     S._engine_ready = lambda: engine_on
     S._chat_via_engine = (
-        lambda m, h=None, t=120, c=None, mem=None, att=None:
+        lambda m, h=None, t=120, c=None, mem=None, att=None, session=None:
         seen.append(("engine", c, mem)) or {"reply": "جوابُ المحرّك",
                                             "engine": "weaver-core"})
     S._chat_direct = (lambda *a, **k:

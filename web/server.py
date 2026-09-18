@@ -1433,7 +1433,7 @@ def _sources_md(sources, isar: bool) -> str:
 
 
 def _chat_via_engine(message, history=None, timeout=120, context=None,
-                     memory=None, attachments=None):
+                     memory=None, attachments=None, session=None):
     """المحرّكُ أوّلاً: فيه الأدواتُ والحلقة، و`_chat` نداءٌ واحدٌ بلا شيءٍ منها.
 
     `_chat` ترسل رسالةً إلى المزوّد وتعيد الردّ — نداءٌ واحدٌ لا يفتح صفحةً
@@ -1479,7 +1479,8 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
         except Exception:
             _t = 240
         r = _wc.ask("\n\n".join(parts),
-                    timeout=max(int(timeout or 120), _t), fallback=False)
+                    timeout=max(int(timeout or 120), _t), fallback=False,
+                    session=session)
     except Exception:
         return None
     ans = (r or {}).get("answer") or ""
@@ -1531,7 +1532,7 @@ def _needs_tools(r):
 
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
           context: str = None, memory: str = None, attachments: str = None,
-          use_engine: bool = True) -> dict:
+          use_engine: bool = True, session: str = None) -> dict:
     """نداءٌ واحدٌ إلى النموذج ومعه أدواتُه — كما في أوبن كلاو حرفاً.
 
     في أوبن كلاو أوّلُ شيءٍ داخل الحلقة نداءُ النموذج، والأدواتُ في نفس
@@ -1549,7 +1550,7 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     بلا جواب."""
     if use_engine and _engine_ready():
         _eng = _chat_via_engine(message, history, timeout, context, memory,
-                                attachments)
+                                attachments, session=session)
         if _eng is not None:
             return _eng
         return _chat_direct(message, history, timeout, effort, context,
@@ -2225,7 +2226,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     else ("التفكير" if isar else "Thinking"))})
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
-                          memory=mem_ctx, attachments=attach_text)
+                          memory=mem_ctx, attachments=attach_text,
+                          session=body.get("chatId"))
                 if r.get("error"):
                     if r.get("error") == "no_key":
                         sse({"t": "reply", "reply": (
@@ -2378,7 +2380,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             mem_ctx = _full
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
-                          memory=mem_ctx, attachments=attach_text)
+                          memory=mem_ctx, attachments=attach_text,
+                          session=body.get("chatId"))
                 if not r.get("error") and (r.get("reply") or "").strip():
                     r["reply"] = r["reply"] + _sources_md(srcs, isar)
                 self._json(r)

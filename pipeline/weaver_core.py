@@ -18,7 +18,10 @@
 """
 
 import os
+import signal
 import subprocess
+import time
+import threading
 import sys
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -432,6 +435,160 @@ def run(args, timeout=180, input_text=None, cwd=None):
         return 1, "", f"{type(e).__name__}: {str(e)[:160]}"
 
 
+# ── البوّابة: خادمٌ دائمٌ لا يُقلع إلّا مرّة ─────────────────────────────────
+#
+# `agent exec` وصفُه بخطّ المحرّك: «Run one **isolated** headless **embedded**
+# agent turn». ومعزولةٌ تعني عمليةَ node جديدة، و٥٩ إضافةً تُحمَّل، و٥٤ أداةً
+# تُبنى، وقاعدةَ الحالة تُفتح — في كلِّ رسالة. مقيسٌ على خادمٍ سريع:
+#
+#     agent exec "مرحبا"  ⟶  8.57 ث حتى مجرّدِ فحصِ المفتاح
+#     agent -m  "مرحبا"   ⟶  1.43 ث  (والبوّابةُ تردّ صحّتَها في 4ms)
+#
+# وعلى هاتفٍ بمعالج ARM يتضاعف ذلك أضعافاً — وهو سببُ الدقيقتين والثلاث.
+#
+# وليس هذا حلّاً من عندنا: `agent` وصفُه عنده «Run an agent turn **via the
+# Gateway**»، و`gateway run` و`daemon install` أوامرُه هو. فمسارُه العاديُّ
+# هو البوّابة، و`agent exec` هو الاستثناءُ المعزول — وأنا اخترتُ الاستثناء.
+#
+# وتحلّ معها مشكلةٌ ثانية: `--session-id` يمنح استمرارَ المحادثة، وهو ما لا
+# يستطيعه المعزولُ أبداً.
+GATEWAY_LOG = os.path.join(STATE, "gateway.log")
+_GW_READY_WAIT = 90          # ثانيةً ننتظر إقلاعَ البوّابة
+_gw_lock = threading.Lock()
+
+
+def gateway_on():
+    """أمسموحٌ باستعمال البوّابة؟ (`WEAVER_GATEWAY=0` يُطفئها)"""
+    return (os.environ.get("WEAVER_GATEWAY", "1") or "1").strip() not in (
+        "0", "false", "no")
+
+
+def gateway_port():
+    """المنفذُ الذي تسمع عليه بوّابتُنا."""
+    try:
+        return int(engine_env().get("OPENCLAW_GATEWAY_PORT") or OUR_PORT)
+    except Exception:
+        return OUR_PORT
+
+
+def _gateway_lock():
+    """قفلُ البوّابة كما يكتبه المحرّك — أو {}.
+
+        paths-V8kKIUzt.mjs:261  resolveGatewayLockDir
+            <stateDir>/tmp/openclaw-<uid>/gateway.state.lock
+
+    وفيه `pid` و`port` و`stateDir`. يُقرأ ولا يُكتب."""
+    try:
+        uid = os.getuid() if hasattr(os, "getuid") else None
+        sub = ("openclaw-%d" % uid) if uid is not None else "openclaw"
+        f = os.path.join(_STATE_DIR, "tmp", sub, "gateway.state.lock")
+        import json as _j
+        with open(f, encoding="utf-8") as fh:
+            d = _j.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def gateway_health(timeout=2):
+    """أحيّةٌ البوّابةُ الآن؟ — اتّصالٌ بالمنفذ، لا نداءُ أمر.
+
+    كان هذا `gateway health`، وهو صحيحٌ لكنّه يُقلع node في كلّ فحص (١.٤ ث)
+    — ونحن نفحص قبل كلِّ رسالة، فيُلتهم بعضُ ما وفّرناه. والاتّصالُ بالمنفذ
+    يقول الحقيقةَ نفسَها في أجزاءٍ من الثانية.
+
+    ولا يرفع استثناءً."""
+    import socket as _s
+    sk = _s.socket()
+    try:
+        sk.settimeout(float(timeout))
+        sk.connect(("127.0.0.1", gateway_port()))
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            sk.close()
+        except Exception:
+            pass
+
+
+def gateway_start(wait=None):
+    """أقلِع البوّابةَ في الخلفية وانتظرها حتى تسمع. يعيد (نجح، سبب).
+
+    مؤمَّنٌ بقفلٍ كي لا يُقلعها خيطان معاً، وأوّلُ ما يفعل أن يسأل: أهي حيّةٌ
+    سلفاً؟ فالإقلاعُ الثاني ضياعٌ ومنفذٌ مشغول."""
+    wait = int(wait or _GW_READY_WAIT)
+    with _gw_lock:
+        if gateway_health():
+            return True, "كانت حيّةً سلفاً"
+        nb = node_bin()
+        if not (available() and nb):
+            return False, why_unavailable()
+        try:
+            os.makedirs(STATE, exist_ok=True)
+            _log = open(GATEWAY_LOG, "ab", buffering=0)
+        except Exception:
+            _log = subprocess.DEVNULL
+        try:
+            # مفصولةٌ عن هذه العملية: تبقى حيّةً بعد انتهاء الطلب، وتُهمل
+            # إشارةَ المقاطعة التي تصل الأبَ (start_new_session).
+            subprocess.Popen(
+                [nb, ENTRY, "gateway", "run", "--allow-unconfigured"],
+                stdout=_log, stderr=_log, stdin=subprocess.DEVNULL,
+                cwd=_ROOT, env=engine_env(), start_new_session=True)
+        except Exception as e:
+            return False, f"{type(e).__name__}: {str(e)[:160]}"
+        _t0 = time.time()
+        while time.time() - _t0 < wait:
+            if gateway_health():
+                return True, f"أقلعت في {time.time() - _t0:.1f} ث"
+            time.sleep(1)
+        return False, f"لم تسمع خلال {wait} ث — انظر {GATEWAY_LOG}"
+
+
+def gateway_stop():
+    """أطفئ البوّابة — بإشارةٍ إلى العملية التي يسمّيها قفلُه هو.
+
+    ولا `gateway stop`: هي إدارةُ خدمةٍ (systemd/launchd)، وترفض أصلاً حين
+    يكون `OPENCLAW_STATE_DIR` غيرَ الافتراضيّ — وهو حالُنا دائماً:
+        «service management skipped: non-default state dir or config path»
+
+    ولا `pkill -f`: نمطُها يُطابق سطرَ الأوامر كاملاً — بما فيه سطرُ `pkill`
+    نفسِه ومَن ناداه — فتقتل الصَّدفةَ التي تُشغّلها. مقيسٌ لا مُخمَّن: جرّبتُها
+    فقتلت جلستي.
+
+    والعمليةُ تُعيد تسميةَ نفسِها إلى `openclaw-gateway`، فلا يُجدي البحثُ عن
+    سطر التشغيل. فيُقرأ رقمُها من القفل — وهو مصدرُ الحقيقة عند المحرّك.
+
+    وإطفاءٌ بإشارةٍ لطيفة (SIGTERM) كي تُنظّف قفلَها بنفسها؛ فالقتلُ القاسي
+    يُخلّف قفلاً بائتاً يمنع كلَّ إقلاعٍ بعده:
+        «Another gateway (pid …) already owns this state directory»"""
+    d = _gateway_lock()
+    pid = d.get("pid")
+    if not isinstance(pid, int) or pid <= 1 or pid == os.getpid():
+        return (not gateway_health()), "لا قفلَ صالحاً"
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return (not gateway_health()), "لم تكن تعمل"
+    except Exception as e:
+        return False, f"{type(e).__name__}: {str(e)[:120]}"
+    _t0 = time.time()
+    while time.time() - _t0 < 25:
+        if not gateway_health():
+            return True, f"أُطفئت في {time.time() - _t0:.1f} ث"
+        time.sleep(1)
+    return False, "لم تستجب لـSIGTERM خلال ٢٥ ث"
+
+
+def gateway_state():
+    """وصفٌ موجزٌ لحال البوّابة — للتشخيص."""
+    return {"allowed": gateway_on(), "alive": gateway_health(),
+            "port": gateway_port(), "pid": _gateway_lock().get("pid") or "—",
+            "log": GATEWAY_LOG}
+
+
 # ── (أ) إشعالُ ما يملكه المحرّكُ أصلاً لتخفيف الكلفة ──────────────────────
 #
 # نداءٌ واحدٌ كلّف ٢٣١٦٨ رمزَ مدخلاتٍ مقابل ٣٣ للجواب، لأنّ كتالوجَ الأدوات
@@ -591,7 +748,12 @@ def _from_envelope(out):
                 if isinstance(v.get(k2), str) and v[k2].strip():
                     return v[k2].strip()
     parts = []                                    # ثمّ payloads[].text
-    for it in (data.get("payloads") or []):
+    _pl = data.get("payloads")
+    if not _pl and isinstance(data.get("result"), dict):
+        # مُغلَّفُ البوّابة يضعها تحت `result`:
+        #   {"status":"ok","result":{"payloads":[{"text":"…"}]}}
+        _pl = data["result"].get("payloads")
+    for it in (_pl or []):
         if isinstance(it, dict) and isinstance(it.get("text"), str) \
                 and it["text"].strip():
             parts.append(it["text"].strip())
@@ -604,7 +766,17 @@ def _from_envelope(out):
     return t
 
 
-def ask(text, timeout=300, cwd=None, fallback=True):
+def _session_id(key):
+    """مُعرِّفُ جلسةٍ ثابتٌ ونظيف من مفتاحٍ أيّاً كان شكلُه.
+
+    يُمرَّر إلى `--session-id`، فيجب أن يبقى هو نفسَه لنفس المحادثة (وإلّا
+    ضاع الاستمرار) وأن يخلو ممّا قد يُربك سطرَ الأوامر."""
+    import re as _re
+    k = _re.sub(r"[^A-Za-z0-9_-]", "-", str(key or "").strip())[:48]
+    return ("weaver-" + k) if k else "weaver-default"
+
+
+def ask(text, timeout=300, cwd=None, fallback=True, session=None):
     """اسأل — بالمحرّك إن أمكن، وإلّا بالمسار البايثونيّ.
 
     الدرجةُ الثالثة: **أيُّ سؤالٍ يُجاب على أيّ إصدارِ node، ولو لم يكن ثمّة
@@ -622,8 +794,27 @@ def ask(text, timeout=300, cwd=None, fallback=True):
     الموقف — تولّى المسارُ البايثونيُّ وقال السبب — لكنّ الخطأ كان خطئي:
     زعمتُ في تعليقٍ أنّه «مدخلُ الحزمة للتشغيل غير التفاعليّ» بلا دليل."""
     if available() and node_bin():
-        args = ["agent", "exec", str(text or ""), "--json",
-                "--timeout", str(max(30, int(timeout) - 20))]
+        _to = str(max(30, int(timeout) - 20))
+        _via_gateway = False
+        if gateway_on():
+            _ok, _why = gateway_start()
+            _via_gateway = bool(_ok)
+            if not _ok:
+                _record_run(["gateway", "start"], 1, "", str(_why))
+        if _via_gateway:
+            # المسارُ العاديُّ عند المحرّك: نوبةٌ عبر بوّابةٍ حيّة، بلا إقلاع.
+            args = ["agent", "-m", str(text or ""), "--json",
+                    "--timeout", _to]
+            if session:
+                # استمرارُ المحادثة — وهو ما يعجز عنه `exec` المعزول.
+                args += ["--session-id", _session_id(session)]
+        else:
+            # ولا بوّابة: اللقطةُ المعزولة كما كانت حرفاً — أبطأ، لكنّها
+            # تعمل حيث لا تقوم البوّابة.
+            args = ["agent", "exec", str(text or ""), "--json",
+                    "--timeout", _to]
+            if cwd:
+                args += ["--cwd", str(cwd)]
         if (os.environ.get("WEAVER_ENGINE_LEAN", "") or "").strip() == "1":
             # سطحٌ مُخفَّفٌ من الأدوات. مُطفأٌ افتراضياً لأنّه قد يحجب أداةً
             # تلزم المهمّة — والتوفيرُ الأكبرُ في toolSearch لا فيه.
@@ -633,8 +824,6 @@ def ask(text, timeout=300, cwd=None, fallback=True):
             # بلا هذا يسقط المحرّكُ إلى نموذجه الافتراضيّ (openai/…) ثمّ
             # يفشل بـauth — وهو بالضبط ما رآه المستخدم.
             args += ["--model", _m]
-        if cwd:
-            args += ["--cwd", str(cwd)]
         code, out, err = run(args, timeout=timeout, cwd=cwd)
         if code == 0 and out.strip():
             return {"answer": _from_envelope(out), "engine": "weaver-core",
@@ -733,6 +922,22 @@ def _cli():
                                "patch_portability.py")
         _r = _sp.run([sys.executable, _script, RUNTIME])
         sys.exit(_r.returncode)
+    if argv[:1] == ["--gateway"]:
+        sub = argv[1] if len(argv) > 1 else "status"
+        if sub == "start":
+            ok, why = gateway_start()
+            print(("  ✓ البوّابة حيّة — " if ok else "  ⚠ لم تقم — ") + str(why))
+            return
+        if sub == "stop":
+            ok, why = gateway_stop()
+            print(("  ✓ أُطفئت" if ok else "  ⚠ ما زالت حيّة — " + str(why)))
+            return
+        st = gateway_state()
+        print(f"  مسموحة : {'نعم' if st['allowed'] else 'لا (WEAVER_GATEWAY=0)'}")
+        print(f"  حيّة    : {'نعم' if st['alive'] else 'لا'}")
+        print(f"  المنفذ  : {st['port']}   ·   pid: {st['pid']}")
+        print(f"  السجلّ  : {st['log']}")
+        return
     if argv == ["--web-search"]:
         if not (available() and node_bin()):
             print(why_unavailable(), file=sys.stderr)

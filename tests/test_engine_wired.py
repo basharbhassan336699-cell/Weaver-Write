@@ -56,7 +56,8 @@ class _Fake:
     def __init__(self, answer):
         self.answer, self.seen = answer, ""
 
-    def __call__(self, text, timeout=300, cwd=None, fallback=True):
+    def __call__(self, text, timeout=300, cwd=None, fallback=True,
+                 session=None):
         self.seen = text
         return {"answer": self.answer, "engine": "weaver-core", "note": ""}
 
