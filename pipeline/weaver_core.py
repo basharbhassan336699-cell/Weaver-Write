@@ -432,6 +432,51 @@ def run(args, timeout=180, input_text=None, cwd=None):
         return 1, "", f"{type(e).__name__}: {str(e)[:160]}"
 
 
+# ── (أ) إشعالُ ما يملكه المحرّكُ أصلاً لتخفيف الكلفة ──────────────────────
+#
+# نداءٌ واحدٌ كلّف ٢٣١٦٨ رمزَ مدخلاتٍ مقابل ٣٣ للجواب، لأنّ كتالوجَ الأدوات
+# يُرسَل كاملاً في كلّ مرّة. وللمحرّك آليّتُه لذلك، مُطفأةٌ افتراضياً:
+#
+#     tools.toolSearch.enabled = true
+#     tools.toolSearch.mode    = "directory"
+#
+# فبدل إرسال الكتالوج كلِّه، يُرسَل فهرسٌ مختصرٌ وثلاثُ أدواتِ تحكّم
+# (`tool_search` · `tool_describe` · `tool_call`)، والنموذجُ يطلب تفصيلَ
+# الأداة حين يحتاجها فقط.
+#
+# وتعليقُهم يقول لماذا الافتراضيُّ مُطفأ:
+#     core-tool-factory-descriptors-DvHWmRcY.mjs:236
+#     "hiding them behind search adds a lookup round-trip to nearly every
+#      coding turn."
+# أي: يوفّر رموزاً ويكلّف جولةً. مقايضةٌ تُشعَل وتُطفَأ.
+#
+# ولا يُكتب الإعدادُ بيدنا: يُضبط بأمر المحرّك `config set` — فهو الذي
+# يتحقّق من المفتاح والقيمة ويرفض الخطأ. فلا نكتب إعداداً نخمّنه.
+TUNING = (("tools.toolSearch.enabled", "true"),
+          ("tools.toolSearch.mode", "directory"))
+
+
+def tune(revert=False):
+    """اضبط إعداداتِ التخفيف في حالتنا المعزولة. يُعيد قائمةَ (مفتاح، نجاح، رسالة)."""
+    out = []
+    for key, val in TUNING:
+        v = ("false" if val == "true" else "off") if revert else val
+        code, so, se = run(["config", "set", key, v], timeout=120)
+        msg = (se or so or "").strip().split("\n")[-1][:160]
+        out.append((key, v, code == 0, msg))
+    return out
+
+
+def tuning_state():
+    """ما هو المضبوطُ الآن فعلاً — من المحرّك لا من ظنّنا."""
+    out = []
+    for key, _ in TUNING:
+        code, so, se = run(["config", "get", key], timeout=120)
+        out.append((key, (so or se or "").strip().split("\n")[-1][:80]
+                    if code == 0 else "—"))
+    return out
+
+
 def version():
     """إصدارُ المحرّك، أو ""."""
     code, out, _ = run(["--version"], timeout=60)
@@ -528,6 +573,10 @@ def ask(text, timeout=300, cwd=None, fallback=True):
     if available() and node_bin():
         args = ["agent", "exec", str(text or ""), "--json",
                 "--timeout", str(max(30, int(timeout) - 20))]
+        if (os.environ.get("WEAVER_ENGINE_LEAN", "") or "").strip() == "1":
+            # سطحٌ مُخفَّفٌ من الأدوات. مُطفأٌ افتراضياً لأنّه قد يحجب أداةً
+            # تلزم المهمّة — والتوفيرُ الأكبرُ في toolSearch لا فيه.
+            args.append("--local-model-lean")
         _m = model_id()
         if _m:
             # بلا هذا يسقط المحرّكُ إلى نموذجه الافتراضيّ (openai/…) ثمّ
@@ -578,6 +627,22 @@ def _cli():
         for k, v in state_paths().items():
             print(f"  {k:6s} {v}")
         return
+    if argv in (["--tune"], ["--tune", "--revert"]):
+        if not available():
+            print("المحرّك غير مركَّب بعد.", file=sys.stderr)
+            sys.exit(2)
+        _rev = "--revert" in argv
+        print("  إطفاءُ التخفيف…" if _rev else "  إشعالُ التخفيف…")
+        _bad = 0
+        for k, v, okk, msg in tune(revert=_rev):
+            print(f"    {'✓' if okk else '✗'} {k} = {v}"
+                  + ("" if okk else f"   — {msg}"))
+            _bad += 0 if okk else 1
+        print()
+        print("  الحالةُ الآن (من المحرّك):")
+        for k, v in tuning_state():
+            print(f"    {k} = {v}")
+        sys.exit(1 if _bad else 0)
     if argv == ["--provider"]:
         _p, _m, _c = provider_id(), model_id(), credentials()
         print(f"  المزوّد   : {_p or '— غير معروف'}")

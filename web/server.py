@@ -1490,15 +1490,86 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
             "effort": "engine"}
 
 
+# الكلمةُ التي يقولها المسارُ الخفيفُ حين يعجز. نادرةٌ في الكلام الطبيعيّ
+# فلا تُقال مصادفة، ويُطلب منه أن يقولها **وحدها** فيُفحص الردُّ القصير.
+NEED_TOOLS = "‹NEED_TOOLS›"
+
+_ESCALATE_AR = (
+    "\n\n[تعليمةُ نظام] إن كان جوابُك يكفيه علمُك، فأجب مباشرةً ولا تذكر "
+    "هذه التعليمة. وإن لزمك أن ترى شيئاً حقيقياً — فتحُ صفحةٍ على الإنترنت، "
+    "أو قراءةُ ملفٍّ أو كتابتُه، أو تنفيذُ أمر، أو بحثٌ حيّ — فاكتب هذه "
+    "الكلمة وحدها ولا شيءَ غيرها: " + NEED_TOOLS)
+_ESCALATE_EN = (
+    "\n\n[system] If your own knowledge is enough, answer directly and do "
+    "not mention this instruction. If you need to see something real — open "
+    "a web page, read or write a file, run a command, search live — then "
+    "reply with this token alone and nothing else: " + NEED_TOOLS)
+
+
+def _engine_ready():
+    """أمركَّبٌ المحرّكُ وصالحٌ للنداء؟ لا يرفع استثناءً."""
+    try:
+        from pipeline import weaver_core as _wc
+        return bool(_wc.available() and _wc.node_bin())
+    except Exception:
+        return False
+
+
+def _needs_tools(r):
+    """أقال المسارُ الخفيفُ إنّه يعجز؟
+
+    يُفحص الردُّ القصيرُ وحده: طُلب منه أن يقول الكلمةَ **وحدها**، فإن جاءت
+    داخل جوابٍ طويلٍ فهو جوابٌ ذكرها لا إشارةُ عجز."""
+    try:
+        if not isinstance(r, dict) or r.get("error"):
+            return False
+        t = (r.get("reply") or "").strip()
+        return NEED_TOOLS in t and len(t) <= len(NEED_TOOLS) + 40
+    except Exception:
+        return False
+
+
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
           context: str = None, memory: str = None, attachments: str = None,
           use_engine: bool = True) -> dict:
-    """Send a message to the configured provider using the saved key and return
-    the assistant reply. OpenAI-compatible /chat/completions (works for the
-    registry providers, incl. Anthropic's and Google's compatible endpoints).
-    `effort` (low/medium/high/max) changes real generation settings."""
+    """المُوجِّه: الخفيفُ أوّلاً، والوكيلُ حين يقول النموذجُ إنّه يحتاجه.
+
+    كان هذا الاسمُ يحمل النداءَ المباشرَ نفسَه؛ صار يحمل القرار، والنداءُ
+    المباشرُ انتقل إلى `_chat_direct` بحرفه. فكلُّ من ينادي `_chat` (الويبُ
+    والطرفيةُ معاً) يكسب التوجيهَ بلا تغييرٍ عنده."""
+    if use_engine and _engine_ready():
+        _lite = _chat_direct(message, history, timeout, effort, context,
+                             memory, attachments, escalate=True)
+        if not _needs_tools(_lite):
+            return _lite
+        _eng = _chat_via_engine(message, history, timeout, context, memory,
+                                attachments)
+        if _eng is not None:
+            return _eng
+        # عجز الخفيفُ وتعذّر الوكيل: يُعاد النداءُ بلا تصعيدٍ كي لا يُترك
+        # المستخدمُ بكلمةِ إشارةٍ بدل جواب.
+        return _chat_direct(message, history, timeout, effort, context,
+                            memory, attachments, escalate=False)
+    return _chat_direct(message, history, timeout, effort, context, memory,
+                        attachments)
+
+
+def _chat_direct(message: str, history=None, timeout: int = 120,
+                 effort: str = "medium", context: str = None,
+                 memory: str = None, attachments: str = None,
+                 escalate: bool = False) -> dict:
+    """المسارُ المباشر: نداءٌ واحدٌ إلى المزوّد — بلا أدوات ولا حلقة.
+
+    هذا هو جسمُ `_chat` كما كان حرفاً، مفصولاً باسمه كي يُنادى وحده.
+    و`escalate=True` تُضيف تعليمةً واحدة: «إن لزمك أن ترى شيئاً حقيقياً فقل
+    الكلمة». فيحكم النموذجُ على نفسه، ولا نداءَ زائدٌ يُدفع ثمنُه — لأنّ
+    هذا النداءَ هو الجوابُ نفسُه حين يكفي."""
     import urllib.request
     import urllib.error
+    if escalate:
+        _isar = any("\u0600" <= c <= "\u06ff" for c in str(message or "")[:200])
+        message = str(message or "") + (_ESCALATE_AR if _isar
+                                        else _ESCALATE_EN)
 
     # ① المحرّك إن كان مركَّباً — وإلّا فالمسارُ القديمُ كما هو تماماً.
     #
@@ -1507,12 +1578,6 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     # وكيلٌ: يشرح، ويستعمل أدوات، وقد يُعيد صياغةَ ما طُلب نقلُه حرفاً. فلو
     # مرّ تعديلُ ملفٍّ به لأفسد الملفّ. فتلك النداءاتُ تبقى على المسار
     # المباشر، والمحادثةُ وحدها تذهب إلى المحرّك.
-    if use_engine:
-        _eng = _chat_via_engine(message, history, timeout, context, memory,
-                                attachments)
-        if _eng is not None:
-            return _eng
-
     s = keysync.get_settings()  # reads config/.env fresh (CLI + web share it)
     key = (s.get("WEAVER_API_KEY") or "").strip()
     if not key:
