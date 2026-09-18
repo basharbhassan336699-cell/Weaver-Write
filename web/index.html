@@ -777,9 +777,17 @@
   }
   .tcard:hover { border-color: var(--accent); }
   .tcard-ico {
-    width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px;
+    width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px;
     display: flex; align-items: center; justify-content: center;
-    background: var(--surface); font-size: 11px; font-weight: 700;
+    background: var(--surface); color: var(--text-muted);
+  }
+  .tcard-ico .lucide { display: block; }
+  .tool-acc-head .taci { display: inline-flex; align-items: center; }
+  .tsheet-title { display: flex; align-items: center; gap: 8px; }
+  .tsheet-ico {
+    width: 26px; height: 26px; flex-shrink: 0; border-radius: 7px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text-muted);
   }
   /* الأبناءُ عناصرُ `span`، فبلا `display:block` لا يعمل فيها القصُّ ولا
      `min-width:0` — فتفيض البطاقةُ خارجَ الشاشة. مقيسٌ على لقطةٍ حقيقيّة. */
@@ -2676,6 +2684,10 @@
     </div>
   </div>
 
+<!-- أيقوناتُ Lucide (ISC) — مُضمَّنةٌ لتعمل بلا شبكة -->
+
+<script src="/lucide-icons.js"></script>
+
 <script>
   // ── Greeting based on time of day ──────────────
   // ── i18n translation dictionary ────────────────
@@ -3603,16 +3615,16 @@
     try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); }
   }
 
-  var WV_TOOL_ICON = {
-    terminal: '>_', command: '>_', exec: '>_', shell: '>_',
-    file: '⌸', write: '⌸', edit: '⌸', read: '⌸',
-    search: '⌕', web: '⌕', fetch: '⌕',
-    engine: '◆', pipeline: '◆'
-  };
-  function wvToolIcon(t) {
-    var key = String((t && (t.kind || t.name)) || '').toLowerCase();
-    for (var k in WV_TOOL_ICON) if (key.indexOf(k) >= 0) return WV_TOOL_ICON[k];
-    return '•';
+  // أيقوناتُ Lucide بدل الرموز النصّية. والخريطةُ في `web/lucide-icons.js`
+  // تُطابق باسم الأداة (`web_search` ⟶ search، `docx` ⟶ file-text…)، وتسقط
+  // إلى `sparkles` عند الجهل. وإن لم يُحمَّل الملفُّ لأيّ سببٍ بقي رمزٌ نصّيّ
+  // بدلَ فراغ.
+  function wvToolIconHTML(t, size) {
+    var key = String((t && (t.kind || t.name || t.title)) || '');
+    if (typeof wvIcon === 'function' && typeof wvIconFor === 'function') {
+      try { return wvIcon(wvIconFor(key), size || 15); } catch (e) {}
+    }
+    return '<span aria-hidden="true">•</span>';
   }
 
   // مخزنُ الحمولات: مفصولٌ عن DOM كي لا تُثقَل الواجهةُ بنصوصٍ ضخمة
@@ -3639,7 +3651,8 @@
     head.type = 'button';
     head.className = 'tool-acc-head';
     head.innerHTML =
-      '<span class="taci">⚙</span>' +
+      '<span class="taci">' + ((typeof wvIcon === 'function')
+        ? wvIcon('workflow', 14) : '⚙') + '</span>' +
       '<span class="tacn">' + wvEsc(isAr ? 'استدعاءُ الأدوات' : 'Tool calls') + '</span>' +
       '<span class="tacc">' + tools.length + '</span>' +
       '<svg class="tacv" width="12" height="12" viewBox="0 0 14 14" fill="none">' +
@@ -3654,7 +3667,7 @@
       card.className = 'tcard' + (t.status === 'running' ? ' running'
                                 : t.status === 'err' ? ' err' : '');
       card.innerHTML =
-        '<span class="tcard-ico">' + wvEsc(wvToolIcon(t)) + '</span>' +
+        '<span class="tcard-ico">' + wvToolIconHTML(t, 15) + '</span>' +
         '<span class="tcard-main">' +
           '<span class="tcard-title">' + wvEsc(t.title || t.name || '') + '</span>' +
           (t.sub ? '<span class="tcard-sub">' + wvEsc(t.sub) + '</span>' : '') +
@@ -3719,8 +3732,10 @@
     var t = tools[idx] || {};
     var isAr = (document.documentElement.lang || 'en') === 'ar';
     var ov = wvToolSheetEl();
-    ov.querySelector('.tsheet-title').textContent =
-      t.title || t.name || (isAr ? 'تفاصيل' : 'Details');
+    var _ttl = ov.querySelector('.tsheet-title');
+    _ttl.innerHTML = '<span class="tsheet-ico">' + wvToolIconHTML(t, 16) +
+      '</span><span></span>';
+    _ttl.lastChild.textContent = t.title || t.name || (isAr ? 'تفاصيل' : 'Details');
     var html = '';
     if (t.sub) {
       html += '<div class="tsheet-sec"><h4>' + wvEsc(isAr ? 'ملخّص' : 'Summary') +

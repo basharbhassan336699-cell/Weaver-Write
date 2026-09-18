@@ -70,6 +70,15 @@ with sync_playwright() as pw:
     chk("وفيها بطاقةٌ واحدةٌ على الأقلّ", pg.locator(".tcard").count() > 0,
         pg.locator(".tcard").count())
 
+    chk("وأيقوناتُ Lucide تُرسَم (لا رموزٌ نصّية)",
+        pg.locator(".tcard-ico svg.lucide").count() > 0,
+        pg.locator(".tcard-ico svg.lucide").count())
+    chk("والأيقونةُ تتبع معنى الخطوة لا الافتراضيّ",
+        pg.evaluate("() => wvIconFor('التفكير')") == "brain",
+        pg.evaluate("() => wvIconFor('التفكير')"))
+    chk("والمجموعةُ شاملة (١٠٠ أيقونةً فأكثر)",
+        pg.evaluate("() => Object.keys(WV_ICON_PATHS).length") >= 100,
+        pg.evaluate("() => Object.keys(WV_ICON_PATHS).length"))
     chk("والأكورديونُ يُطوى ويُفتح",
         pg.locator(".tool-acc").count() > 0)
     if pg.locator(".tool-acc:not(.open)").count():
