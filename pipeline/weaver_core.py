@@ -961,6 +961,43 @@ def trajectory(session, agent="main", timeout=90):
         return []
 
 
+PROBE_SEARCH = os.path.join(_ROOT, "engines", "weaver-core", "probe_search.mjs")
+
+
+def probe_search(query="اختبار البحث"):
+    """أيعمل البحثُ فعلاً؟ — نداءُ بحثٍ حقيقيٍّ لا قراءةُ إعداد.
+
+    قراءةُ `tools.web.search.enabled` تقول إنّ المفتاحَ مرفوع، لا إنّ البحثَ
+    يعمل. فهذا يُحمّل كلَّ مزوّدٍ مركَّبٍ ويُرسل استعلاماً ويعدّ النتائج.
+
+    ويُشغَّل ببيئة المحرّك نفسِها (`engine_env`) كي تصله المفاتيحُ كما تصل
+    البوّابة — وإلّا قال «لا مفتاح» وهو موجود.
+
+    يعيد قائمةَ dicts: provider · ok · count · first · error."""
+    nb = node_bin()
+    if not nb:
+        return [{"provider": "-", "ok": False, "count": 0, "first": "",
+                 "error": why_unavailable()}]
+    if not os.path.isfile(PROBE_SEARCH):
+        return [{"provider": "-", "ok": False, "count": 0, "first": "",
+                 "error": "probe_search.mjs مفقود"}]
+    try:
+        p = subprocess.run([nb, PROBE_SEARCH, str(query or "")],
+                           capture_output=True, text=True, timeout=180,
+                           cwd=_ROOT, env=engine_env())
+        out = (p.stdout or "").strip()
+        import json as _j
+        i, j = out.find("["), out.rfind("]")
+        if i < 0 or j < i:
+            return [{"provider": "-", "ok": False, "count": 0, "first": "",
+                     "error": (_real_error(p.stderr) or out or "بلا خرج")[:200]}]
+        d = _j.loads(out[i:j + 1])
+        return d if isinstance(d, list) else []
+    except Exception as e:
+        return [{"provider": "-", "ok": False, "count": 0, "first": "",
+                 "error": f"{type(e).__name__}: {str(e)[:160]}"}]
+
+
 def _cli():
     argv = sys.argv[1:]
     # التشخيصُ يعمل دائماً — وهو أنفعُ ما يكون حين لا يعمل شيءٌ آخر.
@@ -1049,6 +1086,28 @@ def _cli():
         print(f"  حيّة    : {'نعم' if st['alive'] else 'لا'}")
         print(f"  المنفذ  : {st['port']}   ·   pid: {st['pid']}")
         print(f"  السجلّ  : {st['log']}")
+        return
+    if argv[:2] == ["--web-search", "test"]:
+        _q = argv[2] if len(argv) > 2 else "الإعجاز العلمي في القرآن"
+        print(f"  استعلام: {_q}\n  (نداءُ بحثٍ حقيقيّ — قد يأخذ ثوانٍ)\n")
+        rows = probe_search(_q)
+        if not rows:
+            print("  لا مزوّدَ بحثٍ مركَّب.  التركيب:"
+                  "  python3 -m pipeline.weaver_core --web-search")
+            return
+        for r in rows:
+            mark = "✓" if r.get("ok") else "✗"
+            print(f"  {mark} {str(r.get('provider','')):<14}"
+                  f" نتائج={r.get('count', 0)}")
+            if r.get("first"):
+                print(f"      أوّلُ نتيجة: {str(r['first'])[:110]}")
+            if r.get("error"):
+                print(f"      السبب     : {str(r['error'])[:180]}")
+        if not any(r.get("ok") for r in rows):
+            print("\n  ⚠ لا مزوّدَ يعمل. والبوّابةُ تحمل بيئتَها من لحظة"
+                  " إقلاعها،\n    فإن أضفتَ المفتاحَ بعدها أعِد تشغيلها:"
+                  "\n      python3 -m pipeline.weaver_core --gateway stop"
+                  "\n      python3 -m pipeline.weaver_core --gateway start")
         return
     if argv == ["--web-search"]:
         if not (available() and node_bin()):
