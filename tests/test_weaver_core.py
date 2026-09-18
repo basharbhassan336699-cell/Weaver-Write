@@ -85,7 +85,10 @@ print("=" * 70)
 print(" 6) AND THE BRIDGE TELLS THE TRUTH WHEN THE ENGINE IS ABSENT")
 print("=" * 70)
 chk("available() never raises", isinstance(W.available(), bool))
-if not W.available():
+# الحضورُ ليس مجلّدَ المحرّكِ وحده: بلا node صالح لا يُنادى. وكان الشرطُ
+# هنا `available()` فقط، فإذا رُكّب المحرّكُ على جهازٍ node‑ـه قديم ظنّ
+# الاختبارُ أنّه يعمل وطالبه باسمٍ لا يستطيع طباعتَه.
+if not (W.available() and W.node_bin()):
     chk("absence is stated with its cause",
         "install.sh" in W.why_unavailable() or "nodejs" in W.why_unavailable(),
         W.why_unavailable()[:70])

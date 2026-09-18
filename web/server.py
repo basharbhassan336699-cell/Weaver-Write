@@ -1532,22 +1532,26 @@ def _needs_tools(r):
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
           context: str = None, memory: str = None, attachments: str = None,
           use_engine: bool = True) -> dict:
-    """المُوجِّه: الخفيفُ أوّلاً، والوكيلُ حين يقول النموذجُ إنّه يحتاجه.
+    """نداءٌ واحدٌ إلى النموذج ومعه أدواتُه — كما في أوبن كلاو حرفاً.
 
-    كان هذا الاسمُ يحمل النداءَ المباشرَ نفسَه؛ صار يحمل القرار، والنداءُ
-    المباشرُ انتقل إلى `_chat_direct` بحرفه. فكلُّ من ينادي `_chat` (الويبُ
-    والطرفيةُ معاً) يكسب التوجيهَ بلا تغييرٍ عنده."""
+    في أوبن كلاو أوّلُ شيءٍ داخل الحلقة نداءُ النموذج، والأدواتُ في نفس
+    النداء بلا شرط:
+
+        // agent-core-B_87jlHI.mjs:258
+        const llmContext = { systemPrompt, messages, tools: context.tools };
+
+    سطرٌ بلا تفرّع: لا مصنِّفَ قبله، ولا سؤالَ «أتحتاج أدوات؟». والنموذجُ
+    يقرّر باستدعاء الأداةِ نفسِها، لا بإعلانِ نيّةٍ نُعيد النداءَ بعدها.
+
+    وكان هنا نداءان: خفيفٌ بلا أدواتٍ يُسأل أوّلاً، فإن قال إنّه يحتاجها
+    نُودي المحرّك. وذلك توفيرُ كلفةٍ يخالف المطابقة — فحُذف. والنداءُ المباشرُ
+    لا يبقى إلّا شبكةَ أمانٍ حين يتعذّر المحرّكُ نفسُه، كي لا يُترك المستخدمُ
+    بلا جواب."""
     if use_engine and _engine_ready():
-        _lite = _chat_direct(message, history, timeout, effort, context,
-                             memory, attachments, escalate=True)
-        if not _needs_tools(_lite):
-            return _lite
         _eng = _chat_via_engine(message, history, timeout, context, memory,
                                 attachments)
         if _eng is not None:
             return _eng
-        # عجز الخفيفُ وتعذّر الوكيل: يُعاد النداءُ بلا تصعيدٍ كي لا يُترك
-        # المستخدمُ بكلمةِ إشارةٍ بدل جواب.
         return _chat_direct(message, history, timeout, effort, context,
                             memory, attachments, escalate=False)
     return _chat_direct(message, history, timeout, effort, context, memory,

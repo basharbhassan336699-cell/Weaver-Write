@@ -131,32 +131,16 @@ chk("  -> so the wire serves the terminal too, with no second change",
 
 print()
 print("=" * 70)
-print(" 4) COST: the light path answers, and IT says when it cannot")
+print(" 4) ONE CALL, TOOLS ATTACHED -- exactly as openclaw does it")
 print("=" * 70)
-# One agent call cost 23168 input tokens for the word "hello", because it
-# carries its whole tool catalogue. Most questions need none of that.
+# openclaw's loop calls the model FIRST, and the tools ride along in the very
+# same request -- one line, no branch:
 #
-# openclaw has no such decision -- it is an agent always; all its savings are
-# INSIDE the agent. So this is built on top of it, not copied from it.
+#     // agent-core-B_87jlHI.mjs:258
+#     const llmContext = { systemPrompt, messages, tools: context.tools };
 #
-# And no keyword list decides "this is simple": the light model is asked, and
-# told to reply with one token if it needs to SEE something real. It judges
-# itself, and no extra call is paid for -- the light call IS the answer when
-# it suffices.
-chk("a token the light model returns when it needs tools",
-    isinstance(S.NEED_TOOLS, str) and len(S.NEED_TOOLS) > 4)
-chk("the token alone counts as an escalation",
-    S._needs_tools({"reply": S.NEED_TOOLS}))
-chk("  -> with surrounding whitespace too",
-    S._needs_tools({"reply": "  " + S.NEED_TOOLS + "\n"}))
-chk("but a long answer that merely mentions it does NOT escalate",
-    not S._needs_tools({"reply": "the token " + S.NEED_TOOLS
-                        + " means the model wants a tool, and here is a long "
-                          "explanation of why that matters in practice"}))
-chk("an error never escalates", not S._needs_tools({"error": "no_key"}))
-chk("a normal answer never escalates",
-    not S._needs_tools({"reply": "4.54 billion years"}))
-chk("None does not raise", not S._needs_tools(None))
+# There is no classifier before it and the model is never asked "do you need
+# tools?". It decides by CALLING one. So there is exactly one call here too.
 
 _calls = []
 _realdirect, _realeng, _realready = (S._chat_direct, S._chat_via_engine,
@@ -177,34 +161,25 @@ try:
     _direct.answer = "4.54 billion years"
     _calls.clear()
     r = S._chat("how old is earth?")
-    chk("a question it knows -> light only, the agent is never called",
-        r["reply"] == "4.54 billion years"
-        and [c[0] for c in _calls] == ["direct"])
-    chk("  -> and the light call carried the escalation instruction",
-        _calls[0][1] is True)
+    chk("a question it knows -> STILL the agent, one call, no pre-question",
+        r["reply"] == "agent answer" and [c[0] for c in _calls] == ["engine"])
 
-    _direct.answer = S.NEED_TOOLS
     _calls.clear()
     r = S._chat("open example.com and tell me what you see")
-    chk("it says it needs tools -> the agent runs",
-        r["reply"] == "agent answer"
-        and [c[0] for c in _calls] == ["direct", "engine"])
+    chk("a question needing tools -> the same one call",
+        r["reply"] == "agent answer" and [c[0] for c in _calls] == ["engine"])
+
+    chk("  -> the light model is never asked to judge itself first",
+        not any(c[0] == "direct" for c in _calls))
 
     S._chat_via_engine = lambda *a, **k: (_calls.append(("engine", 0)) or None)
     _calls.clear()
-    _n = {"i": 0}
-
-    def _direct2(msg, hist=None, to=120, eff="medium", ctx=None, mem=None,
-                 att=None, escalate=False):
-        _calls.append(("direct", escalate))
-        _n["i"] += 1
-        return {"reply": S.NEED_TOOLS if escalate else "best effort answer"}
-    S._chat_direct = _direct2
+    _direct.answer = "best effort answer"
     r = S._chat("x")
-    chk("needs tools but the agent fails -> a real answer, never the token",
+    chk("the agent itself fails -> a direct answer, never an empty reply",
         r["reply"] == "best effort answer"
-        and [c[0] for c in _calls] == ["direct", "engine", "direct"])
-    chk("  -> and the retry drops the escalation instruction",
+        and [c[0] for c in _calls] == ["engine", "direct"])
+    chk("  -> and that rescue call carries no escalation instruction",
         _calls[-1][1] is False)
 
     S._engine_ready = lambda: False
