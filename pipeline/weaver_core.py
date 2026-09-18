@@ -252,6 +252,48 @@ def why_unavailable():
     return ""
 
 
+LAST_LOG = os.path.join(STATE, "last-run.log")
+
+
+def _record_run(args, code, out, err):
+    """احفظ آخرَ نداءٍ كاملاً — بلا قصّ.
+
+    كنتُ أعرض ١٢٠ حرفاً من الخطأ في الرسالة، فقُطع الجوابُ عند
+    `lane task error: lane=` تماماً حيث يبدأ السببُ الحقيقيُّ:
+        command-queue-CwgsqkaH.mjs:503
+            `lane task error: lane=${lane} durationMs=${…} error="${…}"`
+    أي أنّ الرسالةَ التي تُرى هي العنوانُ وحده، والسببُ محذوف. فصار الخرجُ
+    كاملاً يُحفظ هنا، والرسالةُ تدلُّ عليه. لا يرفع استثناءً أبداً."""
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        import datetime as _dt
+        with open(LAST_LOG, "w", encoding="utf-8") as fh:
+            fh.write(f"# {_dt.datetime.now().isoformat(timespec='seconds')}\n")
+            fh.write("# args: " + " ".join(str(a) for a in args) + "\n")
+            fh.write(f"# exit: {code}\n\n--- stdout ---\n{out}"
+                     f"\n\n--- stderr ---\n{err}\n")
+    except Exception:
+        pass
+
+
+def _real_error(err):
+    """السببُ من بين ضجيج التشخيص — لا العنوانُ وحده.
+
+    المحرّكُ يطبع تحذيراتٍ ليست أخطاءً («slow SQLite transaction hold» هو
+    `.warn` عن بطء التخزين، وهو متوقَّعٌ على الهاتف). فتُسقَط، ويُستخرَج ما
+    بين `error="…"` إن وُجد، وإلّا فآخرُ سطرٍ ذي معنى."""
+    import re as _re
+    t = str(err or "")
+    m = _re.search(r'error="([^"]{3,400})"', t)
+    if m:
+        return m.group(1).strip()
+    _noise = ("slow SQLite transaction hold", "[diagnostic]", "npm warn",
+              "ExperimentalWarning", "(node:")
+    lines = [l.strip() for l in t.split("\n")
+             if l.strip() and not any(n in l for n in _noise)]
+    return lines[-1][:400] if lines else t.strip()[:400]
+
+
 def run(args, timeout=180, input_text=None, cwd=None):
     """نادِ المحرّك بوسائطه. يُعيد (رمز_الخروج، المُخرَج، الخطأ)."""
     if not available():
@@ -264,6 +306,7 @@ def run(args, timeout=180, input_text=None, cwd=None):
                            capture_output=True, text=True, timeout=timeout,
                            input=input_text, cwd=cwd or _ROOT,
                            env=engine_env())
+        _record_run(args, p.returncode, p.stdout or "", p.stderr or "")
         return p.returncode, (p.stdout or ""), (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, "", f"تجاوز المهلة ({timeout} ثانية)"
@@ -341,8 +384,10 @@ def ask(text, timeout=300, cwd=None, fallback=True):
         if not fallback:
             return {"answer": "", "engine": "weaver-core",
                     "note": (err or out).strip()[:400]}
-        _note = ("المحرّك لم يُجب (" + (err or "بلا سبب").strip()[:120]
-                 + ")، فتولّى المسارُ البايثونيّ")
+        _note = ("المحرّك لم يُجب [رمز " + str(code) + "]: "
+                 + (_real_error(err) or "بلا سبب معلوم")
+                 + "  ·  الخرجُ كاملاً: python3 -m pipeline.weaver_core --last"
+                 + "  ·  فتولّى المسارُ البايثونيّ")
     else:
         _note = why_unavailable()
         if not fallback:
@@ -374,6 +419,13 @@ def _cli():
     if argv == ["--where"]:
         for k, v in state_paths().items():
             print(f"  {k:6s} {v}")
+        return
+    if argv == ["--last"]:
+        if os.path.isfile(LAST_LOG):
+            sys.stdout.write(open(LAST_LOG, encoding="utf-8",
+                                  errors="replace").read())
+        else:
+            print("لا سجلَّ بعد — شغّل سؤالاً أوّلاً.")
         return
     if argv == ["--repair"]:
         # يُصلح تركيباً قائماً بلا إعادة جلبٍ ولا إعادة تسمية.
