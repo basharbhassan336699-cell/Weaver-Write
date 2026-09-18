@@ -55,11 +55,42 @@ _ENGINE_HOME = os.path.join(STATE, "engine")
 _STATE_DIR = os.path.join(STATE, "state")
 
 
+# اسمُ نسختنا. المحرّكُ يستعمله لعزل الخدمة والسجلّات والمنفذ عن أيّ نسخةٍ
+# أخرى على الجهاز — وهذه آليّتُه هو، لا حيلةٌ من عندنا:
+#   constants-CJCmIHb-.mjs:56   normalizeGatewayProfile(env.OPENCLAW_PROFILE)
+#   constants-CJCmIHb-.mjs:45   resolveGatewaySystemdServiceName(profile)
+#   logger-Bf_6W09A.mjs:85      profileSuffix في اسم ملفّ السجلّ
+PROFILE = "weaver"
+DEFAULT_PORT = 18789        # منفذُ المحرّك الافتراضيّ (DEFAULT_GATEWAY_PORT)
+OUR_PORT = 18889            # ومنفذُنا، بعيداً عنه وعن منفذ --dev (19001)
+
+
 def engine_env(extra=None):
-    """بيئةُ تشغيل المحرّك: حالتُه في بيتنا لا في بيت المستخدم."""
-    env = dict(os.environ)
-    env["OPENCLAW_STATE_DIR"] = env.pop("WEAVER_STATE_DIR", None) or _STATE_DIR
-    env["HOME"] = _ENGINE_HOME
+    """بيئةُ تشغيل المحرّك — معزولةٌ تماماً عن أيّ نسخةٍ أخرى على الجهاز.
+
+    ثلاثُ عزلات، وكلُّها بآليّات المحرّك نفسِه لا بحيلٍ من عندنا:
+
+    ١) **تنظيفُ ما وُرِث.** وهذا كان عطباً حقيقياً في أوّل كتابتي: كنتُ أنسخ
+       البيئةَ كما هي ثمّ أضبط مفتاحين. فلو كان في `.bashrc` عند المستخدم
+       `OPENCLAW_CONFIG_PATH` أو `OPENCLAW_HOME` أو `OPENCLAW_AGENT_DIR`
+       لتركيبه القديم — وهذا شائعٌ عند من يستعمل أوبن كلاو أصلاً — لتسرّبت
+       إلى محرّكنا فأعادته إلى حالته القديمة، فيكتب الاثنان في مكانٍ واحدٍ
+       ويتلفان إعداداتِ بعضهما. فكلُّ `OPENCLAW_*` موروثٍ يُحذف أوّلاً، ولا
+       يبقى إلا ما نضعه نحن.
+
+    ٢) **بروفايلٌ باسمنا.** `OPENCLAW_PROFILE=weaver` يجعل المحرّكَ يعزل
+       اسمَ خدمته وسجلّاته ومنفذه عن النسخة الافتراضية.
+
+    ٣) **مسارٌ ومنفذٌ خاصّان.** الحالةُ في بيتنا، والمنفذُ 18889 بعيداً عن
+       18789 (الافتراضيّ) و19001 (وضع --dev).
+
+    والقاعدةُ واحدةٌ بلا استثناء: **كلُّ `WEAVER_X` يصير `OPENCLAW_X`**،
+    ويعلو على افتراضاتنا. فلتغيير المنفذ: `WEAVER_GATEWAY_PORT`، ولتغيير
+    المسار: `WEAVER_STATE_DIR` — بأسماء المحرّك نفسِها لا بأسماءٍ مخترَعة،
+    كي لا يكون للشيء الواحد اسمان.
+    """
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("OPENCLAW_")}      # ① لا شيءَ موروثٌ يمرّ
     # كلُّ WEAVER_X يصير OPENCLAW_X — ما عدا مفاتيحَ نظامنا البايثونيّ
     # (WEAVER_LLM، WEAVER_EXEC، WEAVER_AGENT_*) فهي ليست للمحرّك.
     _ours = ("WEAVER_LLM", "WEAVER_EXEC", "WEAVER_AGENT", "WEAVER_SCHOLAR",
@@ -69,6 +100,13 @@ def engine_env(extra=None):
     for k in list(env):
         if k.startswith("WEAVER_") and not k.startswith(_ours):
             env.setdefault("OPENCLAW_" + k[len("WEAVER_"):], env[k])
+    # ثمّ افتراضاتُنا — بـsetdefault بعد الترجمة، فما صرّحتَ به يبقى فوقها.
+    # (الترتيبُ مقصود: لو وُضعت الافتراضاتُ قبل الترجمة لَما نفع WEAVER_
+    #  شيئاً، وهو عطبٌ وقعتُ فيه ثمّ كشفه الاختبار.)
+    env.setdefault("OPENCLAW_PROFILE", PROFILE)                        # ②
+    env.setdefault("OPENCLAW_STATE_DIR", _STATE_DIR)                   # ③
+    env.setdefault("OPENCLAW_GATEWAY_PORT", str(OUR_PORT))
+    env["HOME"] = _ENGINE_HOME
     for k, v in (extra or {}).items():
         env[str(k)] = str(v)
     try:
@@ -82,6 +120,17 @@ def engine_env(extra=None):
 def state_paths():
     """أين تسكن حالةُ المحرّك — للعرض وللحذف النظيف."""
     return {"state": _STATE_DIR, "home": _ENGINE_HOME, "root": STATE}
+
+
+def isolation():
+    """ما يعزلنا عن أيّ نسخةٍ أخرى — للعرض وللفحص."""
+    e = engine_env()
+    return {"profile": e.get("OPENCLAW_PROFILE", ""),
+            "state": e.get("OPENCLAW_STATE_DIR", ""),
+            "home": e.get("HOME", ""),
+            "port": e.get("OPENCLAW_GATEWAY_PORT", ""),
+            "inherited_openclaw_vars": sorted(
+                k for k in os.environ if k.startswith("OPENCLAW_"))}
 
 
 def available():
@@ -274,6 +323,17 @@ def _cli():
     if argv == ["--where"]:
         for k, v in state_paths().items():
             print(f"  {k:6s} {v}")
+        return
+    if argv == ["--isolation"]:
+        iso = isolation()
+        print(f"  البروفايل : {iso['profile']}")
+        print(f"  الحالة    : {iso['state']}")
+        print(f"  البيت     : {iso['home']}")
+        print(f"  المنفذ    : {iso['port']}   (الافتراضيُّ {DEFAULT_PORT})")
+        inh = iso["inherited_openclaw_vars"]
+        print("  موروثٌ من بيئتك: "
+              + (", ".join(inh) if inh else "لا شيء")
+              + ("  ⟵ كلُّها تُحذف قبل التشغيل" if inh else ""))
         return
     if argv == ["--doctor"]:
         print(f"  المحرّك مركَّب : {'نعم' if available() else 'لا'}")

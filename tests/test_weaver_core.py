@@ -194,6 +194,67 @@ chk("it points at the python path instead",
 
 print()
 print("=" * 70)
+print(" 9) TWO INSTALLS, NO COLLISION -- ours and the user's existing one")
+print("=" * 70)
+# The user already runs OpenClaw on this device. Both must coexist without
+# corrupting each other's config. Three isolations, all via the engine's own
+# mechanisms:
+#   constants-CJCmIHb-.mjs:56  normalizeGatewayProfile(env.OPENCLAW_PROFILE)
+#   constants-CJCmIHb-.mjs:45  resolveGatewaySystemdServiceName(profile)
+#   logger-Bf_6W09A.mjs:85     profile suffix in the log file name
+_leak = {"OPENCLAW_CONFIG_PATH": "/home/me/.openclaw/openclaw.json",
+         "OPENCLAW_HOME": "/home/me",
+         "OPENCLAW_STATE_DIR": "/home/me/.openclaw",
+         "OPENCLAW_AGENT_DIR": "/home/me/.openclaw/agents",
+         "OPENCLAW_GATEWAY_PORT": "18789"}
+for _k, _v in _leak.items():
+    os.environ[_k] = _v
+_e = W.engine_env()
+chk("an inherited OPENCLAW_CONFIG_PATH never reaches the engine",
+    _e.get("OPENCLAW_CONFIG_PATH") is None, str(_e.get("OPENCLAW_CONFIG_PATH")))
+chk("nor OPENCLAW_HOME", _e.get("OPENCLAW_HOME") is None)
+chk("nor OPENCLAW_AGENT_DIR", _e.get("OPENCLAW_AGENT_DIR") is None)
+chk("and their STATE_DIR is replaced by ours, not honoured",
+    _e.get("OPENCLAW_STATE_DIR", "").startswith(W.STATE),
+    _e.get("OPENCLAW_STATE_DIR", ""))
+chk("and their port is replaced by ours",
+    _e.get("OPENCLAW_GATEWAY_PORT") == str(W.OUR_PORT),
+    _e.get("OPENCLAW_GATEWAY_PORT", ""))
+chk("our port is not the engine default",
+    W.OUR_PORT != W.DEFAULT_PORT and W.OUR_PORT != 19001)
+chk("a profile name isolates service, logs and port",
+    _e.get("OPENCLAW_PROFILE") == W.PROFILE, _e.get("OPENCLAW_PROFILE", ""))
+chk("HOME still points at our own engine home",
+    _e.get("HOME", "").startswith(W.STATE))
+chk("nothing OPENCLAW_* survives except what we set",
+    all(k in ("OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR",
+              "OPENCLAW_GATEWAY_PORT")
+        for k in _e if k.startswith("OPENCLAW_")),
+    str([k for k in _e if k.startswith("OPENCLAW_")]))
+_iso = W.isolation()
+chk("isolation() reports what leaked in, so it is never silent",
+    set(_leak) <= set(_iso["inherited_openclaw_vars"]))
+for _k in _leak:
+    os.environ.pop(_k, None)
+
+# one rule, no special cases: every WEAVER_X becomes OPENCLAW_X, and an
+# explicit one outranks our defaults.
+os.environ["WEAVER_GATEWAY_PORT"] = "19555"
+os.environ["WEAVER_STATE_DIR"] = "/tmp/mine"
+_ex = W.engine_env()
+chk("an explicit WEAVER_GATEWAY_PORT outranks our default",
+    _ex.get("OPENCLAW_GATEWAY_PORT") == "19555")
+chk("and WEAVER_STATE_DIR does too",
+    _ex.get("OPENCLAW_STATE_DIR") == "/tmp/mine")
+chk("names match the engine's own keys -- no invented second name",
+    "WEAVER_PORT" not in open(
+        os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+        encoding="utf-8").read())
+for _k in ("WEAVER_GATEWAY_PORT", "WEAVER_STATE_DIR"):
+    os.environ.pop(_k, None)
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if ok else "FAIL"))
 print("=" * 70)
 sys.exit(0 if ok else 1)
