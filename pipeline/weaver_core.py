@@ -277,16 +277,67 @@ def version():
     return out.strip().split("\n")[0] if code == 0 else ""
 
 
+def _from_envelope(out):
+    """اقرأ جوابَ `--json`، فإن لم يكن JSON فالنصُّ كما هو.
+
+    المُغلَّفُ ثابتٌ بوعد المحرّك («the stable agent-exec JSON envelope»)،
+    لكنّ أسماءَ حقوله قد تختلف بين الإصدارات — فتُجرَّب المعروفةُ بالترتيب،
+    ويُرجَع النصُّ الخام عند الفشل بدل أن يضيع الجوابُ كلُّه."""
+    t = str(out or "").strip()
+    if not t:
+        return ""
+    try:
+        import json as _j
+        data = None
+        for line in reversed(t.split("\n")):       # المُغلَّفُ آخرَ سطر
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = _j.loads(line)
+                    break
+                except Exception:
+                    continue
+        if isinstance(data, dict):
+            for k in ("text", "message", "answer", "output", "result",
+                      "content", "reply"):
+                v = data.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+                if isinstance(v, dict):
+                    for k2 in ("text", "content", "message"):
+                        if isinstance(v.get(k2), str) and v[k2].strip():
+                            return v[k2].strip()
+    except Exception:
+        pass
+    return t
+
+
 def ask(text, timeout=300, cwd=None, fallback=True):
     """اسأل — بالمحرّك إن أمكن، وإلّا بالمسار البايثونيّ.
 
     الدرجةُ الثالثة: **أيُّ سؤالٍ يُجاب على أيّ إصدارِ node، ولو لم يكن ثمّة
     node أصلاً.** فالمحرّكُ إضافةٌ لا شرط. وحين يتولّى البديلُ يُقال ذلك في
-    `engine` لا يُخفى، كي لا تظنّ أنّك تُشغّل ما لا تُشغّله."""
+    `engine` لا يُخفى، كي لا تظنّ أنّك تُشغّل ما لا تُشغّله.
+
+    والأمرُ الصحيحُ `agent exec` — «Run one isolated headless embedded agent
+    turn» كما يصفه المحرّك نفسُه:
+        register.agent-turn-gi9D9FTy.mjs:41   command("exec [message]")
+    لقطةٌ واحدةٌ معزولةٌ بلا جسرٍ ولا واجهةٍ تفاعلية، و`--json` يُعطي مُغلَّفاً
+    ثابتاً بدل نصٍّ يُقرأ بالحدس.
+
+    وكنتُ قبله أنادي `run` ظنّاً لا تحقّقاً، فردّ المحرّكُ على المستخدم:
+    «Weaver Write does not know the command "run"». التدهورُ الآمنُ أنقذ
+    الموقف — تولّى المسارُ البايثونيُّ وقال السبب — لكنّ الخطأ كان خطئي:
+    زعمتُ في تعليقٍ أنّه «مدخلُ الحزمة للتشغيل غير التفاعليّ» بلا دليل."""
     if available() and node_bin():
-        code, out, err = run(["run", str(text or "")], timeout=timeout, cwd=cwd)
+        args = ["agent", "exec", str(text or ""), "--json",
+                "--timeout", str(max(30, int(timeout) - 20))]
+        if cwd:
+            args += ["--cwd", str(cwd)]
+        code, out, err = run(args, timeout=timeout, cwd=cwd)
         if code == 0 and out.strip():
-            return {"answer": out.strip(), "engine": "weaver-core", "note": ""}
+            return {"answer": _from_envelope(out), "engine": "weaver-core",
+                    "note": ""}
         if not fallback:
             return {"answer": "", "engine": "weaver-core",
                     "note": (err or out).strip()[:400]}

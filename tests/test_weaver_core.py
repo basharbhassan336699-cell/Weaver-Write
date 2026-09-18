@@ -255,6 +255,37 @@ for _k in ("WEAVER_GATEWAY_PORT", "WEAVER_STATE_DIR"):
 
 print()
 print("=" * 70)
+print(" 10) THE REAL COMMAND -- verified against the engine, not guessed")
+print("=" * 70)
+# I called `run` on a hunch and the engine answered the USER:
+#   "Weaver Write does not know the command \"run\"."
+# The real one, from the engine's own registration:
+#   register.agent-turn-gi9D9FTy.mjs:41  command("exec [message]")
+#   "Run one isolated headless embedded agent turn"
+_src_wc = open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+               encoding="utf-8").read()
+chk("the engine is invoked with `agent exec`", '"agent", "exec"' in _src_wc)
+chk("and never with the invented `run`", '["run", str(text' not in _src_wc)
+chk("--json is asked for (a stable envelope, not guessed text)",
+    '"--json"' in _src_wc)
+chk("--timeout is passed so a hung turn cannot wedge the call",
+    '"--timeout"' in _src_wc)
+
+# the envelope reader must never lose an answer
+chk("a clean envelope", W._from_envelope('{"text":"مرحبا"}') == "مرحبا")
+chk("log lines before it do not break it",
+    W._from_envelope('starting…\n{"message":"أهلاً"}') == "أهلاً")
+chk("a nested field is found",
+    W._from_envelope('{"result":{"text":"داخلي"}}') == "داخلي")
+chk("an unknown shape falls back to the raw text -- never empty",
+    W._from_envelope("نصٌّ عاديّ") == "نصٌّ عاديّ")
+chk("broken JSON still yields the text",
+    W._from_envelope('{not json') == '{not json')
+chk("empty stays empty", W._from_envelope("") == "")
+chk("None does not raise", W._from_envelope(None) == "")
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if ok else "FAIL"))
 print("=" * 70)
 sys.exit(0 if ok else 1)
