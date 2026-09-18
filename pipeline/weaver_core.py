@@ -27,6 +27,63 @@ ENTRY = os.path.join(RUNTIME, "openclaw.mjs")
 INSTALLER = os.path.join(_ROOT, "engines", "weaver-core", "install.sh")
 
 
+# ── الغلاف: حالةُ المحرّك تسكن باسم نظامنا، بلا تعديل ملفٍّ واحدٍ فيه ──
+#
+# فُحصت مسارات `.openclaw` في الحزمة بكيفيّة بنائها لا بعددها:
+#
+#   ٢٦٩ موضعاً  تمرّ بـ`resolveStateDir(env)` في dist/legacy-fR_P797G.mjs:
+#                   const override = env.OPENCLAW_STATE_DIR?.trim();
+#                   if (override) return resolveUserPath(override, env);
+#               فمفتاحٌ واحدٌ يُحرّكها كلَّها — وهو مُتجاوِزٌ رسميٌّ يعرضه
+#               المحرّكُ نفسُه، لا ثغرةٌ نستغلّها.
+#
+#     ٦ مواضعَ  تتجاوزها، وفُحصت واحداً واحداً:
+#                 · doctor-platform-notes:20     darwin فقط  ⟶ لا أثر هنا
+#                 · terminal-file-upload:31      win32  فقط  ⟶ لا أثر هنا
+#                 · doctor-state-integrity:1346  للمقارنة والعرض لا للكتابة
+#                 · audit:11 · install:365 · claws-cli-output:254
+#                   ⟶ `os.homedir()`، و`os.homedir()` تتبع HOME.
+#
+# فمفتاحان يغطّيان كلَّ مسارات الكتابة: OPENCLAW_STATE_DIR للمُعلَن، وHOME
+# للثلاثة الباقية. وهذا خيرٌ من إعادة تسمية ٢٤٢٢٨ اسماً: صفرُ خطرٍ لأنّ
+# المحرّكَ لا يُمَسّ، ويعيش مع كلّ ترقيةٍ بلا إعادة ترقيع.
+#
+# ويقبل الغلافُ مفاتيحَ `WEAVER_*` ويترجمها إلى `OPENCLAW_*` قبل التشغيل:
+# أنت تكتب اسمَ نظامك، والمحرّكُ يقرأ اسمَه.
+STATE = os.path.join(os.path.expanduser("~"), ".weaver-write")
+_ENGINE_HOME = os.path.join(STATE, "engine")
+_STATE_DIR = os.path.join(STATE, "state")
+
+
+def engine_env(extra=None):
+    """بيئةُ تشغيل المحرّك: حالتُه في بيتنا لا في بيت المستخدم."""
+    env = dict(os.environ)
+    env["OPENCLAW_STATE_DIR"] = env.pop("WEAVER_STATE_DIR", None) or _STATE_DIR
+    env["HOME"] = _ENGINE_HOME
+    # كلُّ WEAVER_X يصير OPENCLAW_X — ما عدا مفاتيحَ نظامنا البايثونيّ
+    # (WEAVER_LLM، WEAVER_EXEC، WEAVER_AGENT_*) فهي ليست للمحرّك.
+    _ours = ("WEAVER_LLM", "WEAVER_EXEC", "WEAVER_AGENT", "WEAVER_SCHOLAR",
+             "WEAVER_SEARCH", "WEAVER_LANG", "WEAVER_MIN", "WEAVER_WORDS",
+             "WEAVER_CONDENSE", "WEAVER_DECISIONS", "WEAVER_STRUCT",
+             "WEAVER_FETCH", "WEAVER_MULTI", "WEAVER_OUT", "WEAVER_PAYLOAD")
+    for k in list(env):
+        if k.startswith("WEAVER_") and not k.startswith(_ours):
+            env.setdefault("OPENCLAW_" + k[len("WEAVER_"):], env[k])
+    for k, v in (extra or {}).items():
+        env[str(k)] = str(v)
+    try:
+        os.makedirs(_ENGINE_HOME, exist_ok=True)
+        os.makedirs(_STATE_DIR, exist_ok=True)
+    except Exception:
+        pass
+    return env
+
+
+def state_paths():
+    """أين تسكن حالةُ المحرّك — للعرض وللحذف النظيف."""
+    return {"state": _STATE_DIR, "home": _ENGINE_HOME, "root": STATE}
+
+
 def available():
     """أمُركَّبٌ المحرّك؟ لا يرفع استثناءً أبداً."""
     try:
@@ -62,7 +119,8 @@ def run(args, timeout=180, input_text=None, cwd=None):
     try:
         p = subprocess.run([nb, ENTRY] + list(args or []),
                            capture_output=True, text=True, timeout=timeout,
-                           input=input_text, cwd=cwd or _ROOT)
+                           input=input_text, cwd=cwd or _ROOT,
+                           env=engine_env())
         return p.returncode, (p.stdout or ""), (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, "", f"تجاوز المهلة ({timeout} ثانية)"
@@ -94,6 +152,10 @@ def _cli():
     if not available():
         print(why_unavailable(), file=sys.stderr)
         sys.exit(2)
+    if argv == ["--where"]:
+        for k, v in state_paths().items():
+            print(f"  {k:6s} {v}")
+        return
     if not argv or argv == ["--version"]:
         print(version() or "(بلا جواب)")
         return

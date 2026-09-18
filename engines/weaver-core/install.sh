@@ -25,7 +25,9 @@ command -v npm  >/dev/null 2>&1 || { echo "✗ npm غير مثبّت.   pkg inst
 # أي أنّ المحرّك يستعمل قاعدةَ بيانات node المدمجة، و22 يقصُّ النصوص عند
 # أوّل بايتٍ صفريّ — فالبيانات تفسد صامتةً. ولذلك البوّابةُ مغلقة.
 NODE_V="$(node -p 'process.versions.node')"
-NODE_OK="$(node -p 'const [a,b]=process.versions.node.split(".").map(Number); (a===24&&b>=16)||(a>24&&!(a===25))?1:0' 2>/dev/null || echo 0)"
+# شرطُ المحرّك حرفياً من package.json:  ">=24.16.0 <25 || >=26.1.0"
+# فالفجوةُ مقصودة: ٢٥ مرفوضٌ كلُّه، و٢٦ من ١.٠ فأحدث.
+NODE_OK="$(node -p 'const [a,b]=process.versions.node.split(".").map(Number); ((a===24&&b>=16)||(a===26&&b>=1)||a>26)?1:0' 2>/dev/null || echo 0)"
 echo "  node v${NODE_V}"
 if [ "$NODE_OK" != "1" ]; then
   echo

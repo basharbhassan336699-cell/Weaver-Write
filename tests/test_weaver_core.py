@@ -100,6 +100,50 @@ chk("the python path stays and does not depend on it",
 
 print()
 print("=" * 70)
+print(" 7) THE ENVELOPE: engine state lives under OUR name, no file edited")
+print("=" * 70)
+# 269 sites go through resolveStateDir(env) which reads OPENCLAW_STATE_DIR;
+# 6 bypass it -- 2 are win32/darwin-only, 1 is display-only, and the 3 real
+# ones use os.homedir(), which follows HOME. So two keys cover every write.
+_e = W.engine_env()
+chk("OPENCLAW_STATE_DIR is set", bool(_e.get("OPENCLAW_STATE_DIR")),
+    _e.get("OPENCLAW_STATE_DIR", ""))
+chk("and it is under our own root",
+    _e.get("OPENCLAW_STATE_DIR", "").startswith(W.STATE))
+chk("HOME is redirected too (the 3 homedir() sites)",
+    _e.get("HOME", "").startswith(W.STATE), _e.get("HOME", ""))
+chk("nothing is written into the user's real home",
+    _e.get("HOME") != os.path.expanduser("~"))
+
+os.environ["WEAVER_GATEWAY_PORT"] = "9090"
+os.environ["WEAVER_LLM"] = "offline"
+os.environ["WEAVER_EXEC"] = "1"
+_e2 = W.engine_env()
+chk("WEAVER_* is translated to OPENCLAW_*",
+    _e2.get("OPENCLAW_GATEWAY_PORT") == "9090")
+chk("but OUR own keys are not (WEAVER_LLM)", "OPENCLAW_LLM" not in _e2)
+chk("nor WEAVER_EXEC", "OPENCLAW_EXEC" not in _e2)
+for _k in ("WEAVER_GATEWAY_PORT", "WEAVER_LLM", "WEAVER_EXEC"):
+    os.environ.pop(_k, None)
+
+chk("an explicit WEAVER_STATE_DIR wins",
+    W.engine_env.__doc__ is not None)
+os.environ["WEAVER_STATE_DIR"] = "/tmp/xyz-state"
+chk("  -> and is honoured",
+    W.engine_env().get("OPENCLAW_STATE_DIR") == "/tmp/xyz-state")
+os.environ.pop("WEAVER_STATE_DIR", None)
+
+_p = W.state_paths()
+chk("state_paths() names all three", set(_p) == {"state", "home", "root"}, str(_p))
+chk("one folder to delete for a clean removal",
+    _p["state"].startswith(_p["root"]) and _p["home"].startswith(_p["root"]))
+chk("and run() passes that env to the engine",
+    "env=engine_env()" in open(
+        os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+        encoding="utf-8").read())
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if ok else "FAIL"))
 print("=" * 70)
 sys.exit(0 if ok else 1)
