@@ -375,6 +375,19 @@ def _cli():
         for k, v in state_paths().items():
             print(f"  {k:6s} {v}")
         return
+    if argv == ["--repair"]:
+        # يُصلح تركيباً قائماً بلا إعادة جلبٍ ولا إعادة تسمية.
+        # ولا يحتاج node: إنّما يُعدّل ملفّات. فالشرطُ وجودُ المحرّك وحده،
+        # لا صلاحيةُ node — وخلطُهما كان يطبع سببَ غيابٍ لا علاقةَ له.
+        if not available():
+            print("المحرّك غير مركَّب بعد.  التركيب:  bash "
+                  + os.path.relpath(INSTALLER, _ROOT), file=sys.stderr)
+            sys.exit(2)
+        import subprocess as _sp
+        _script = os.path.join(_ROOT, "engines", "weaver-core",
+                               "patch_portability.py")
+        _r = _sp.run([sys.executable, _script, RUNTIME])
+        sys.exit(_r.returncode)
     if argv == ["--isolation"]:
         iso = isolation()
         print(f"  البروفايل : {iso['profile']}")

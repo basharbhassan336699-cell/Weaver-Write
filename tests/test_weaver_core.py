@@ -286,6 +286,69 @@ chk("None does not raise", W._from_envelope(None) == "")
 
 print()
 print("=" * 70)
+print(" 11) THE /tmp PORTABILITY PATCH -- verifies before it edits")
+print("=" * 70)
+# Measured on a real Termux run, not guessed:
+#   EACCES: permission denied, mkdir '/tmp/openclaw-state-locks-10366'
+# One line, duplicated in two files, hardcodes "/tmp" for the lock that guards
+# state-database LIFECYCLE operations. It lives OUTSIDE the state dir by
+# design -- a lock inside the directory it guards would destroy itself when
+# that directory is rebuilt. So the fix is not "put it in our path": it is
+# os.tmpdir(), which returns /tmp on Linux/macOS (unchanged) and a WRITABLE
+# dir on Termux.
+import importlib.util as _ilu
+_ps = _ilu.spec_from_file_location(
+    "patch_portability",
+    os.path.join(_ROOT, "engines", "weaver-core", "patch_portability.py"))
+P = _ilu.module_from_spec(_ps)
+_ps.loader.exec_module(P)
+
+import tempfile as _tf, shutil as _sh
+_d = _tf.mkdtemp()
+_f = os.path.join(_d, "dist", "state-database-coordinator-DBce2evc.mjs")
+os.makedirs(os.path.dirname(_f))
+
+
+def _write(brand):
+    with open(_f, "w", encoding="utf-8") as fh:
+        fh.write('import os from "node:os";\n'
+                 "function resolveStateLifecycleRuntimeDirectory() {\n"
+                 '\treturn process.platform === "win32" ? path.join('
+                 'os.homedir(), "AppData", "Local", "' + brand +
+                 '", "locks") : "/tmp";\n}\n')
+
+
+# the brand must not matter -- my first version matched the whole line
+# including "Weaver Write", so it worked on a rebranded copy and failed on
+# the original. The test caught it; reasoning had not.
+for _brand in ("OpenClaw", "Weaver Write"):
+    _write(_brand)
+    st, msg = P.patch_file(_f)
+    chk(f"patches the {_brand} copy", st == "patched", msg)
+    chk("  -> and the line now uses os.tmpdir()",
+        "os.tmpdir();" in open(_f, encoding="utf-8").read())
+    chk("  -> hardcoded /tmp is gone",
+        '"/tmp"' not in open(_f, encoding="utf-8").read())
+    st2, _ = P.patch_file(_f)
+    chk("  -> running it again changes nothing", st2 == "already")
+
+# it must refuse what it does not recognise, never guess
+with open(_f, "w", encoding="utf-8") as fh:
+    fh.write("function somethingElse() { return 1; }\n")
+chk("an unknown shape is refused, not guessed",
+    P.patch_file(_f)[0] == "shape")
+os.remove(_f)
+chk("a missing file is reported", P.patch_file(_f)[0] == "missing")
+_sh.rmtree(_d, ignore_errors=True)
+
+_ish = open(os.path.join(_ROOT, "engines", "weaver-core", "install.sh"),
+            encoding="utf-8").read()
+chk("the installer applies it", "patch_portability.py" in _ish)
+chk("and an existing install can be repaired without reinstalling",
+    "--repair" in _src_wc)
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if ok else "FAIL"))
 print("=" * 70)
 sys.exit(0 if ok else 1)
