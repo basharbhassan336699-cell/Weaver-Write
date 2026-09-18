@@ -1,72 +1,49 @@
-// فحصُ مزوّدي البحث المركَّبين — نداءُ بحثٍ حقيقيٌّ لا ادّعاء.
+// فحصُ البحث — بدوالّ المحرّك نفسِه، لا بحيلةٍ من عندنا.
 //
-// لماذا ملفٌّ منفصل؟ لأنّ الجوابَ الصادقَ على «هل يعمل البحث؟» لا يكون
-// بقراءة إعدادٍ، بل بإرسال استعلامٍ ورؤيةِ النتائج. وهذا يحتاج node.
+// آليّةُ أوبن كلاو في البحث (مقروءةٌ من كوده):
 //
-// يُنادى: node probe_search.mjs "<استعلام>"
-// ويطبع JSON: [{provider, ok, count, first, error}]
-import { readdirSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+//   ① النموذجُ يستدعي أداة `web_search`.
+//   ② وقد تُحذَف الأداةُ أصلاً إن كان بحثُ Codex الأصليُّ فعّالاً (نماذج GPT):
+//        agent-tools-DXxcrXNI.mjs:227     tools.filter(t => t.name !== "web_search")
+//        codex-native-web-search-core:122 shouldSuppressManagedWebSearchTool
+//      وعندها يبحث المزوّدُ بنفسه بلا أداة.
+//   ③ وإلّا فـ`web_search` «المُدارة» تحتاج **مزوّداً**، ويُحَلّ هكذا:
+//        runtime-CFtRzJUE.mjs:101  resolveWebSearchProviderId
+//        ├─ `tools.web.search.provider` إن ضُبط صراحةً ⟶ هو
+//        └─ وإلّا: أوّلُ مزوّدٍ في `autoDetectOrder` عنده **إشارةُ اعتماد**
+//                 (hasImplicitProviderSelectionSignal) — أي مفتاحٌ موجود.
+//   ④ ولا مزوّدَ ⟶ "" ⟶ `hasUsableWebSearchProvider` = false ⟶ لا بحث.
+//
+// ومنه نتيجةٌ مهمّة: **duckduckgo لا يُكتشَف تلقائياً أبداً** — لأنّه بلا
+// مفتاح، فلا إشارةَ له. يجب تعيينُه صراحةً ليُستعمل. مقيسٌ لا مُخمَّن.
+//
+// يُنادى: node probe_search.mjs "<استعلام>"    ⟶ JSON
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const query = process.argv[2] || "الإعجاز العلمي في القرآن";
-const stateDir = process.env.OPENCLAW_STATE_DIR
-  || join(process.env.HOME || "", ".weaver-write", "state");
-const projects = join(stateDir, "npm", "projects");
+const here = dirname(fileURLToPath(import.meta.url));
+const rt = join(here, "runtime", "dist", "runtime-BjhiVv_x.mjs");
 
-function pluginDirs() {
-  const out = [];
-  if (!existsSync(projects)) return out;
-  for (const p of readdirSync(projects)) {
-    const nm = join(projects, p, "node_modules", "@openclaw");
-    if (!existsSync(nm)) continue;
-    for (const pkg of readdirSync(nm)) out.push(join(nm, pkg));
+const out = { providers: [], configured: [], chosen: "", usable: false,
+              ok: false, count: 0, first: "", error: "" };
+try {
+  const m = await import(rt);
+  out.providers = (m.listWebSearchProviders({}) || []).map((p) => p.id);
+  out.configured = (m.listConfiguredWebSearchProviders({}) || []).map((p) => p.id);
+  out.chosen = m.resolveWebSearchProviderId({}) || "";
+  out.usable = !!m.hasUsableWebSearchProvider({});
+  if (!out.usable) {
+    out.error = "لا مزوّدَ صالح: لا مفتاحَ يُكتشَف، ولا مزوّدَ مُعيَّنٌ صراحةً";
+  } else {
+    const r = await m.runWebSearch({ query, maxResults: 5 });
+    const arr = Array.isArray(r?.results) ? r.results : Array.isArray(r) ? r : [];
+    out.count = arr.length;
+    out.first = String(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
+    out.ok = out.count > 0;
+    if (!out.ok) out.error = "المزوّدُ ردّ بلا نتائج";
   }
-  return out;
+} catch (e) {
+  out.error = String(e?.message || e).slice(0, 300);
 }
-
-const results = [];
-for (const dir of pluginDirs()) {
-  let id = pkgId(dir);
-  const entry = join(dir, "dist", "web-search-provider.js");
-  if (!existsSync(entry)) continue;          // ليست إضافةَ بحث
-  const row = { provider: id, ok: false, count: 0, first: "", error: "" };
-  try {
-    const mod = await import(entry);
-    const make = Object.values(mod).find((v) => typeof v === "function");
-    const prov = make({});
-    row.provider = prov?.id || id;
-    row.requiresKey = !!prov?.requiresCredential;
-    row.envVars = prov?.envVars || [];
-    const tool = await prov.createTool({ config: {}, maxResults: 5 });
-    const out = await tool.execute({ query }, {});
-    const txt = typeof out === "string" ? out : JSON.stringify(out);
-    const arr = Array.isArray(out?.results) ? out.results
-      : Array.isArray(out) ? out : null;
-    // بعضُ المزوّدين يعيدون خطأً **داخل** الجواب بدل رميه — فلو عُدَّ ذلك
-    // نجاحاً لقلنا «البحث يعمل» وهو لا يعمل. مقيسٌ على perplexity بلا مفتاح:
-    //   {"error":"missing_perplexity_api_key","message":"…needs an API key"}
-    let inner = null;
-    try { inner = typeof out === "string" ? JSON.parse(out) : out; } catch {}
-    if (inner && typeof inner === "object" && !Array.isArray(inner) && inner.error) {
-      row.error = String(inner.message || inner.error).slice(0, 220);
-      row.ok = false;
-      results.push(row);
-      continue;
-    }
-    row.count = arr ? arr.length : (txt.match(/https?:\/\//g) || []).length;
-    row.first = (arr?.[0]?.title || arr?.[0]?.url || txt.slice(0, 160) || "").trim();
-    row.ok = row.count > 0;
-  } catch (e) {
-    row.error = String(e?.message || e).slice(0, 200);
-  }
-  results.push(row);
-}
-
-function pkgId(dir) {
-  try {
-    const j = JSON.parse(readFileSync(join(dir, "openclaw.plugin.json"), "utf8"));
-    return j.id || dir.split("/").pop();
-  } catch { return dir.split("/").pop(); }
-}
-
-console.log(JSON.stringify(results, null, 2));
+console.log(JSON.stringify(out, null, 2));

@@ -965,37 +965,40 @@ PROBE_SEARCH = os.path.join(_ROOT, "engines", "weaver-core", "probe_search.mjs")
 
 
 def probe_search(query="اختبار البحث"):
-    """أيعمل البحثُ فعلاً؟ — نداءُ بحثٍ حقيقيٍّ لا قراءةُ إعداد.
+    """أيعمل البحثُ فعلاً؟ — بدوالّ المحرّك نفسِه.
 
     قراءةُ `tools.web.search.enabled` تقول إنّ المفتاحَ مرفوع، لا إنّ البحثَ
-    يعمل. فهذا يُحمّل كلَّ مزوّدٍ مركَّبٍ ويُرسل استعلاماً ويعدّ النتائج.
+    يعمل. فهذا يسأل المحرّكَ: مَن المزوّدون؟ ومَن المختار؟ وأصالحٌ؟ ثمّ
+    ينفّذ `runWebSearch` فعلاً.
 
-    ويُشغَّل ببيئة المحرّك نفسِها (`engine_env`) كي تصله المفاتيحُ كما تصل
-    البوّابة — وإلّا قال «لا مفتاح» وهو موجود.
+    ويُشغَّل ببيئة المحرّك (`engine_env`) كي تصله المفاتيحُ كما تصل البوّابة.
 
-    يعيد قائمةَ dicts: provider · ok · count · first · error."""
+    يعيد dict: providers · configured · chosen · usable · ok · count ·
+    first · error."""
+    _bad = {"providers": [], "configured": [], "chosen": "", "usable": False,
+            "ok": False, "count": 0, "first": "", "error": ""}
     nb = node_bin()
     if not nb:
-        return [{"provider": "-", "ok": False, "count": 0, "first": "",
-                 "error": why_unavailable()}]
+        _bad["error"] = why_unavailable()
+        return _bad
     if not os.path.isfile(PROBE_SEARCH):
-        return [{"provider": "-", "ok": False, "count": 0, "first": "",
-                 "error": "probe_search.mjs مفقود"}]
+        _bad["error"] = "probe_search.mjs مفقود"
+        return _bad
     try:
         p = subprocess.run([nb, PROBE_SEARCH, str(query or "")],
                            capture_output=True, text=True, timeout=180,
                            cwd=_ROOT, env=engine_env())
         out = (p.stdout or "").strip()
         import json as _j
-        i, j = out.find("["), out.rfind("]")
+        i, j = out.find("{"), out.rfind("}")
         if i < 0 or j < i:
-            return [{"provider": "-", "ok": False, "count": 0, "first": "",
-                     "error": (_real_error(p.stderr) or out or "بلا خرج")[:200]}]
+            _bad["error"] = (_real_error(p.stderr) or out or "بلا خرج")[:250]
+            return _bad
         d = _j.loads(out[i:j + 1])
-        return d if isinstance(d, list) else []
+        return d if isinstance(d, dict) else _bad
     except Exception as e:
-        return [{"provider": "-", "ok": False, "count": 0, "first": "",
-                 "error": f"{type(e).__name__}: {str(e)[:160]}"}]
+        _bad["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        return _bad
 
 
 def _cli():
@@ -1089,25 +1092,39 @@ def _cli():
         return
     if argv[:2] == ["--web-search", "test"]:
         _q = argv[2] if len(argv) > 2 else "الإعجاز العلمي في القرآن"
-        print(f"  استعلام: {_q}\n  (نداءُ بحثٍ حقيقيّ — قد يأخذ ثوانٍ)\n")
-        rows = probe_search(_q)
-        if not rows:
-            print("  لا مزوّدَ بحثٍ مركَّب.  التركيب:"
-                  "  python3 -m pipeline.weaver_core --web-search")
-            return
-        for r in rows:
-            mark = "✓" if r.get("ok") else "✗"
-            print(f"  {mark} {str(r.get('provider','')):<14}"
-                  f" نتائج={r.get('count', 0)}")
+        print(f"  استعلام: {_q}\n  (نداءُ بحثٍ حقيقيٌّ بدوالّ المحرّك)\n")
+        r = probe_search(_q)
+        print("  المزوّدون المرئيّون : "
+              + (", ".join(r.get("providers") or []) or "لا شيء"))
+        print("  المختار            : " + (r.get("chosen") or "لا شيء"))
+        print("  صالحٌ للاستعمال     : "
+              + ("نعم" if r.get("usable") else "لا"))
+        if r.get("ok"):
+            print(f"\n  ✓ البحثُ يعمل — {r.get('count')} نتيجة")
             if r.get("first"):
-                print(f"      أوّلُ نتيجة: {str(r['first'])[:110]}")
+                print("    أوّلُ نتيجة: " + str(r["first"])[:120])
+        else:
+            print("\n  ✗ البحثُ لا يعمل")
             if r.get("error"):
-                print(f"      السبب     : {str(r['error'])[:180]}")
-        if not any(r.get("ok") for r in rows):
-            print("\n  ⚠ لا مزوّدَ يعمل. والبوّابةُ تحمل بيئتَها من لحظة"
-                  " إقلاعها،\n    فإن أضفتَ المفتاحَ بعدها أعِد تشغيلها:"
-                  "\n      python3 -m pipeline.weaver_core --gateway stop"
-                  "\n      python3 -m pipeline.weaver_core --gateway start")
+                print("    السبب: " + str(r["error"])[:220])
+            if not r.get("chosen"):
+                # هذه آليّةُ أوبن كلاو لا رأيُنا: المزوّدُ يُختار تلقائياً
+                # بإشارةِ اعتماد (مفتاح). وduckduckgo بلا مفتاح، فلا إشارةَ
+                # له، فلا يُكتشَف أبداً — يجب تعيينُه صراحةً.
+                print("\n    المزوّدُ يُكتشَف بمفتاحه. وduckduckgo بلا مفتاح،"
+                      "\n    فلا يُكتشَف تلقائياً — يُعيَّن صراحةً:"
+                      "\n      python3 -m pipeline.weaver_core --web-search ddg"
+                      "\n    أو ضَع مفتاحَك ثمّ أعِد تشغيل البوّابة:"
+                      "\n      python3 -m pipeline.weaver_core --gateway stop"
+                      "\n      python3 -m pipeline.weaver_core --gateway start")
+        return
+    if argv == ["--web-search", "ddg"]:
+        # تعيينٌ صريح: يجعل duckduckgo هو المزوّد، فيعمل البحثُ بلا مفتاح.
+        code, out, err = run(["config", "set",
+                              "tools.web.search.provider", "duckduckgo"],
+                             timeout=90)
+        print("  " + ("✓ المزوّد = duckduckgo" if code == 0
+                      else "⚠ تعذّر: " + (_real_error(err) or "")[:160]))
         return
     if argv == ["--web-search"]:
         if not (available() and node_bin()):
