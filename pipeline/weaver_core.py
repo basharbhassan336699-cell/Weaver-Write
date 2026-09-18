@@ -849,6 +849,118 @@ def ask(text, timeout=300, cwd=None, fallback=True, session=None):
                 "note": f"{_note} | {type(e).__name__}: {str(e)[:120]}"}
 
 
+# ── مسارُ النوبة: ما فعله الوكيلُ فعلاً ────────────────────────────────────
+#
+# مُغلَّفُ `--json` يحمل الجوابَ فقط: `final` و`payloads` و`model`. أمّا ما
+# استدعاه الوكيلُ من أدواتٍ في الطريق فلا يظهر فيه — ولهذا لم يكن المستخدمُ
+# يرى إلّا «التفكير» بينما الوكيلُ يبحث ويكتب.
+#
+# وللمحرّك سجلٌّ لذلك، وأمرُه هو:
+#     sessions export-trajectory --session-key <key> --json
+# يُخرج `events.jsonl` فيه أحداثُ النوبة، ومنها أنواعُ الأدوات كما يسمّيها:
+#     tool.call · tool.result · tool.execution.started/completed/error · session.tool
+#
+# ويُصدَّر إلى مجلّدنا (`--workspace`) لا إلى مستودعك، فلا يُلوَّث بشيء.
+TRAJ_DIR = os.path.join(STATE, "trajectory")
+
+
+def session_key(session, agent="main"):
+    """مفتاحُ الجلسة كما يخزّنه المحرّك: agent:<id>:explicit:<session-id>.
+
+    مقروءٌ من خرج `sessions list --json` على جلسةٍ حقيقيّة:
+        "key": "agent:main:explicit:weaver-chat-42"
+    """
+    return "agent:%s:explicit:%s" % (agent, _session_id(session))
+
+
+def _tool_events(obj):
+    """التقط استدعاءاتِ الأدوات من حدثٍ واحدٍ في `events.jsonl`.
+
+    مكتوبةٌ متسامحةً عمداً: تُفتَّش عدّةُ أشكالٍ محتملة، لأنّ الشكلَ الدقيقَ
+    لحدثِ الأداة لم أره بعينـي (لا مفتاحَ نموذجٍ في بيئتي)، وإنّما أخذتُ
+    أسماءَ الأنواع من المحرّك نفسِه. فما لا يُطابق يُترك ولا يُختلق."""
+    out = []
+    if not isinstance(obj, dict):
+        return out
+    typ = str(obj.get("type") or "")
+    data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
+
+    def _add(name, req, res, status):
+        name = str(name or "").strip()
+        if not name:
+            return
+        out.append({"name": name, "request": req, "response": res,
+                    "status": status})
+
+    # ① حدثٌ نوعُه أداة
+    if "tool" in typ.lower():
+        nm = (data.get("toolName") or data.get("name") or data.get("tool")
+              or obj.get("toolName") or obj.get("name") or "")
+        req = (data.get("input") if data.get("input") is not None
+               else data.get("arguments") if data.get("arguments") is not None
+               else data.get("args"))
+        res = (data.get("output") if data.get("output") is not None
+               else data.get("result") if data.get("result") is not None
+               else data.get("content"))
+        st = "err" if ("error" in typ.lower() or data.get("isError")) else "ok"
+        _add(nm, req, res, st)
+
+    # ② مدخلةُ نصٍّ فيها محتوىً بأجزاء، وفيها toolCall/toolResult
+    for item in (data.get("content") or obj.get("content") or []):
+        if not isinstance(item, dict):
+            continue
+        it = str(item.get("type") or "")
+        if it in ("toolCall", "tool_call", "tool_use"):
+            _add(item.get("name") or item.get("toolName"),
+                 item.get("input") if item.get("input") is not None
+                 else item.get("arguments"), None, "ok")
+        elif it in ("toolResult", "tool_result"):
+            # نتيجةٌ تُلحَق بآخرِ نداءٍ بلا نتيجة
+            for prev in reversed(out):
+                if prev["response"] is None:
+                    prev["response"] = (item.get("output")
+                                        if item.get("output") is not None
+                                        else item.get("content"))
+                    if item.get("isError"):
+                        prev["status"] = "err"
+                    break
+    return out
+
+
+def trajectory(session, agent="main", timeout=90):
+    """استدعاءاتُ الأدوات في نوبةِ هذه الجلسة. قائمةٌ (قد تكون فارغة).
+
+    لا ترفع استثناءً، ولا تُبطئ الجواب: تُنادى **بعد** أن يُسلَّم الردّ."""
+    try:
+        os.makedirs(TRAJ_DIR, exist_ok=True)
+        code, out, err = run(["sessions", "export-trajectory",
+                              "--session-key", session_key(session, agent),
+                              "--json", "--workspace", TRAJ_DIR],
+                             timeout=timeout)
+        if code != 0 or not out.strip():
+            return []
+        import json as _j
+        d = _j.loads(out[out.find("{"):out.rfind("}") + 1])
+        if not isinstance(d, dict) or d.get("ok") is False:
+            return []
+        ev = os.path.join(d.get("outputDir") or "", "events.jsonl")
+        if not os.path.isfile(ev):
+            return []
+        calls = []
+        with open(ev, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    calls.extend(_tool_events(_j.loads(line)))
+                except Exception:
+                    continue
+        return calls
+    except Exception:
+        return []
+
+
 def _cli():
     argv = sys.argv[1:]
     # التشخيصُ يعمل دائماً — وهو أنفعُ ما يكون حين لا يعمل شيءٌ آخر.

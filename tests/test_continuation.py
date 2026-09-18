@@ -142,6 +142,55 @@ finally:
 
 print()
 print("=" * 70)
+print(" 4) بطاقةٌ لكلِّ أداةٍ استدعاها الوكيل — لا «التفكير» وحده")
+print("=" * 70)
+# مُغلَّفُ --json يحمل الجوابَ فقط، فما استدعاه الوكيلُ من أدواتٍ لا يظهر فيه.
+# ولهذا لم يكن المستخدمُ يرى إلّا «التفكير» بينما الوكيلُ يبحث ويقرأ.
+# فتُقرأ من `sessions export-trajectory` عند المحرّك.
+_r3 = (S._engine_ready, S._chat_via_engine, W.trajectory, W.LAST_LOG)
+try:
+    os.makedirs(os.path.dirname(W.LAST_LOG), exist_ok=True)
+    with open(W.LAST_LOG, "w", encoding="utf-8") as _f:
+        _f.write("# args: agent -m ابحث --json\n# exit: 0\n\n"
+                 "--- stdout ---\n{\"ok\": true, \"final\": \"تمّ\"}\n")
+    S._engine_ready = lambda: True
+    S._chat_via_engine = (
+        lambda m, h=None, t=120, c=None, mem=None, att=None, session=None:
+        {"reply": "الطقسُ صحو", "engine": "weaver-core", "model": "m"})
+    W.trajectory = lambda session, agent="main", timeout=90: [
+        {"name": "web_search", "request": {"query": "طقس صنعاء"},
+         "response": "١٢ نتيجة", "status": "ok"},
+        {"name": "web_fetch", "request": {"url": "https://w/x"},
+         "response": "<html>", "status": "ok"},
+        {"name": "write", "request": {"file_path": "/tmp/o.md"},
+         "response": "كُتب", "status": "err"}]
+    srv = S._ReuseTCPServer(("127.0.0.1", 0), S.Handler)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    req = urllib.request.Request(
+        "http://127.0.0.1:%d/api/chat/stream" % port,
+        data=json.dumps({"message": "ابحث", "history": [], "chatId": "c1"}).encode(),
+        headers={"Content-Type": "application/json"})
+    out = urllib.request.urlopen(req, timeout=60).read().decode()
+    srv.shutdown()
+    cards = [json.loads(l[6:])["tool"] for l in out.splitlines()
+             if l.startswith("data: ") and '"t": "tool"' in l]
+    names = [c["title"] for c in cards]
+    chk("أربعُ بطاقات: ثلاثُ أدواتٍ ونوبة", len(cards) == 4, names)
+    chk("  -> web_search فيها", "web_search" in names, names)
+    chk("  -> web_fetch فيها", "web_fetch" in names, names)
+    chk("  -> write فيها", "write" in names, names)
+    chk("  -> وسطرٌ فرعيٌّ من الوسيط المهمّ",
+        any(c.get("sub") == "طقس صنعاء" for c in cards), cards[:1])
+    chk("  -> وحالةُ الخطأ تُنقَل",
+        any(c["status"] == "err" for c in cards))
+    chk("  -> والمدخلاتُ والمخرجاتُ محمولةٌ معها",
+        all(c["request"] and c["response"] for c in cards[:3]))
+finally:
+    (S._engine_ready, S._chat_via_engine, W.trajectory, W.LAST_LOG) = _r3
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)

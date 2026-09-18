@@ -1440,6 +1440,46 @@ def _engine_fail_card(note, isar=True):
             "sub": str(note)[:160], "request": "", "response": str(note)}
 
 
+def _engine_trajectory_cards(session, isar=True, limit=24):
+    """بطاقةٌ لكلِّ أداةٍ استدعاها الوكيل — من `sessions export-trajectory`.
+
+    مُغلَّفُ `--json` يحمل الجوابَ فقط، فلا يظهر فيه ما فعله الوكيلُ في
+    الطريق. وللمحرّك سجلٌّ لذلك وأمرٌ يُخرجه، فيُقرأ منه.
+
+    تُنادى **بعد** أن يصير الجوابُ جاهزاً، فلا تُبطئه. وفارغةٌ خيرٌ من
+    مُختلَقة: إن لم يُخرج المحرّكُ شيئاً لم نصنع بطاقاتٍ من عندنا."""
+    try:
+        from pipeline import weaver_core as _wc
+        calls = _wc.trajectory(session) or []
+    except Exception:
+        return []
+    out = []
+    for c in calls[:limit]:
+        nm = str(c.get("name") or "")
+        req, res = c.get("request"), c.get("response")
+
+        def _txt(v):
+            if v is None:
+                return ""
+            if isinstance(v, str):
+                return v[:20000]
+            try:
+                return json.dumps(v, ensure_ascii=False, indent=2)[:20000]
+            except Exception:
+                return str(v)[:20000]
+        _sub = ""
+        if isinstance(req, dict):
+            for k in ("query", "url", "path", "command", "file_path", "cmd"):
+                if req.get(k):
+                    _sub = str(req[k])[:120]
+                    break
+        out.append({"name": nm, "kind": nm,
+                    "title": nm, "sub": _sub,
+                    "status": c.get("status") or "ok",
+                    "request": _txt(req), "response": _txt(res)})
+    return out
+
+
 def _engine_tool_card(r, isar=True):
     """بطاقةُ أداةٍ تصف نوبةَ المحرّك — من سجلّه هو، لا من تخمين.
 
@@ -2370,6 +2410,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # مُلفَّقَين. وتُرسَل بعد الجواب كي لا تُؤخّره.
                     _tc = _engine_tool_card(r, isar)
                     if _tc:
+                        # بطاقةٌ لكلِّ أداةٍ استدعاها الوكيلُ فعلاً — من مسار
+                        # النوبة عند المحرّك، لا من مُغلَّف الجواب (وهو لا
+                        # يحملها). وهي سببُ أنّ المستخدمَ لم يكن يرى إلّا
+                        # «التفكير» بينما الوكيلُ يبحث ويقرأ.
+                        for _t in _engine_trajectory_cards(
+                                body.get("chatId"), isar):
+                            sse({"t": "tool", "tool": _t})
                         sse({"t": "tool", "tool": _tc})
                     else:
                         _fc = _engine_fail_card(_engine_fail(), isar)
