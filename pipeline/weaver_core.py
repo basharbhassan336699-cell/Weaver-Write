@@ -456,6 +456,57 @@ TUNING = (("tools.toolSearch.enabled", "true"),
           ("tools.toolSearch.mode", "directory"))
 
 
+# ── بحثُ الويب: كتالوجُ أوبن كلاو نفسُه ──────────────────────────────────────
+#
+# أداتا `web_search` و`web_fetch` في المحرّك أصلاً، لكنّ المزوّدَ لا يأتي
+# مُرفَقاً: أوبن كلاو يجعله إضافةً رسميّةً تُركَّب، ثمّ يختار تلقائياً بترتيبٍ
+# مُعلَنٍ في كتالوجه (autoDetectOrder):
+#
+#     brave 10 · kimi 40 · perplexity 50 · firecrawl 60 · exa 65
+#     tavily 70 · parallel 75 · duckduckgo 100 · searxng 200
+#
+# فهاتان من كتالوجه هو — لا اختيارَ لنا فيهما إلّا أنّهما الوحيدتان اللتان
+# تعملان بما عند المستخدم: perplexity يقرأ OPENROUTER_API_KEY (مفتاحُ النظام
+# أصلاً)، وduckduckgo بلا مفتاحٍ فيبقى البحثُ عاملاً على كلّ حال.
+#
+# وهذا لا يمسُّ قواعدَ النظام الأكاديمية بحال: تلك لأنابيب المستندات، وهذه
+# أدواتُ المحرّك وحده.
+WEB_SEARCH_PLUGINS = ("duckduckgo", "perplexity")
+WEB_SEARCH_KEY = "tools.web.search.enabled"
+
+
+def enable_web_search():
+    """يُركّب مزوّدَي البحثِ الرسميّين ويُفعّل الأداة — بأوامر المحرّك نفسِه.
+
+    يعيد قائمةَ (اسم، نجح، سطرُ السبب). لا يرفع استثناءً، ولا يُوقف شيئاً إن
+    فشل: المحرّكُ يعمل بلا بحثٍ أيضاً."""
+    rows = []
+    have = web_search_state()["installed"]
+    for pid in WEB_SEARCH_PLUGINS:
+        # مُركَّبةٌ سلفاً ⟶ لا يُعاد التركيب. والمحرّكُ يرفض إعادتَه بـ"already
+        # exists"، فلو عُدَّ ذلك فشلاً لأفزع المستخدمَ من حالةٍ سليمة.
+        if pid in have:
+            rows.append((pid, True, "مُركَّبةٌ سلفاً"))
+            continue
+        code, out, err = run(["plugins", "install",
+                              "@openclaw/" + pid + "-plugin",
+                              "--accept-capabilities"], timeout=420)
+        rows.append((pid, code == 0, _real_error(err) or (err or "").strip()[:160]))
+    code, out, err = run(["config", "set", WEB_SEARCH_KEY, "true"], timeout=90)
+    rows.append((WEB_SEARCH_KEY, code == 0,
+                 _real_error(err) or (err or "").strip()[:160]))
+    return rows
+
+
+def web_search_state():
+    """ماذا يقول المحرّكُ عن بحث الويب الآن؟ (مُركَّب؟ مُفعَّل؟)"""
+    code, out, _ = run(["config", "get", WEB_SEARCH_KEY], timeout=60)
+    enabled = (code == 0 and "true" in (out or "").lower())
+    code2, out2, _ = run(["plugins", "list"], timeout=180)
+    have = [p for p in WEB_SEARCH_PLUGINS if code2 == 0 and p in (out2 or "")]
+    return {"enabled": enabled, "installed": have}
+
+
 def tune(revert=False):
     """اضبط إعداداتِ التخفيف في حالتنا المعزولة. يُعيد قائمةَ (مفتاح، نجاح، رسالة)."""
     out = []
@@ -682,6 +733,18 @@ def _cli():
                                "patch_portability.py")
         _r = _sp.run([sys.executable, _script, RUNTIME])
         sys.exit(_r.returncode)
+    if argv == ["--web-search"]:
+        if not (available() and node_bin()):
+            print(why_unavailable(), file=sys.stderr)
+            sys.exit(2)
+        print("  تركيبُ مزوّدَي البحثِ من كتالوج أوبن كلاو…")
+        for name, ok, why in enable_web_search():
+            print(f"    {'✓' if ok else '⚠'} {name}"
+                  + ("" if ok else "   " + (why or "تعذّر")))
+        st = web_search_state()
+        print(f"\n  مُفعَّل: {'نعم' if st['enabled'] else 'لا'}"
+              f"   ·   مُركَّب: {', '.join(st['installed']) or 'لا شيء'}")
+        return
     if argv == ["--isolation"]:
         iso = isolation()
         print(f"  البروفايل : {iso['profile']}")

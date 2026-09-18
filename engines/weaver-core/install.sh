@@ -124,6 +124,35 @@ echo "  ⚙ الاعتماديات (٣٢٠ حزمة، قد تطول)…"
 ( cd "$DEST" && PATH="$(dirname "$NODE"):$PATH" npm install --omit=dev --legacy-peer-deps --no-audit --no-fund ) \
   || { echo "  ⚠ لم تكتمل الاعتماديات — أعِد المحاولة، أو أرسل الخطأ"; }
 
+# ── بحثُ الويب: بآليّة أوبن كلاو نفسِها، بلا حرفٍ من عندنا ────────────────
+#
+# أداتا `web_search` و`web_fetch` في المحرّك أصلاً. لكنّ المزوّدَ لا يأتي
+# مُرفَقاً: أوبن كلاو يجعله إضافةً رسميّةً تُركَّب، ثمّ يختار تلقائياً بترتيبٍ
+# مُعلَنٍ في كتالوجه (autoDetectOrder):
+#
+#     brave 10 · kimi 40 · perplexity 50 · firecrawl 60 · exa 65
+#     tavily 70 · parallel 75 · duckduckgo 100 · searxng 200
+#
+# فنُركّب اثنتين من كتالوجه هو، بأمره هو:
+#   • perplexity (٥٠) — يقرأ OPENROUTER_API_KEY، وهو مفتاحُ النظام أصلاً
+#   • duckduckgo (١٠٠) — بلا مفتاح، فيبقى البحثُ عاملاً على كلّ حال
+#
+# ولا نلمس قواعدَ النظام الأكاديمية: هذه أدواتُ المحرّك وحده.
+_OC () { OPENCLAW_STATE_DIR="$STATE_DIR" OPENCLAW_PROFILE=weaver \
+         "$NODE" "$DEST/openclaw.mjs" "$@" >/dev/null 2>&1; }
+STATE_DIR="${WEAVER_STATE_DIR:-$HOME/.weaver-write/state}"
+echo "  ⌕ بحثُ الويب (إضافتا أوبن كلاو الرسميّتان)…"
+for _P in duckduckgo perplexity; do
+  if _OC plugins install "@openclaw/${_P}-plugin" --accept-capabilities; then
+    echo "    ✓ ${_P}"
+  else
+    echo "    ⚠ ${_P} — لم تُركَّب (شبكة؟). البحثُ يعمل بما تبقّى"
+  fi
+done
+_OC config set tools.web.search.enabled true \
+  && echo "    ✓ tools.web.search.enabled = true" \
+  || echo "    ⚠ تعذّر تفعيلُ بحثِ الويب"
+
 echo
 echo "── تمّ ──"
 "$NODE" "$DEST/openclaw.mjs" --version || true
