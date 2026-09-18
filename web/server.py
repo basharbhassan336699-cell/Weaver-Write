@@ -1409,6 +1409,37 @@ EFFORT = {
 }
 
 
+def _engine_tool_card(r, isar=True):
+    """بطاقةُ أداةٍ تصف نوبةَ المحرّك — من سجلّه هو، لا من تخمين.
+
+    `pipeline/weaver_core.py` يكتب كلَّ نداءٍ في `~/.weaver-write/last-run.log`:
+    الأمرُ بوسائطه، ورمزُ الخروج، والمُخرَجُ كاملاً. فتُقرأ منه المدخلاتُ
+    (سطرُ الأمر) والمخرجاتُ (المُغلَّف) — وهما ما يعرضه العارضُ التفصيليّ.
+
+    تُعيد dict أو None. لا ترفع استثناءً."""
+    if not isinstance(r, dict) or r.get("engine") != "weaver-core":
+        return None
+    req = res = ""
+    try:
+        from pipeline import weaver_core as _wc
+        raw = open(_wc.LAST_LOG, encoding="utf-8", errors="replace").read()
+        for line in raw.splitlines():
+            if line.startswith("# args:"):
+                req = line[len("# args:"):].strip()
+                break
+        _i = raw.find("--- stdout ---")
+        if _i >= 0:
+            res = raw[_i + len("--- stdout ---"):].strip()
+        res = res[:20000]
+    except Exception:
+        req = req or ""
+    return {"name": "weaver-core", "kind": "engine",
+            "title": ("نوبةُ الوكيل — Weaver Write core" if isar
+                      else "Agent turn — Weaver Write core"),
+            "sub": (r.get("model") or ""), "status": "ok",
+            "request": req, "response": res}
+
+
 def _sources_md(sources, isar: bool) -> str:
     """Build a numbered Markdown 'Sources' block from an ordered list of
     {title,url}. Titles link to the article (clickable in the UI); order matches
@@ -2238,6 +2269,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         sse({"t": "reply", "reply": ("خطأ: " if isar else "Error: ")
                              + (r.get("message") or r.get("error"))})
                 else:
+                    # بطاقةُ أداةٍ بحمولةٍ حقيقيّة: الأمرُ الذي نُفّذ فعلاً
+                    # ومُغلَّفُ جوابه كما عاد — مقروءان من سجلّ المحرّك، لا
+                    # مُلفَّقَين. وتُرسَل بعد الجواب كي لا تُؤخّره.
+                    _tc = _engine_tool_card(r, isar)
+                    if _tc:
+                        sse({"t": "tool", "tool": _tc})
                     reply = r.get("reply") or ""
                     if reply.strip():
                         reply += _sources_md(srcs, isar)

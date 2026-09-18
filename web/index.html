@@ -710,7 +710,13 @@
     display: flex; flex-direction: column; gap: 2px;
     margin: 0 0 10px; padding-inline-start: 4px;
     border-inline-start: 2px solid var(--border);
+    min-width: 0; max-width: 100%;
   }
+  /* حين تحمل بطاقاتٍ فالبطاقةُ هي الإطار — فلا شريطَ جانبيٌّ ولا حشو */
+  .tool-steps:has(.tool-acc) {
+    padding-inline-start: 0; border-inline-start: 0;
+  }
+  .tool-acc { max-width: 100%; min-width: 0; }
   .tstep {
     display: flex; align-items: center; gap: 8px;
     font-size: 0.86em; color: var(--text-muted);
@@ -735,6 +741,139 @@
   .tstep.running .tstep-label { color: var(--text); }
   .tstep-detail { color: var(--text-dim); font-size: 0.95em; }
   @keyframes tspin { to { transform: rotate(360deg); } }
+
+  /* ── بطاقاتُ استدعاء الأدوات: أكورديونٌ متسلسل ─────────────────────
+     كانت الخطواتُ سطوراً حيّةً في DOM لا تُحفَظ، فتختفي عند فتح محادثةٍ
+     أخرى أو إعادةِ التحميل. صارت بيانات (`msg.tools`) تُحفَظ وتُعاد. */
+  .tool-acc {
+    margin: 0 0 10px; border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; background: var(--surface);
+  }
+  .tool-acc-head {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 9px 12px; cursor: pointer; user-select: none;
+    background: none; border: 0; color: var(--text-muted);
+    font: inherit; font-size: 0.86em; text-align: start;
+  }
+  .tool-acc-head:hover { background: var(--surface-hover); }
+  .tool-acc-head .taci { flex-shrink: 0; opacity: .8; }
+  .tool-acc-head .tacn {
+    flex: 1 1 auto; min-width: 0; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis;
+  }
+  .tool-acc-head .tacc { opacity: .6; font-variant-numeric: tabular-nums; }
+  .tool-acc-head .tacv {
+    flex-shrink: 0; transition: transform .18s ease; opacity: .6;
+  }
+  .tool-acc.open .tool-acc-head .tacv { transform: rotate(90deg); }
+  .tool-acc-body { display: none; padding: 0 8px 8px; }
+  .tool-acc.open .tool-acc-body { display: block; }
+  .tcard {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 8px 10px; margin-top: 4px; cursor: pointer;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 9px; color: var(--text); font: inherit;
+    font-size: 0.86em; text-align: start;
+  }
+  .tcard:hover { border-color: var(--accent); }
+  .tcard-ico {
+    width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--surface); font-size: 11px; font-weight: 700;
+  }
+  /* الأبناءُ عناصرُ `span`، فبلا `display:block` لا يعمل فيها القصُّ ولا
+     `min-width:0` — فتفيض البطاقةُ خارجَ الشاشة. مقيسٌ على لقطةٍ حقيقيّة. */
+  .tcard-main { flex: 1 1 auto; min-width: 0; display: block; overflow: hidden; }
+  .tcard-title {
+    display: block;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tcard-sub {
+    display: block;
+    color: var(--text-dim); font-size: 0.9em; margin-top: 1px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .tcard-dot {
+    width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+    background: #4caf7d;
+  }
+  .tcard.running .tcard-dot {
+    background: transparent; border: 2px solid var(--border);
+    border-top-color: var(--accent); width: 12px; height: 12px;
+    animation: tspin .7s linear infinite;
+  }
+  .tcard.err .tcard-dot { background: #e0575b; }
+
+  /* ── النافذةُ السفليةُ المنبثقة ───────────────────────────────── */
+  .tsheet-ov {
+    position: fixed; inset: 0; z-index: 3000; display: none;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(2px);
+  }
+  .tsheet-ov.show { display: block; }
+  .tsheet {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    max-height: 88vh; display: flex; flex-direction: column;
+    background: var(--surface); color: var(--text);
+    border-radius: 18px 18px 0 0; border-top: 1px solid var(--border);
+    box-shadow: 0 -8px 40px rgba(0,0,0,.5);
+    animation: tsheetUp .22s cubic-bezier(.2,.8,.2,1);
+  }
+  @keyframes tsheetUp { from { transform: translateY(14%); opacity: .4; } }
+  .tsheet-grip {
+    width: 38px; height: 4px; border-radius: 99px; background: var(--border);
+    margin: 8px auto 2px; flex-shrink: 0; cursor: grab;
+  }
+  .tsheet-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 6px 16px 10px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tsheet-title { flex: 1 1 auto; font-weight: 600; font-size: .96em; }
+  .tsheet-x {
+    background: none; border: 0; color: var(--text-muted);
+    font-size: 18px; line-height: 1; cursor: pointer; padding: 4px 6px;
+    border-radius: 7px;
+  }
+  .tsheet-x:hover { background: var(--surface-hover); color: var(--text); }
+  .tsheet-body { overflow: auto; padding: 12px 16px 22px; }
+  .tsheet-sec { margin-bottom: 14px; }
+  .tsheet-sec > h4 {
+    margin: 0 0 6px; font-size: .78em; font-weight: 600;
+    letter-spacing: .04em; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .tsheet-tasks { list-style: none; margin: 0; padding: 0; }
+  .tsheet-tasks li {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 5px 0; font-size: .9em; color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .tsheet-tasks li:last-child { border-bottom: 0; }
+  .tsheet-tasks .tt-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #4caf7d;
+    margin-top: 7px; flex-shrink: 0;
+  }
+  .tsheet-tasks li.err .tt-dot { background: #e0575b; }
+  .tsheet-tasks li.active { color: var(--text); font-weight: 600; }
+  /* حاويةٌ طرفيّةٌ داكنة — داكنةٌ دائماً، ولو كانت الواجهةُ فاتحة */
+  .tterm {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #222b36;
+    border-radius: 10px; overflow: auto; max-height: 40vh;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.6; padding: 10px 12px;
+    direction: ltr; text-align: left; white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .tterm .k { color: #79c0ff; }   /* مفتاح  */
+  .tterm .s { color: #a5d6ff; }   /* نصّ    */
+  .tterm .n { color: #d2a8ff; }   /* عدد    */
+  .tterm .b { color: #ff7b72; }   /* قيمةٌ ذرّية */
+  .tterm .p { color: #8b949e; }   /* ترقيم  */
+  @media (min-width: 820px) {
+    .tsheet { left: 50%; transform: translateX(-50%); width: 720px;
+              border-radius: 18px; bottom: 24px; max-height: 80vh; }
+    .tsheet-ov.show { display: flex; align-items: flex-end; }
+  }
 
   /* When chatting: hide hero decorations, dock the input */
   .main.chat-mode { justify-content: flex-start; overflow: hidden; }
@@ -3221,7 +3360,7 @@
       currentActiveFile = null;
       currentMessages.forEach(m => {
         if (m.role === 'user') { box.appendChild(makeUserMsg(m.content)); return; }
-        const el = makeAiMsg(m.content);
+        const el = makeAiMsg(m.content, m.tools);
         box.appendChild(el);
         if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
       });
@@ -3413,11 +3552,216 @@
     });
     return d;
   }
-  function makeAiMsg(text) {
+  // ══ بطاقاتُ استدعاء الأدوات ═════════════════════════════════════════════
+  //
+  // العطب: كانت الخطواتُ تُرسَم في DOM مباشرةً ولا تُحفَظ مع الرسالة، فتضيع
+  // عند فتح محادثةٍ أخرى أو إعادةِ تحميل الصفحة. فصارت **بيانات**: تُجمع في
+  // مصفوفة، وتُحفَظ في `msg.tools`، وتُعاد رسمُها عند فتح المحادثة.
+  //
+  // وفصلُ الحالة: حمولةُ المدخلات/المخرجات (قد تكون آلافَ الأحرف) لا تدخل
+  // تيّارَ المحادثة ولا `msg.content`؛ تسكن في `tools[i].request/response`
+  // ولا تُعرض إلّا في النافذة السفلية عند الطلب.
+
+  function wvEsc(x) {
+    return String(x == null ? '' : x)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // تلوينٌ نحويٌّ خفيفٌ لـJSON — بلا مكتبةٍ خارجية (النظامُ يعمل بلا شبكة)
+  function wvHi(txt) {
+    var t = String(txt == null ? '' : txt);
+    var looksJson = /^[\s]*[\[{]/.test(t);
+    if (!looksJson) return wvEsc(t);
+    var out = '', i = 0, n = t.length;
+    while (i < n) {
+      var c = t[i];
+      if (c === '"') {                       // نصٌّ (وقد يكون مفتاحاً)
+        var j = i + 1, esc = false;
+        while (j < n && (esc || t[j] !== '"')) { esc = !esc && t[j] === '\\'; j++; }
+        var lit = t.slice(i, Math.min(j + 1, n));
+        var k = j + 1; while (k < n && /\s/.test(t[k])) k++;
+        out += '<span class="' + (t[k] === ':' ? 'k' : 's') + '">' + wvEsc(lit) + '</span>';
+        i = j + 1; continue;
+      }
+      if (/[0-9]/.test(c) && !/[A-Za-z_]/.test(t[i - 1] || '')) {
+        var m = /^-?\d+(\.\d+)?([eE][+-]?\d+)?/.exec(t.slice(i));
+        if (m) { out += '<span class="n">' + m[0] + '</span>'; i += m[0].length; continue; }
+      }
+      var w = /^(true|false|null)\b/.exec(t.slice(i));
+      if (w) { out += '<span class="b">' + w[0] + '</span>'; i += w[0].length; continue; }
+      if ('{}[],:'.indexOf(c) >= 0) { out += '<span class="p">' + c + '</span>'; i++; continue; }
+      out += wvEsc(c); i++;
+    }
+    return out;
+  }
+
+  function wvPretty(v) {
+    if (v == null || v === '') return '';
+    if (typeof v === 'string') {
+      try { return JSON.stringify(JSON.parse(v), null, 2); } catch (e) { return v; }
+    }
+    try { return JSON.stringify(v, null, 2); } catch (e) { return String(v); }
+  }
+
+  var WV_TOOL_ICON = {
+    terminal: '>_', command: '>_', exec: '>_', shell: '>_',
+    file: '⌸', write: '⌸', edit: '⌸', read: '⌸',
+    search: '⌕', web: '⌕', fetch: '⌕',
+    engine: '◆', pipeline: '◆'
+  };
+  function wvToolIcon(t) {
+    var key = String((t && (t.kind || t.name)) || '').toLowerCase();
+    for (var k in WV_TOOL_ICON) if (key.indexOf(k) >= 0) return WV_TOOL_ICON[k];
+    return '•';
+  }
+
+  // مخزنُ الحمولات: مفصولٌ عن DOM كي لا تُثقَل الواجهةُ بنصوصٍ ضخمة
+  var WV_TOOLS = Object.create(null);
+  var WV_TOOL_SEQ = 0;
+
+  // يرسم أكورديونَ الأدوات داخل حاوية. `tools` مصفوفةُ كائنات:
+  //   { title, sub, status:'ok'|'running'|'err', kind, request, response }
+  function wvRenderTools(box, tools, opts) {
+    if (!box) return;
+    tools = tools || [];
+    box.innerHTML = '';
+    if (!tools.length) { box.hidden = true; return; }
+    box.hidden = false;
+    var isAr = (document.documentElement.lang || 'en') === 'ar';
+    var gid = 'wt' + (++WV_TOOL_SEQ);
+    WV_TOOLS[gid] = tools;
+    var open = (opts && opts.open) || tools.length === 1;
+    var running = tools.some(function (t) { return t.status === 'running'; });
+    var acc = document.createElement('div');
+    acc.className = 'tool-acc' + (open || running ? ' open' : '');
+    acc.dataset.gid = gid;
+    var head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'tool-acc-head';
+    head.innerHTML =
+      '<span class="taci">⚙</span>' +
+      '<span class="tacn">' + wvEsc(isAr ? 'استدعاءُ الأدوات' : 'Tool calls') + '</span>' +
+      '<span class="tacc">' + tools.length + '</span>' +
+      '<svg class="tacv" width="12" height="12" viewBox="0 0 14 14" fill="none">' +
+        '<path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" ' +
+        'stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    head.onclick = function () { acc.classList.toggle('open'); };
+    var body = document.createElement('div');
+    body.className = 'tool-acc-body';
+    tools.forEach(function (t, idx) {
+      var card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'tcard' + (t.status === 'running' ? ' running'
+                                : t.status === 'err' ? ' err' : '');
+      card.innerHTML =
+        '<span class="tcard-ico">' + wvEsc(wvToolIcon(t)) + '</span>' +
+        '<span class="tcard-main">' +
+          '<span class="tcard-title">' + wvEsc(t.title || t.name || '') + '</span>' +
+          (t.sub ? '<span class="tcard-sub">' + wvEsc(t.sub) + '</span>' : '') +
+        '</span>' +
+        '<span class="tcard-dot"></span>';
+      card.onclick = function () { wvOpenToolSheet(gid, idx); };
+      body.appendChild(card);
+    });
+    acc.appendChild(head); acc.appendChild(body);
+    box.appendChild(acc);
+  }
+
+  // ── النافذةُ السفليةُ المنبثقة: ملخّصٌ + مهامٌّ + عارضُ مدخلاتٍ ومخرجات ──
+  function wvToolSheetEl() {
+    var ov = document.getElementById('wvToolSheet');
+    if (ov) return ov;
+    ov = document.createElement('div');
+    ov.id = 'wvToolSheet';
+    ov.className = 'tsheet-ov';
+    ov.innerHTML =
+      '<div class="tsheet" role="dialog" aria-modal="true">' +
+        '<div class="tsheet-grip"></div>' +
+        '<div class="tsheet-head">' +
+          '<span class="tsheet-title"></span>' +
+          '<button class="tsheet-x" aria-label="close">✕</button>' +
+        '</div>' +
+        '<div class="tsheet-body"></div>' +
+      '</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click', function (e) {
+      if (e.target === ov) wvCloseToolSheet();
+    });
+    ov.querySelector('.tsheet-x').onclick = wvCloseToolSheet;
+    // مقبضُ السحب: جرَّه لأسفلَ يُغلق
+    var grip = ov.querySelector('.tsheet-grip'), y0 = null;
+    function down(e) { y0 = (e.touches ? e.touches[0] : e).clientY; }
+    function move(e) {
+      if (y0 == null) return;
+      var dy = (e.touches ? e.touches[0] : e).clientY - y0;
+      if (dy > 70) { y0 = null; wvCloseToolSheet(); }
+    }
+    function up() { y0 = null; }
+    grip.addEventListener('mousedown', down);
+    grip.addEventListener('touchstart', down, { passive: true });
+    document.addEventListener('mousemove', move);
+    document.addEventListener('touchmove', move, { passive: true });
+    document.addEventListener('mouseup', up);
+    document.addEventListener('touchend', up);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') wvCloseToolSheet();
+    });
+    return ov;
+  }
+
+  function wvCloseToolSheet() {
+    var ov = document.getElementById('wvToolSheet');
+    if (ov) ov.classList.remove('show');
+  }
+
+  function wvOpenToolSheet(gid, idx) {
+    var tools = WV_TOOLS[gid] || [];
+    var t = tools[idx] || {};
+    var isAr = (document.documentElement.lang || 'en') === 'ar';
+    var ov = wvToolSheetEl();
+    ov.querySelector('.tsheet-title').textContent =
+      t.title || t.name || (isAr ? 'تفاصيل' : 'Details');
+    var html = '';
+    if (t.sub) {
+      html += '<div class="tsheet-sec"><h4>' + wvEsc(isAr ? 'ملخّص' : 'Summary') +
+              '</h4><div style="font-size:.92em;color:var(--text-muted)">' +
+              wvEsc(t.sub) + '</div></div>';
+    }
+    html += '<div class="tsheet-sec"><h4>' +
+            wvEsc(isAr ? 'المهامُّ المنفَّذة' : 'Executed steps') + '</h4><ul class="tsheet-tasks">';
+    tools.forEach(function (x, i) {
+      html += '<li class="' + (x.status === 'err' ? 'err ' : '') +
+              (i === idx ? 'active' : '') + '">' +
+              '<span class="tt-dot"></span><span>' +
+              wvEsc(x.title || x.name || '') + '</span></li>';
+    });
+    html += '</ul></div>';
+    var req = wvPretty(t.request), res = wvPretty(t.response);
+    if (req) {
+      html += '<div class="tsheet-sec"><h4>' + wvEsc(isAr ? 'المدخلات' : 'Request') +
+              '</h4><div class="tterm">' + wvHi(req) + '</div></div>';
+    }
+    if (res) {
+      html += '<div class="tsheet-sec"><h4>' + wvEsc(isAr ? 'المخرجات' : 'Response') +
+              '</h4><div class="tterm">' + wvHi(res) + '</div></div>';
+    }
+    if (!req && !res) {
+      html += '<div style="font-size:.9em;color:var(--text-dim)">' +
+              wvEsc(isAr ? 'لا حمولةَ مسجَّلةٌ لهذه الخطوة.'
+                         : 'No payload recorded for this step.') + '</div>';
+    }
+    ov.querySelector('.tsheet-body').innerHTML = html;
+    ov.classList.add('show');
+  }
+
+  function makeAiMsg(text, tools) {
     const d = document.createElement('div'); d.className = 'msg ai';
     const lang = document.documentElement.lang || 'en';
-    d.innerHTML = '<div class="msg-wrapper"><div class="bubble"></div>' + wvActionsBar(lang) + '</div>';
+    d.innerHTML = '<div class="msg-wrapper"><div class="tool-steps" hidden></div>' +
+                  '<div class="bubble"></div>' + wvActionsBar(lang) + '</div>';
     d.querySelector('.bubble').innerHTML = renderMarkdown(text);
+    // بطاقاتُ الأدوات المحفوظةُ تُعاد كما كانت — هذا هو إصلاحُ الاختفاء.
+    if (tools && tools.length) wvRenderTools(d.querySelector('.tool-steps'), tools);
     d.dataset.raw = text == null ? '' : String(text);
     return d;
   }
@@ -3764,27 +4108,48 @@
       const stepsBox = aiMsg.querySelector('.tool-steps');
       bubble.textContent = '…';
 
-      // ── live tool-use timeline ──
-      function stepsMarkLastDone() {
-        const last = stepsBox.querySelector('.tstep.running');
-        if (last) { last.classList.remove('running'); last.classList.add('ok'); }
+      // ── استدعاءُ الأدوات: بياناتٌ تُحفَظ، لا سطورٌ تضيع ──
+      //
+      // كانت هذه الدوالُّ تكتب في DOM مباشرةً، فما كُتب لم يكن يُحفَظ مع
+      // الرسالة — فيختفي كلُّه عند فتح محادثةٍ أخرى أو إعادةِ التحميل.
+      // صارت تُراكم في `toolCalls`، وتُرسَم منها، وتُحفَظ معها.
+      const toolCalls = [];
+      function stepsPaint() {
+        wvRenderTools(stepsBox, toolCalls);
+        try { messages.scrollTop = messages.scrollHeight; } catch (e) {}
+      }
+      function stepsMarkLastDone(st) {
+        for (let i = toolCalls.length - 1; i >= 0; i--) {
+          if (toolCalls[i].status === 'running') {
+            toolCalls[i].status = st || 'ok';
+            break;
+          }
+        }
       }
       function stepsAdd(label) {
-        stepsBox.hidden = false;
         stepsMarkLastDone();
-        const row = document.createElement('div');
-        row.className = 'tstep running';
-        row.innerHTML = '<span class="tstep-ico"></span><span class="tstep-label"></span><span class="tstep-detail"></span>';
-        row.querySelector('.tstep-label').textContent = label || '';
-        stepsBox.appendChild(row);
-        messages.scrollTop = messages.scrollHeight;
-        return row;
+        toolCalls.push({ title: label || '', sub: '', status: 'running',
+                         kind: label || '', request: '', response: '' });
+        stepsPaint();
       }
       function stepsDetail(txt) {
-        const last = stepsBox.querySelector('.tstep:last-child .tstep-detail');
-        if (last && txt) last.textContent = '— ' + txt;
+        if (!txt || !toolCalls.length) return;
+        toolCalls[toolCalls.length - 1].sub = String(txt);
+        stepsPaint();
       }
-      function stepsFinishAll() { stepsMarkLastDone(); }
+      // حمولةٌ حقيقيّةٌ من الخادم: مدخلاتٌ ومخرجاتُ خطوةٍ بعينها
+      function stepsTool(t) {
+        if (!t) return;
+        stepsMarkLastDone();
+        toolCalls.push({
+          title: t.title || t.name || '', sub: t.sub || '',
+          kind: t.kind || t.name || '', status: t.status || 'ok',
+          request: t.request == null ? '' : t.request,
+          response: t.response == null ? '' : t.response
+        });
+        stepsPaint();
+      }
+      function stepsFinishAll() { stepsMarkLastDone(); stepsPaint(); }
 
       // Update timestamp every minute
       const timeEl = aiMsg.querySelector('.msg-time');
@@ -3829,6 +4194,7 @@
       function handleEvent(ev) {
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
+        else if (ev.t === 'tool') { stepsTool(ev.tool); }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
         // LIVE STREAM: show the reply as it is written (like OpenClaw).
         else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
@@ -3839,7 +4205,14 @@
       }
       try {
         const effortEl = document.getElementById('effortSelect');
-        const history = currentMessages.slice(0, -1).slice(-200);
+        // فصلُ الحالة: حمولةُ الأدوات لا تُرسَل إلى النموذج. هي للعرض
+        // في النافذة السفلية، وقد تبلغ آلافَ الأحرف — فإرسالُها يزدحم
+        // بها السياقُ ويُدفع ثمنُها في كلّ رسالة بلا فائدة.
+        const history = currentMessages.slice(0, -1).slice(-200).map(function (m) {
+          if (!m || !m.tools) return m;
+          var c = {}; for (var k in m) if (k !== 'tools') c[k] = m[k];
+          return c;
+        });
         const files = filesToSend.length ? await readAttachedFiles(filesToSend) : [];
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
@@ -3872,6 +4245,16 @@
       aiMsg.dataset.raw = finalText;  // Copy button uses the raw markdown
       const amsg = { role: 'assistant', content: finalText };
       if (assistantFile) amsg.file = assistantFile;  // persist the artifact
+      // وبطاقاتُ الأدوات تُحفَظ مع الرسالة — وإلّا ضاعت عند تبديل المحادثة.
+      // والحمولةُ الضخمةُ تُقصَّ كي لا يتضخّم ملفُّ المحادثة بلا حدّ.
+      if (toolCalls.length) {
+        amsg.tools = toolCalls.map(function (t) {
+          return { title: t.title, sub: t.sub, kind: t.kind,
+                   status: t.status === 'running' ? 'ok' : t.status,
+                   request: String(t.request || '').slice(0, 20000),
+                   response: String(t.response || '').slice(0, 20000) };
+        });
+      }
       currentMessages.push(amsg);
       saveCurrentChat();
       messages.scrollTop = messages.scrollHeight;
