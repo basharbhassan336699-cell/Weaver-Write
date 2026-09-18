@@ -2102,7 +2102,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # UNDERSTANDING FIRST for the whole web layer: classify intent once
             # (guarded, cheap-gated), then reuse it for both the export decision
             # and the task-vs-chat decision below.
-            _wiv = _web_intent(msg)
+            # ⑤ ونداءُ التصنيف المسبق صار كسولاً: كان يُنادى في كلّ رسالة،
+            #    وهو نداءُ نموذجٍ كاملٌ يسبق النموذج — وأوبن كلاو لا يملك
+            #    شيئاً من هذا. و`_model_export_previous` يحسبه بنفسه عند
+            #    الحاجة (ولا يحتاجه إلّا إن سُمّيت صيغةُ ملفّ)، والمسارُ
+            #    القديمُ يحسبه حين لا محرّك. فلا يُدفع ثمنُه بلا سبب.
+            _wiv = None
             _epf = _export_previous_format(msg)
             if not _epf:
                 _epf = _model_export_previous(msg, _wiv)
@@ -2143,7 +2148,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     from pipeline.orchestrator import is_document_task
-                    _is_task = _apply_intent_task(is_document_task(msg), _wiv)
+                    _is_task = _apply_intent_task(is_document_task(msg),
+                                                  _wiv if _wiv is not None
+                                                  else _web_intent(msg))
                 except Exception:
                     _is_task = True
 
@@ -2163,25 +2170,55 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # questions or a pasted link, gather live context first so the model
             # answers from current sources instead of refusing.
             if not _is_task:
+                # ── ما قبلَ النموذج: محذوفٌ حين يكون المحرّكُ حاضراً ──────────
+                #
+                # في أوبن كلاو لا شيءَ يسبق النموذج. سطرٌ واحدٌ بلا تفرّع:
+                #
+                #     // agent-core-B_87jlHI.mjs:258
+                #     const llmContext = { systemPrompt, messages,
+                #                          tools: context.tools };
+                #
+                # الرسالةُ كما كتبها المستخدم، والأدواتُ معها، والنموذجُ يبحث
+                # إن أراد — بأداته، داخل الحلقة.
+                #
+                # وكان هنا أربعُ محطّاتٍ تسبقه:
+                #   ① quick_live_context_ex — بحثٌ يُشغَّل قبل النموذج، تقرّره
+                #      قائمةُ ٢١ كلمةً في `_is_recency_query` («أخبار»، «اليوم»،
+                #      «news»…) لا النموذج. فإن طابقت حُقنت ١٢ نتيجةً مرقّمة
+                #      ومعها أمرٌ مفروض: «لا تذكر خبراً إلا بمصدرٍ مرقّم». وإن
+                #      لم تطابق فلا بحثَ أصلاً — ولو كان الطلبُ «جِد لي ٩
+                #      مراجع حقيقية»، فيُجيب من ذاكرته ويدّعي أنّها محقَّقة.
+                #   ② _recall_memory — ذاكرةٌ تُحقن في الرسالة.
+                #   ③ عنوانُ خطوةٍ يُقرَّر سلفاً («بحث حيّ» / «التفكير»).
+                #   ④ _sources_md — قائمةُ مصادرَ يُلحقها الخادمُ بالردّ.
+                #
+                # فحُذفت الأربعُ حين يكون المحرّكُ حاضراً. وتبقى كما هي حرفاً
+                # حين لا محرّك — فلا ينكسر النظامُ على جهازٍ بلا node.
+                _eng_on = False
+                try:
+                    _eng_on = _engine_ready()
+                except Exception:
+                    _eng_on = False
                 ctx = ""
                 srcs = []
-                try:
-                    from pipeline.orchestrator import quick_live_context_ex
-                    ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
-                except Exception:
-                    ctx, srcs = "", []
                 mem_ctx = ""
-                try:
-                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
-                except Exception:
-                    mem_ctx = ""
-                if _wants_continue(msg):
+                if not _eng_on:
                     try:
-                        _full = _recall_full_conversation(msg, exclude_id=body.get("chatId"))
+                        from pipeline.orchestrator import quick_live_context_ex
+                        ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
                     except Exception:
-                        _full = ""
-                    if _full:
-                        mem_ctx = _full
+                        ctx, srcs = "", []
+                    try:
+                        mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
+                    except Exception:
+                        mem_ctx = ""
+                    if _wants_continue(msg):
+                        try:
+                            _full = _recall_full_conversation(msg, exclude_id=body.get("chatId"))
+                        except Exception:
+                            _full = ""
+                        if _full:
+                            mem_ctx = _full
                 sse({"t": "step", "label": (
                     ("قراءة الملفات" if isar else "Reading files") if attach_text
                     else ("بحث حيّ" if isar else "Live search") if ctx
@@ -2267,7 +2304,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return
             # "أخرج/حوّل/ضيف ذلك إلى وورد/pdf" → export the previous reply directly.
             # Keyword first; if it misses but a format is named, the MODEL decides.
-            _wiv = _web_intent(msg)
+            # ⑤ ونداءُ التصنيف المسبق صار كسولاً: كان يُنادى في كلّ رسالة،
+            #    وهو نداءُ نموذجٍ كاملٌ يسبق النموذج — وأوبن كلاو لا يملك
+            #    شيئاً من هذا. و`_model_export_previous` يحسبه بنفسه عند
+            #    الحاجة (ولا يحتاجه إلّا إن سُمّيت صيغةُ ملفّ)، والمسارُ
+            #    القديمُ يحسبه حين لا محرّك. فلا يُدفع ثمنُه بلا سبب.
+            _wiv = None
             _epf = _export_previous_format(msg)
             if not _epf:
                 _epf = _model_export_previous(msg, _wiv)
@@ -2295,7 +2337,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:
                 try:
                     from pipeline.orchestrator import is_document_task
-                    _is_task = _apply_intent_task(is_document_task(msg), _wiv)
+                    _is_task = _apply_intent_task(is_document_task(msg),
+                                                  _wiv if _wiv is not None
+                                                  else _web_intent(msg))
                 except Exception:
                     _is_task = True
             attach_text, attach_names = "", []
@@ -2307,24 +2351,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _is_task = False
             if not _is_task:
                 isar = any("؀" <= c <= "ۿ" for c in msg)
+                # ما قبلَ النموذج محذوفٌ هنا أيضاً — انظر التعليق في مسار SSE.
+                _eng_on = False
+                try:
+                    _eng_on = _engine_ready()
+                except Exception:
+                    _eng_on = False
                 ctx, srcs = "", []
-                try:
-                    from pipeline.orchestrator import quick_live_context_ex
-                    ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
-                except Exception:
-                    ctx, srcs = "", []
                 mem_ctx = ""
-                try:
-                    mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
-                except Exception:
-                    mem_ctx = ""
-                if _wants_continue(msg):
+                if not _eng_on:
                     try:
-                        _full = _recall_full_conversation(msg, exclude_id=body.get("chatId"))
+                        from pipeline.orchestrator import quick_live_context_ex
+                        ctx, srcs = quick_live_context_ex(msg, "ar" if isar else "en")
                     except Exception:
-                        _full = ""
-                    if _full:
-                        mem_ctx = _full
+                        ctx, srcs = "", []
+                    try:
+                        mem_ctx = _recall_memory(msg, exclude_id=body.get("chatId"), semantic=True)
+                    except Exception:
+                        mem_ctx = ""
+                    if _wants_continue(msg):
+                        try:
+                            _full = _recall_full_conversation(msg, exclude_id=body.get("chatId"))
+                        except Exception:
+                            _full = ""
+                        if _full:
+                            mem_ctx = _full
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
                           memory=mem_ctx, attachments=attach_text)
