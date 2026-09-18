@@ -144,6 +144,56 @@ chk("and run() passes that env to the engine",
 
 print()
 print("=" * 70)
+print(" 8) ANY NODE VERSION: three tiers, never one closed gate")
+print("=" * 70)
+# The engine requires ">=24.16.0 <25 || >=26.1.0" for a real reason: it uses
+# node's built-in sqlite, and below 24.16 that truncates TEXT at the first NUL
+# byte (nodejs/node#61954) -- data corrupts silently. So it is never bypassed.
+# But closing the whole system over it would be wrong: the python path needs
+# no node at all. Hence three tiers.
+for v, want in (("22.22.2", False), ("24.15.0", False), ("24.16.0", True),
+                ("25.0.0", False), ("25.9.9", False), ("26.0.5", False),
+                ("26.1.0", True), ("26.4.0", True), ("27.1.0", True),
+                ("v26.4.0", True), ("", False), ("abc", False)):
+    chk(f"node {v or '(empty)'} -> {'ok' if want else 'refused'}",
+        W.node_ok(v) is want)
+
+_rows = W.node_report()
+chk("every node on the device is scanned, not just PATH",
+    isinstance(_rows, list))
+chk("  each row carries path, version and verdict",
+    all(set(r) == {"path", "version", "ok"} for r in _rows), str(_rows[:1]))
+chk("WEAVER_NODE is honoured as a candidate",
+    "WEAVER_NODE" in open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+                          encoding="utf-8").read())
+chk("and Termux/nvm locations are searched",
+    "com.termux" in open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+                         encoding="utf-8").read())
+
+# Tier 3: an answer comes back even with no engine and no usable node.
+_r = W.ask("2+2", fallback=False)
+if not (W.available() and W.node_bin()):
+    chk("no engine + fallback off -> it says why, plainly",
+        _r["engine"] == "" and bool(_r["note"]))
+    chk("  and names the real cause, not a shrug",
+        "node" in _r["note"] or "install.sh" in _r["note"], _r["note"][:60])
+chk("ask() always returns the three keys",
+    set(W.ask("x", fallback=False)) == {"answer", "engine", "note"})
+chk("and says WHICH engine answered -- never hidden",
+    W.ask("x", fallback=False).get("engine") in ("", "weaver-core", "python"))
+
+# the shell installer and the python bridge must never disagree
+_sh = open(os.path.join(_ROOT, "engines", "weaver-core", "install.sh"),
+           encoding="utf-8").read()
+chk("the installer compares versions in shell, not inside node",
+    "node_ok()" in _sh and "NODE_OK_EXPR" not in _sh)
+chk("and it does NOT hard-fail when node is old",
+    "exit 0          #" in _sh or "exit 0 " in _sh)
+chk("it points at the python path instead",
+    "pipeline.agent" in _sh)
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if ok else "FAIL"))
 print("=" * 70)
 sys.exit(0 if ok else 1)

@@ -17,29 +17,61 @@ echo "── محرّك Weaver Write ${VERSION} ──"
 
 command -v node >/dev/null 2>&1 || { echo "✗ node غير مثبّت.  pkg install nodejs"; exit 1; }
 command -v npm  >/dev/null 2>&1 || { echo "✗ npm غير مثبّت.   pkg install nodejs"; exit 1; }
-# بوّابةُ الإصدار — وهي حقيقيّةٌ لا تحذير. مقيسةٌ بالتجربة: على node 22
-# يعمل `--version` وحده (مسارٌ سريعٌ قبل الاستيراد)، ثمّ يرفض `preinstall`
-# التركيبَ برمز خروج 1، وترفض كلُّ الأوامر الحقيقية بعده:
-#   "node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954);
-#    use 24.16+/26.1+"
-# أي أنّ المحرّك يستعمل قاعدةَ بيانات node المدمجة، و22 يقصُّ النصوص عند
-# أوّل بايتٍ صفريّ — فالبيانات تفسد صامتةً. ولذلك البوّابةُ مغلقة.
-NODE_V="$(node -p 'process.versions.node')"
-# شرطُ المحرّك حرفياً من package.json:  ">=24.16.0 <25 || >=26.1.0"
-# فالفجوةُ مقصودة: ٢٥ مرفوضٌ كلُّه، و٢٦ من ١.٠ فأحدث.
-NODE_OK="$(node -p 'const [a,b]=process.versions.node.split(".").map(Number); ((a===24&&b>=16)||(a===26&&b>=1)||a>26)?1:0' 2>/dev/null || echo 0)"
-echo "  node v${NODE_V}"
-if [ "$NODE_OK" != "1" ]; then
+# ── أيُّ إصدارِ node؟ لا بوّابةٌ تُغلق كلَّ شيء ──────────────────────────
+#
+# المحرّكُ يشترط ">=24.16.0 <25 || >=26.1.0"، وهو شرطٌ حقيقيٌّ لا شكليّ:
+# يستعمل قاعدةَ بيانات node المدمجة، ودون 24.16 يقصُّ النصَّ عند أوّل بايتٍ
+# صفريّ (nodejs/node#61954) فتفسد البيانات صامتةً. فلا يُتجاوَز بصمت.
+#
+# لكنّ إغلاقَ النظام كلِّه بسببه خطأ: المسارُ البايثونيُّ يعمل بلا node
+# أصلاً. فالسكربتُ يبحث في كلّ ما على الجهاز — لا المسارِ الافتراضيِّ وحده،
+# فقد يكون ثمّة إصدارٌ صالحٌ تحت nvm أو تيرمكس — فإن وجده ركّب، وإلّا قال
+# الناقصَ بدقّةٍ وخرج بنجاحٍ لا بفشل: النظامُ يعمل، والمحرّكُ إضافةٌ مؤجَّلة.
+# المقارنةُ في الصَدَفة لا داخل node: أمتنُ (لا تعتمد على تنفيذ تعبيرٍ في
+# المُرشَّح) وتطابق حرفياً ما يفعله `node_ok` في pipeline/weaver_core.py،
+# فلا يقول السكربتُ شيئاً ويقول الجسرُ غيرَه.
+node_ok() {                     # $1 = "26.4.0"
+  a="${1%%.*}"; r="${1#*.}"; b="${r%%.*}"
+  case "$a" in ''|*[!0-9]*) return 1;; esac
+  case "$b" in ''|*[!0-9]*) b=0;; esac
+  [ "$a" -eq 24 ] && [ "$b" -ge 16 ] && return 0
+  [ "$a" -eq 26 ] && [ "$b" -ge 1 ]  && return 0
+  [ "$a" -gt 26 ] && return 0
+  return 1
+}
+PICKED=""
+echo "  البحثُ عن node صالح…"
+for C in "$WEAVER_NODE" "$(command -v node 2>/dev/null)" \
+         "$PREFIX/bin/node" "/data/data/com.termux/files/usr/bin/node" \
+         "/usr/local/bin/node" "/usr/bin/node" \
+         "$HOME"/.nvm/versions/node/*/bin/node /opt/node*/bin/node; do
+  [ -x "$C" ] || continue
+  V="$("$C" -p 'process.versions.node' 2>/dev/null)" || continue
+  [ -n "$V" ] || continue
+  if node_ok "$V"; then
+    echo "    ✓ v$V   $C"
+    [ -z "$PICKED" ] && PICKED="$C"
+  else
+    echo "    · v$V   $C   (دون الشرط)"
+  fi
+done
+
+if [ -z "$PICKED" ]; then
   echo
-  echo "  ✗ المحرّك يلزمه node 24.16 فأحدث (أو 26.1+)."
-  echo "    والسبب ليس شكلياً: هو يستعمل قاعدةَ بيانات node المدمجة،"
-  echo "    وnode 22 يقصُّ النصوصَ عند أوّل بايتٍ صفريّ فتفسد البيانات صامتةً."
+  echo "  لا إصدارَ يفي بشرط المحرّك (>=24.16 <25 || >=26.1)."
+  echo "  والشرطُ حقيقيّ: دون 24.16 يقصُّ node النصوصَ في قاعدة بياناته"
+  echo "  المدمجة فتفسد البيانات صامتةً — فلا نتجاوزه."
   echo
-  echo "    على تيرمكس:   pkg install nodejs        # لا nodejs-lts (وهو 22)"
-  echo "    ثمّ تحقّق:     node --version"
+  echo "    الترقية:  pkg install nodejs          # لا nodejs-lts (وهو 22)"
+  echo "    أو:       export WEAVER_NODE=/مسار/node/الصالح"
   echo
-  exit 1
+  echo "  ✔ ونظامُك يعمل الآن بلا محرّك — المسارُ البايثونيّ:"
+  echo "      python3 -m pipeline.agent \"أيّ سؤال\""
+  echo "      python3 -m pipeline.weaver_core --doctor"
+  exit 0          # ليس فشلاً: النظامُ يعمل، والمحرّكُ مؤجَّل
 fi
+NODE="$PICKED"
+echo "  المختار: $NODE  (v$("$NODE" -p 'process.versions.node'))"
 
 if [ -d "$DEST" ]; then
   echo "  ✓ مركَّبٌ مسبقاً: $DEST"
@@ -73,12 +105,12 @@ mkdir -p "$(dirname "$DEST")" && mv "$SRC" "$DEST"
 #     at #loadPeerSet (@npmcli/arborist/lib/arborist/build-ideal-tree.js:1289)
 # فيتوقّف التركيبُ من أوّله. وهذا العَلَم يتخطّى ذلك المسار فيكتمل.
 echo "  ⚙ الاعتماديات (٣٢٠ حزمة، قد تطول)…"
-( cd "$DEST" && npm install --omit=dev --legacy-peer-deps --no-audit --no-fund ) \
+( cd "$DEST" && PATH="$(dirname "$NODE"):$PATH" npm install --omit=dev --legacy-peer-deps --no-audit --no-fund ) \
   || { echo "  ⚠ لم تكتمل الاعتماديات — أعِد المحاولة، أو أرسل الخطأ"; }
 
 echo
 echo "── تمّ ──"
-"$DEST/openclaw.mjs" --version 2>/dev/null || node "$DEST/openclaw.mjs" --version || true
+"$NODE" "$DEST/openclaw.mjs" --version || true
 echo
 echo "  التشغيل:  python3 -m pipeline.weaver_core --version"
 echo "            node $DEST/openclaw.mjs --help"

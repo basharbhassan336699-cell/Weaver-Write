@@ -92,17 +92,111 @@ def available():
         return False
 
 
-def node_bin():
-    """مسارُ node، أو None."""
+# ── أيُّ إصدارِ node؟ ثلاثُ درجاتٍ لا بوّابةٌ واحدة ────────────────────
+#
+# المحرّكُ يشترط ">=24.16.0 <25 || >=26.1.0"، وهو شرطٌ حقيقيٌّ لا شكليّ:
+# يستعمل قاعدةَ بيانات node المدمجة، و22 يقصُّ النصَّ عند أوّل بايتٍ صفريّ
+# (nodejs/node#61954) فتفسد البيانات **صامتةً**. فتجاوزُه بصمتٍ ليس حلّاً،
+# وإغلاقُ النظام كلِّه بسببه ليس حلّاً أيضاً.
+#
+# فالنظامُ يتصرّف على ثلاث درجات:
+#   ١) node مناسبٌ على المسار          ⟶ المحرّكُ يعمل كاملاً
+#   ٢) node قديمٌ لكن ثمّة مناسبٌ آخرُ  ⟶ يُستعمل المناسبُ ولو لم يكن الافتراضيّ
+#   ٣) لا مناسبَ إطلاقاً                ⟶ المسارُ البايثونيُّ يعمل كما هو،
+#                                          ويُقال ما الناقصُ ولماذا بدقّة
+#
+# وتنزيلُ node تلقائياً غيرُ متاحٍ على أندرويد: سكربتُ المحرّك نفسُه
+# (node-runtime-update.mjs:9) يشترط glibc، وتيرمكس على bionic. فلا نَعِد به.
+NODE_RANGE = ">=24.16.0 <25 || >=26.1.0"
+
+
+def node_ok(ver):
+    """أيفي هذا الإصدارُ بشرط المحرّك؟ ver مثل "26.4.0". لا يرفع استثناءً."""
+    try:
+        parts = str(ver or "").strip().lstrip("v").split(".")
+        a, b = int(parts[0]), int(parts[1] if len(parts) > 1 else 0)
+        return (a == 24 and b >= 16) or (a == 26 and b >= 1) or a > 26
+    except Exception:
+        return False
+
+
+def _node_version(path_):
+    try:
+        r = subprocess.run([path_, "-p", "process.versions.node"],
+                           capture_output=True, text=True, timeout=20)
+        return (r.stdout or "").strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def node_candidates():
+    """كلُّ ما قد يكون node على هذا الجهاز — لا المسارُ الافتراضيُّ وحده.
+
+    قد يكون على الجهاز أكثرُ من إصدار: واحدٌ على PATH وآخرُ تحت nvm أو
+    تيرمكس. فلا يُحكَم بالأوّل وحده."""
     from shutil import which
-    return which("node")
+    import glob as _g
+    out, seen = [], set()
+
+    def add(p):
+        if p and p not in seen and os.path.isfile(p) and os.access(p, os.X_OK):
+            seen.add(p)
+            out.append(p)
+
+    add((os.environ.get("WEAVER_NODE") or "").strip() or None)
+    add(which("node"))
+    pre = os.environ.get("PREFIX") or ""
+    if pre:
+        add(os.path.join(pre, "bin", "node"))
+    for p in ("/data/data/com.termux/files/usr/bin/node",
+              "/usr/local/bin/node", "/usr/bin/node"):
+        add(p)
+    for pat in (os.path.expanduser("~/.nvm/versions/node/*/bin/node"),
+                "/opt/node*/bin/node",
+                os.path.expanduser("~/.local/share/fnm/node-versions/*/installation/bin/node")):
+        for p in sorted(_g.glob(pat), reverse=True):
+            add(p)
+    return out
+
+
+def node_bin():
+    """مسارُ node **صالحٍ للمحرّك**، أو None. يبحث في كلّ ما على الجهاز."""
+    cached = getattr(node_bin, "_hit", None)
+    if cached is not None:
+        return cached or None
+    hit = ""
+    for p in node_candidates():
+        if node_ok(_node_version(p)):
+            hit = p
+            break
+    node_bin._hit = hit
+    return hit or None
+
+
+def node_report():
+    """تقريرٌ صريحٌ عن كلّ node على الجهاز: أيُّها يصلح ولماذا."""
+    rows = []
+    for p in node_candidates():
+        v = _node_version(p)
+        rows.append({"path": p, "version": v, "ok": node_ok(v)})
+    return rows
 
 
 def why_unavailable():
-    """سببُ الغياب بكلامٍ صريح، لا «تعذّر»."""
+    """سببُ الغياب بكلامٍ صريحٍ ومُقاس، لا «تعذّر»."""
     if not node_bin():
-        return ("node غير مثبّت على الجهاز — المحرّك يعمل عليه.  "
-                "التثبيت: pkg install nodejs")
+        rows = node_report()
+        if not rows:
+            return ("لا node على الجهاز — والمحرّك يعمل عليه.  "
+                    "التثبيت: pkg install nodejs  ·  "
+                    "ويبقى المسارُ البايثونيُّ (pipeline.agent) يعمل بدونه.")
+        have = "، ".join(f"{r['version'] or '؟'}" for r in rows[:3])
+        return (f"node الموجودُ ({have}) لا يفي بشرط المحرّك ({NODE_RANGE}).  "
+                "والشرطُ حقيقيّ: node دون 24.16 يقصُّ النصوصَ في قاعدة "
+                "بياناته المدمجة فتفسد البيانات صامتةً.  "
+                "الترقية: pkg install nodejs (لا nodejs-lts)  ·  "
+                "أو ضع مساراً صالحاً في WEAVER_NODE  ·  "
+                "وحتى ذلك يعمل المسارُ البايثونيُّ (pipeline.agent) كما هو.")
     if not available():
         return ("المحرّك غير مركَّب بعد.  التركيب:  bash "
                 + os.path.relpath(INSTALLER, _ROOT))
@@ -134,28 +228,62 @@ def version():
     return out.strip().split("\n")[0] if code == 0 else ""
 
 
-def ask(text, timeout=300, cwd=None):
-    """اسأل المحرّك سؤالاً واقرأ جوابه.
+def ask(text, timeout=300, cwd=None, fallback=True):
+    """اسأل — بالمحرّك إن أمكن، وإلّا بالمسار البايثونيّ.
 
-    يمرُّ عبر `run` — وهو مدخلُ الحزمة للتشغيل غيرِ التفاعليّ. وإن تغيّر
-    اسمُ الأمر في إصدارٍ لاحق، السطرُ الذي يُصحَّح واحدٌ لا مسارٌ كامل."""
-    code, out, err = run(["run", str(text or "")], timeout=timeout, cwd=cwd)
-    if code == 0 and out.strip():
-        return out.strip()
-    if err.strip():
-        return "error: " + err.strip()[:600]
-    return out.strip()
+    الدرجةُ الثالثة: **أيُّ سؤالٍ يُجاب على أيّ إصدارِ node، ولو لم يكن ثمّة
+    node أصلاً.** فالمحرّكُ إضافةٌ لا شرط. وحين يتولّى البديلُ يُقال ذلك في
+    `engine` لا يُخفى، كي لا تظنّ أنّك تُشغّل ما لا تُشغّله."""
+    if available() and node_bin():
+        code, out, err = run(["run", str(text or "")], timeout=timeout, cwd=cwd)
+        if code == 0 and out.strip():
+            return {"answer": out.strip(), "engine": "weaver-core", "note": ""}
+        if not fallback:
+            return {"answer": "", "engine": "weaver-core",
+                    "note": (err or out).strip()[:400]}
+        _note = ("المحرّك لم يُجب (" + (err or "بلا سبب").strip()[:120]
+                 + ")، فتولّى المسارُ البايثونيّ")
+    else:
+        _note = why_unavailable()
+        if not fallback:
+            return {"answer": "", "engine": "", "note": _note}
+    try:
+        from pipeline.agent import ask as _pyask
+        r = _pyask(str(text or ""))
+        return {"answer": r.get("answer", ""), "engine": "python",
+                "note": _note}
+    except Exception as e:
+        return {"answer": "", "engine": "",
+                "note": f"{_note} | {type(e).__name__}: {str(e)[:120]}"}
 
 
 def _cli():
     argv = sys.argv[1:]
-    if not available():
-        print(why_unavailable(), file=sys.stderr)
-        sys.exit(2)
+    # التشخيصُ يعمل دائماً — وهو أنفعُ ما يكون حين لا يعمل شيءٌ آخر.
+    if argv == ["--nodes"]:
+        rows = node_report()
+        if not rows:
+            print("  لا node على الجهاز")
+        for r in rows:
+            print(f"  {'صالح ' if r['ok'] else 'قديم '} v{r['version'] or '؟':<10} {r['path']}")
+        print(f"\n  شرطُ المحرّك: {NODE_RANGE}")
+        sel = node_bin()
+        print("  المختار   : " + (sel if sel else "لا شيء — "
+                                  + why_unavailable().split(".")[0]))
+        return
     if argv == ["--where"]:
         for k, v in state_paths().items():
             print(f"  {k:6s} {v}")
         return
+    if argv == ["--doctor"]:
+        print(f"  المحرّك مركَّب : {'نعم' if available() else 'لا'}")
+        print(f"  node صالح     : {node_bin() or 'لا'}")
+        _w = why_unavailable()
+        print("  " + (_w if _w else "جاهز ✅"))
+        return
+    if not available() or not node_bin():
+        print(why_unavailable(), file=sys.stderr)
+        sys.exit(2)
     if not argv or argv == ["--version"]:
         print(version() or "(بلا جواب)")
         return
@@ -165,7 +293,10 @@ def _cli():
         sys.stdout.write(out)
         sys.stderr.write(err)
         sys.exit(code)
-    print(ask(" ".join(argv)))
+    r = ask(" ".join(argv))
+    if r.get("note"):
+        print("  ⓘ " + r["note"][:200], file=sys.stderr)
+    print(r.get("answer") or "(بلا جواب)")
 
 
 if __name__ == "__main__":
