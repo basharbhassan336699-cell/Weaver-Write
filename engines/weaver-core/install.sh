@@ -40,12 +40,19 @@ node_ok() {                     # $1 = "26.4.0"
   return 1
 }
 PICKED=""
+SEEN=""
 echo "  البحثُ عن node صالح…"
 for C in "$WEAVER_NODE" "$(command -v node 2>/dev/null)" \
          "$PREFIX/bin/node" "/data/data/com.termux/files/usr/bin/node" \
          "/usr/local/bin/node" "/usr/bin/node" \
          "$HOME"/.nvm/versions/node/*/bin/node /opt/node*/bin/node; do
   [ -x "$C" ] || continue
+  # المُرشَّحون يتكرّرون: `command -v node` و`$PREFIX/bin/node` و مسارُ تيرمكس
+  # الصريح كلُّها ملفٌّ واحد. فيُحلّ المسارُ الحقيقيُّ ويُطرح المكرَّر — وإلّا
+  # طُبع الإصدارُ نفسُه ثلاثَ مرّاتٍ فبدا كأنّ على الجهاز ثلاثةَ أنودات.
+  R="$(readlink -f "$C" 2>/dev/null || echo "$C")"
+  case " $SEEN " in *" $R "*) continue;; esac
+  SEEN="$SEEN $R"
   V="$("$C" -p 'process.versions.node' 2>/dev/null)" || continue
   [ -n "$V" ] || continue
   if node_ok "$V"; then
@@ -82,18 +89,20 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "  ↓ الجلب…"
+# `npm pack` لا يطبع تقدّماً، فتبدو الشاشةُ ساكنةً دقائقَ على بيانات الجوّال
+# والمستخدمُ يظنُّ أنّه تعلّق. فيُقال الحجمُ والمتوقَّع قبل أن يبدأ.
+echo "  ↓ الجلب… (~67 ميغابايت — قد يطول، ولا يَظهر تقدّم. لا تُغلق)"
 ( cd "$TMP" && npm pack "openclaw@${VERSION}" >/dev/null 2>&1 ) \
   || { echo "✗ تعذّر الجلب من npm"; exit 1; }
 TGZ="$(ls "$TMP"/*.tgz 2>/dev/null | head -1)"
 [ -n "$TGZ" ] || { echo "✗ لم يُعَد أرشيف"; exit 1; }
 
-echo "  ⇲ الفكّ…"
+echo "  ⇲ الفكّ… (9292 ملفاً)"
 mkdir -p "$TMP/x" && tar xzf "$TGZ" -C "$TMP/x"
 SRC="$TMP/x/package"
 [ -d "$SRC" ] || { echo "✗ بنيةُ أرشيفٍ غيرُ متوقّعة"; exit 1; }
 
-echo "  ✎ إعادةُ التسمية…"
+echo "  ✎ إعادةُ التسمية… (~15600 موضعاً)"
 python3 "$HERE/rebrand.py" "$SRC" || { echo "✗ تعذّرت إعادةُ التسمية"; exit 1; }
 
 echo "  ⇒ النقل…"
