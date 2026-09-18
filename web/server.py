@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import threading
 import http.server
 import socketserver
 import re
@@ -1394,19 +1395,49 @@ def _save_connectors_state(st):
 # more output budget, lower temperature (more precise/deterministic), and a
 # system instruction that asks for deeper, verified reasoning. Uses only
 # universally-supported OpenAI-compatible fields, so no provider breaks.
+# سقفُ الإخراج: كان ٢٠٤٨ في «medium»، فكان الردُّ الطويل يُقطع في منتصف
+# جملةٍ ولا يُكمل — وهو بالضبط ما رآه المستخدم في هيكلٍ بحثيٍّ طويل.
+#
+# وأوبن كلاو لا يضع سقفاً من عنده، بل سقفَ النموذج نفسِه:
+#     config-provider-contract-BdOif1pq.mjs:233   maxTokens: model.maxTokens ?? 8192
+# فالافتراضيُّ عنده **٨١٩٢**، لا ٢٠٤٨.
 EFFORT = {
-    "low":    {"max_tokens": 1024, "temperature": 0.9,
+    "low":    {"max_tokens": 2048, "temperature": 0.9,
                "system": "Answer concisely and directly."},
-    "medium": {"max_tokens": 2048, "temperature": 0.7,
+    "medium": {"max_tokens": 8192, "temperature": 0.7,
                "system": "Answer clearly and completely."},
-    "high":   {"max_tokens": 4096, "temperature": 0.4,
+    "high":   {"max_tokens": 16384, "temperature": 0.4,
                "system": "Think step by step. Be thorough and precise, and "
                          "double-check your answer before replying."},
-    "max":    {"max_tokens": 8192, "temperature": 0.2,
+    "max":    {"max_tokens": 32768, "temperature": 0.2,
                "system": "Reason rigorously and step by step. Be maximally "
                          "thorough, precise and exhaustive; verify each step "
                          "and consider edge cases before finalizing."},
 }
+
+
+# سببُ آخرِ عجزٍ للمحرّك — لكلِّ خيطٍ على حدة، فالطلباتُ متزامنة.
+_ENGINE_FAIL = threading.local()
+
+
+def _engine_fail(note=None):
+    """سجّل سببَ العجز (أو اقرأه وامسحه إن نوديت بلا وسيط)."""
+    if note is None:
+        v = getattr(_ENGINE_FAIL, "note", "")
+        _ENGINE_FAIL.note = ""
+        return v
+    _ENGINE_FAIL.note = str(note or "")[:400]
+    return ""
+
+
+def _engine_fail_card(note, isar=True):
+    """بطاقةٌ تقول إنّ المحرّكَ لم يعمل ولماذا — بدل صمتٍ يُوهم أنّه عمل."""
+    if not note:
+        return None
+    return {"name": "weaver-core", "kind": "engine", "status": "err",
+            "title": ("المحرّك لم يُجب — تولّى المسارُ المباشر" if isar
+                      else "Engine did not answer — direct path took over"),
+            "sub": str(note)[:160], "request": "", "response": str(note)}
 
 
 def _engine_tool_card(r, isar=True):
@@ -1485,9 +1516,11 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
     try:
         from pipeline import weaver_core as _wc
     except Exception:
+        _engine_fail("تعذّر استيرادُ pipeline.weaver_core")
         return None
     try:
         if not (_wc.available() and _wc.node_bin()):
+            _engine_fail(_wc.why_unavailable())
             return None
         parts = []
         if memory and str(memory).strip():
@@ -1512,10 +1545,15 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
         r = _wc.ask("\n\n".join(parts),
                     timeout=max(int(timeout or 120), _t), fallback=False,
                     session=session)
-    except Exception:
+    except Exception as _e:
+        _engine_fail(type(_e).__name__ + ": " + str(_e)[:200])
         return None
     ans = (r or {}).get("answer") or ""
     if not ans.strip() or ans.startswith("error:"):
+        # كان العجزُ يُبتلع صامتاً: يعود None فيتولّى المسارُ المباشر،
+        # ولا يعرف المستخدمُ أنّ المحرّكَ لم يعمل أصلاً — فيظنّ أنّه يُشغّل
+        # ما لا يُشغّله. صار السببُ يُسجَّل ليظهر بطاقةً في الواجهة.
+        _engine_fail((r or {}).get("note") or ans or "المحرّك لم يُجب")
         return None                       # ليتولّى القديمُ ولا يضيع الطلب
     return {"reply": ans, "engine": "weaver-core",
             "provider": "weaver-core", "model": _wc.model_id() or "",
@@ -1687,6 +1725,7 @@ def _chat_direct(message: str, history=None, timeout: int = 120,
             "any \"OCR\" block as text read from an image (you cannot see the "
             "image itself):\n\n" + attachments)})
     msgs.append({"role": "user", "content": message})
+    _isar_msg = any("\u0600" <= c <= "\u06ff" for c in str(message or "")[:400])
     _pl = {"model": model, "messages": msgs,
            "max_tokens": max_tokens, "temperature": temperature}
     _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", ""), model))
@@ -1718,29 +1757,86 @@ def _chat_direct(message: str, history=None, timeout: int = 120,
                 return c
         return ""
 
-    # Some flash providers return HTTP 200 with EMPTY content under concurrent
-    # load (a silent throttle) instead of a 429. Retry once on an empty reply.
-    reply = ""
-    for attempt in range(2):
+    def _cut_at_ceiling(data):
+        """أتوقّف النموذجُ لأنّه بلغ السقف، لا لأنّه أنهى كلامَه؟"""
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            fr = (data["choices"][0].get("finish_reason")
+                  or data["choices"][0].get("stop_reason") or "")
+            return str(fr).lower() in ("length", "max_tokens", "max_output_tokens")
+        except Exception:
+            return False
+
+    def _post(pl):
+        """نداءٌ واحد. يعيد (بيانات، خطأ)."""
+        _rq = urllib.request.Request(
+            base + "/chat/completions",
+            data=json.dumps(pl).encode("utf-8"), headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(_rq, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8")), None
         except urllib.error.HTTPError as e:
             try:
                 detail = e.read().decode("utf-8")[:400]
             except Exception:
                 detail = str(e)
-            return {"error": "http_error", "message": f"{e.code}: {detail}"}
+            return None, {"error": "http_error", "message": f"{e.code}: {detail}"}
         except Exception as e:
-            return {"error": "request_failed", "message": str(e)}
+            return None, {"error": "request_failed", "message": str(e)}
+
+    # Some flash providers return HTTP 200 with EMPTY content under concurrent
+    # load (a silent throttle) instead of a 429. Retry once on an empty reply.
+    reply = ""
+    data = None
+    for attempt in range(2):
+        data, err = _post(_pl)
+        if err:
+            return err
         reply = _extract_reply(data)
         if reply.strip() or attempt == 1:
             break
         time.sleep(1.2)  # brief backoff, then one more try
 
+    # ── الإكمال: مقابلُ `continuationRequired` عند أوبن كلاو ──────────────
+    #
+    # عنده الحلقةُ لا تنتهي بانتهاء نداءٍ واحد:
+    #     agent-core-B_87jlHI.mjs:612
+    #     hasMoreToolCalls = streamed.continuationRequired || …
+    # فإن لم يُنهِ النموذجُ كلامَه استُؤنف. وعندنا كان النداءُ واحداً، فإذا بلغ
+    # السقفَ انقطع الردُّ في منتصف جملةٍ وانتهى الأمر — وهو ما رآه المستخدم.
+    #
+    # فهنا نستأنف: يُعاد النداءُ بما كُتب أصلاً ويُطلب المتابعةُ من حيث وقف،
+    # ويُلصق. بحدٍّ أقصى (`WEAVER_CONTINUE_ROUNDS`، الافتراضيّ ٤) كي لا تدور
+    # بلا نهاية، وبتوقّفٍ فوريٍّ إن لم يُضف النداءُ شيئاً.
+    try:
+        _rounds = int(os.environ.get("WEAVER_CONTINUE_ROUNDS", "4") or 4)
+    except Exception:
+        _rounds = 4
+    _n = 0
+    while (_n < _rounds and data is not None and reply.strip()
+           and _cut_at_ceiling(data)):
+        _n += 1
+        _cont = dict(_pl)
+        _cont["messages"] = list(msgs) + [
+            {"role": "assistant", "content": reply},
+            {"role": "user", "content": (
+                "أكمل من حيث توقّفتَ بالضبط، بلا إعادةِ ما كتبتَه ولا مقدّمةٍ "
+                "ولا اعتذار. ابدأ بالحرف التالي مباشرةً."
+                if _isar_msg else
+                "Continue from exactly where you stopped. Do not repeat what you "
+                "already wrote, and do not add any preamble. Resume mid-sentence "
+                "if that is where you stopped.")}]
+        data, err = _post(_cont)
+        if err:
+            break
+        _more = _extract_reply(data)
+        if not _more.strip():
+            break
+        _sep = "" if reply.endswith(("\n", " ")) else ""
+        reply = reply + _sep + _more
+
     return {"reply": reply, "provider": s.get("WEAVER_PROVIDER", ""),
             "model": model, "effort": (effort or "medium").lower(),
-            "max_tokens": max_tokens}
+            "max_tokens": max_tokens, "continued": _n}
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -2275,6 +2371,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     _tc = _engine_tool_card(r, isar)
                     if _tc:
                         sse({"t": "tool", "tool": _tc})
+                    else:
+                        _fc = _engine_fail_card(_engine_fail(), isar)
+                        if _fc:
+                            sse({"t": "tool", "tool": _fc})
                     reply = r.get("reply") or ""
                     if reply.strip():
                         reply += _sources_md(srcs, isar)
