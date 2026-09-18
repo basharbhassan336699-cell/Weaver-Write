@@ -439,37 +439,72 @@ def version():
 
 
 def _from_envelope(out):
-    """اقرأ جوابَ `--json`، فإن لم يكن JSON فالنصُّ كما هو.
+    """اقرأ جوابَ `--json` — والمُغلَّفُ مُنسَّقٌ على أسطر.
 
-    المُغلَّفُ ثابتٌ بوعد المحرّك («the stable agent-exec JSON envelope»)،
-    لكنّ أسماءَ حقوله قد تختلف بين الإصدارات — فتُجرَّب المعروفةُ بالترتيب،
-    ويُرجَع النصُّ الخام عند الفشل بدل أن يضيع الجوابُ كلُّه."""
+    عطبان اجتمعا فطُبع المُغلَّفُ الخامُ للمستخدم بدل الجواب:
+
+    ١) كنتُ أمسح الأسطرَ من آخرها بحثاً عن سطرٍ يبدأ بـ`{`، ظنّاً أنّ
+       المُغلَّفَ سطرٌ واحد. وهو مُنسَّقٌ فعلياً:
+           {
+             "ok": true,
+             "final": "مرحبا!",
+             …
+       فالسطرُ `{` وحده ليس JSON صالحاً، وكذلك `}` — فيفشل التحليلُ كلُّه.
+       والنصُّ كلُّه JSON صالحٌ من أوّله، فيُجرَّب كاملاً أوّلاً.
+
+    ٢) وحقلُ الجواب اسمُه `final` (ومعه `payloads[].text`)، ولم يكن في
+       قائمتي أصلاً — فحتى لو حُلِّل لَما وُجد. مأخوذٌ من مُغلَّفٍ حقيقيّ:
+           {"ok": true, "status": "ok", "final": "…",
+            "payloads": [{"text": "…", "mediaUrl": null}],
+            "model": "…", "provider": "…"}
+
+    وعند العجز يُعاد النصُّ الخام — فلا يضيع جوابٌ أبداً."""
     t = str(out or "").strip()
     if not t:
         return ""
-    try:
-        import json as _j
-        data = None
-        for line in reversed(t.split("\n")):       # المُغلَّفُ آخرَ سطر
+    import json as _j
+
+    def _parse(txt):
+        try:
+            return _j.loads(txt)
+        except Exception:
+            return None
+
+    data = _parse(t)
+    if data is None and "{" in t:                 # سجلٌّ قبل المُغلَّف
+        i, jx = t.find("{"), t.rfind("}")
+        if 0 <= i < jx:
+            data = _parse(t[i:jx + 1])
+    if data is None:                              # وربّما سطرٌ واحدٌ أخير
+        for line in reversed(t.split("\n")):
             line = line.strip()
-            if line.startswith("{"):
-                try:
-                    data = _j.loads(line)
+            if line.startswith("{") and line.endswith("}"):
+                data = _parse(line)
+                if data is not None:
                     break
-                except Exception:
-                    continue
-        if isinstance(data, dict):
-            for k in ("text", "message", "answer", "output", "result",
-                      "content", "reply"):
-                v = data.get(k)
-                if isinstance(v, str) and v.strip():
-                    return v.strip()
-                if isinstance(v, dict):
-                    for k2 in ("text", "content", "message"):
-                        if isinstance(v.get(k2), str) and v[k2].strip():
-                            return v[k2].strip()
-    except Exception:
-        pass
+    if not isinstance(data, dict):
+        return t
+    # `final` أوّلاً: هو حقلُ الجواب في مُغلَّف المحرّك
+    for k in ("final", "text", "message", "answer", "output", "reply",
+              "content", "result"):
+        v = data.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if isinstance(v, dict):
+            for k2 in ("final", "text", "content", "message"):
+                if isinstance(v.get(k2), str) and v[k2].strip():
+                    return v[k2].strip()
+    parts = []                                    # ثمّ payloads[].text
+    for it in (data.get("payloads") or []):
+        if isinstance(it, dict) and isinstance(it.get("text"), str) \
+                and it["text"].strip():
+            parts.append(it["text"].strip())
+    if parts:
+        return "\n\n".join(parts)
+    if data.get("ok") is False or data.get("status") == "error":
+        err = data.get("error")
+        if isinstance(err, dict) and isinstance(err.get("message"), str):
+            return "error: " + err["message"]
     return t
 
 

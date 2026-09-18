@@ -272,7 +272,33 @@ chk("--timeout is passed so a hung turn cannot wedge the call",
     '"--timeout"' in _src_wc)
 
 # the envelope reader must never lose an answer
-chk("a clean envelope", W._from_envelope('{"text":"مرحبا"}') == "مرحبا")
+# THE REAL ENVELOPE, copied from a working run on the device -- not invented.
+# It is pretty-printed across lines and its answer field is `final`; my reader
+# assumed one line and did not know `final`, so the raw JSON was printed at
+# the user instead of the answer.
+import json as _json
+_REAL = _json.dumps({
+    "ok": True, "status": "ok", "final": "\u0645\u0631\u062d\u0628\u0627!",
+    "payloads": [{"text": "\u0645\u0631\u062d\u0628\u0627!",
+                  "mediaUrl": None}],
+    "usage": {"input": 23168, "output": 33, "total": 23201},
+    "costUsd": 0.00115798256, "assistantTurns": 1,
+    "model": "deepseek/deepseek-v4-flash", "provider": "openrouter",
+    "sessionId": "37e0db30-9a80-4b8d-8d84-2b550bfaca14"},
+    ensure_ascii=False, indent=2)
+_WANT = "\u0645\u0631\u062d\u0628\u0627!"
+chk("the REAL pretty-printed envelope yields the answer, not the JSON",
+    W._from_envelope(_REAL) == _WANT, W._from_envelope(_REAL)[:40])
+chk("  -> `final` is the field it reads",
+    W._from_envelope('{"final":"x"}') == "x")
+chk("  -> a log line before it does not break it",
+    W._from_envelope("starting...\n" + _REAL) == _WANT)
+chk("  -> payloads are joined when there is no final",
+    W._from_envelope('{"payloads":[{"text":"a"},{"text":"b"}]}') == "a\n\nb")
+chk("  -> an error envelope reports its message, not raw JSON",
+    W._from_envelope('{"ok":false,"error":{"message":"no key"}}')
+    == "error: no key")
+chk("a clean envelope", W._from_envelope('{"text":"\u0645\u0631\u062d\u0628\u0627"}') == "\u0645\u0631\u062d\u0628\u0627")
 chk("log lines before it do not break it",
     W._from_envelope('starting…\n{"message":"أهلاً"}') == "أهلاً")
 chk("a nested field is found",
