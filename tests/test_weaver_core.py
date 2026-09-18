@@ -362,8 +362,40 @@ print("=" * 70)
 for _k in ("WEAVER_PROVIDER", "WEAVER_API_KEY", "WEAVER_MODEL",
            "WEAVER_BASE_URL"):
     os.environ.pop(_k, None)
-chk("with nothing configured, nothing is claimed",
-    W.provider_id() == "" and W.model_id() == "" and W.credentials() == {})
+# the real config lives in a file, not the environment. `--provider` reported
+# "no key" on a working system for exactly that reason: the bridge read only
+# os.environ, while the keys sit in config/.env -- the source of truth shared
+# by the terminal and the web UI (config/keysync.py:27,30).
+_envf = os.path.join(_ROOT, "config", ".env")
+_had = os.path.isfile(_envf)
+_backup = open(_envf, encoding="utf-8").read() if _had else None
+try:
+    if not _had:
+        chk("with nothing configured anywhere, nothing is claimed",
+            W.provider_id() == "" and W.model_id() == ""
+            and W.credentials() == {})
+    with open(_envf, "w", encoding="utf-8") as _fh:
+        _fh.write('export WEAVER_PROVIDER=openrouter\n'
+                  'WEAVER_API_KEY="sk-or-file"\n'
+                  'WEAVER_MODEL=deepseek/deepseek-v4-flash\n')
+    chk("the key is read from config/.env, not just the environment",
+        W.credentials() == {"OPENROUTER_API_KEY": "sk-or-file"},
+        str(W.credentials()))
+    chk("  -> `export ` prefix and quotes are handled",
+        W.provider_id() == "openrouter"
+        and W.model_id() == "openrouter/deepseek/deepseek-v4-flash")
+    os.environ["WEAVER_API_KEY"] = "sk-from-env"
+    chk("  -> and a real environment variable outranks the file",
+        W.credentials() == {"OPENROUTER_API_KEY": "sk-from-env"})
+    os.environ.pop("WEAVER_API_KEY")
+finally:
+    if _backup is None:
+        try:
+            os.remove(_envf)
+        except Exception:
+            pass
+    else:
+        open(_envf, "w", encoding="utf-8").write(_backup)
 
 os.environ["WEAVER_PROVIDER"] = "openrouter"
 os.environ["WEAVER_API_KEY"] = "sk-or-test"

@@ -91,13 +91,60 @@ _PROVIDER_ENV = {
 }
 
 
+def _load_settings():
+    """إعداداتُك كما يقرؤها نظامُك — من `config/.env` ثمّ البيئة.
+
+    `--provider` قال «لا مفتاح» بينما نظامُك يعمل، والسببُ أنّ الجسرَ كان
+    يقرأ البيئةَ وحدها. ومفاتيحُك ليست فيها: هي في
+
+        config/.env        (config/keysync.py:27  _ENV_FILE)
+
+    وهو **مصدرُ الحقيقة الذي تتشارك فيه الطرفيةُ وواجهةُ الويب**
+    (keysync.py:30  SYNC_KEYS). فيُقرأ منه أوّلاً، والبيئةُ تعلو عليه —
+    وهو ترتيبُ `load_env` نفسُه (setdefault: ما في البيئة يبقى).
+
+    لا يرفع استثناءً؛ وغيابُ الملفّ يعني الاعتمادَ على البيئة كما كان."""
+    out = {}
+    try:
+        f = os.path.join(_ROOT, "config", ".env")
+        if os.path.isfile(f):
+            for raw in open(f, encoding="utf-8",
+                            errors="replace").read().splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                    v = v[1:-1]
+                if k:
+                    out[k] = v
+    except Exception:
+        pass
+    for k in ("WEAVER_API_KEY", "WEAVER_BASE_URL", "WEAVER_MODEL",
+              "WEAVER_PROVIDER"):
+        v = (os.environ.get(k) or "").strip()
+        if v:
+            out[k] = v                       # البيئةُ تعلو، كـload_env
+    return out
+
+
+def _setting(name):
+    try:
+        return (_load_settings().get(name) or "").strip()
+    except Exception:
+        return ""
+
+
 def provider_id():
     """مزوّدُك كما يسمّيه المحرّك، أو "". لا يرفع استثناءً."""
     try:
-        p = (os.environ.get("WEAVER_PROVIDER") or "").strip().lower()
+        p = _setting("WEAVER_PROVIDER").lower()
         if p in _PROVIDER_ENV:
             return p
-        host = (os.environ.get("WEAVER_BASE_URL") or "").strip().lower()
+        host = _setting("WEAVER_BASE_URL").lower()
         for name in _PROVIDER_ENV:
             if name in host:
                 return name
@@ -111,7 +158,7 @@ def provider_id():
 def model_id():
     """النموذجُ بصيغة `<مزوّد>/<نموذج>` كما يطلبها المحرّك، أو ""."""
     try:
-        m = (os.environ.get("WEAVER_MODEL") or "").strip()
+        m = _setting("WEAVER_MODEL")
         if not m:
             return ""
         prov = provider_id()
@@ -125,7 +172,7 @@ def model_id():
 def credentials():
     """{اسمُ المتغيّر: المفتاح} كما يفهمها المحرّك — أو {}."""
     try:
-        key = (os.environ.get("WEAVER_API_KEY") or "").strip()
+        key = _setting("WEAVER_API_KEY")
         prov = provider_id()
         if not key or not prov:
             return {}
@@ -505,10 +552,15 @@ def _cli():
             if _c else "— لا مفتاح (WEAVER_API_KEY فارغ)"))
         if not _c:
             print()
-            print("  اضبط في نظامك (وهي نفسُها التي يستعملها المسارُ البايثونيّ):")
-            print("     export WEAVER_PROVIDER=openrouter")
-            print("     export WEAVER_API_KEY=...")
-            print("     export WEAVER_MODEL=deepseek/deepseek-v4-flash")
+            _envf = os.path.join(_ROOT, "config", ".env")
+            print(f"  مصدرُ الحقيقة: {_envf}"
+                  + ("" if os.path.isfile(_envf) else "   ⟵ غير موجود"))
+            print("  (وهو نفسُه الذي تتشارك فيه الطرفيةُ وواجهةُ الويب)")
+            print()
+            print("  اضبطه من الواجهة، أو بالسطر:")
+            print("     python3 -c \"import sys;sys.path.insert(0,'.');"
+                  "from config.keysync import set_api_key;"
+                  "set_api_key('مفتاحك')\"")
         return
     if argv == ["--last"]:
         if os.path.isfile(LAST_LOG):
