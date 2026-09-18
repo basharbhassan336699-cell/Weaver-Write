@@ -653,7 +653,9 @@ def _edit_append_file(msg, active_path, effort="medium"):
         prompt = ("هذا محتوى ملف موجود. طبّق التعديل المطلوب وأعِد المحتوى الكامل "
                   "المعدَّل فقط (بلا شرح ولا مقدمات)، والتزم بلغة الملف:\n"
                   + msg + "\n\n[محتوى الملف الحالي]\n" + current[:14000])
-    r = _chat(prompt, None, effort=effort)
+    # تحويلُ نصٍّ لا محادثة: المطلوبُ محتوى الملفّ معدَّلاً حرفاً. فلا يمرّ
+    # بالمحرّك كي لا يُضيف شرحاً أو يُعيد الصياغة.
+    r = _chat(prompt, None, effort=effort, use_engine=False)
     if r.get("error"):
         return r
     produced = (r.get("reply") or "").strip()
@@ -1468,8 +1470,16 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
         if attachments and str(attachments).strip():
             parts.append("[مرفقات]\n" + str(attachments).strip()[:8000])
         parts.append("[الطلب]\n" + str(message or ""))
-        r = _wc.ask("\n\n".join(parts), timeout=max(60, int(timeout or 120)),
-                    fallback=False)
+        # مهلةٌ أوسع من مهلة النداء المباشر: المحرّكُ وكيلٌ يفتح صفحاتٍ
+        # ويُعيد المحاولة، فـ١٢٠ ثانيةً تكفي نداءً واحداً ولا تكفي نوبةً
+        # متعدّدةَ الأدوات على هاتف. وانتهاؤها لا يُضيع الطلب: يعود None
+        # فيتولّى المسارُ المباشرُ ويُجيب.
+        try:
+            _t = int(_os.environ.get("WEAVER_ENGINE_TIMEOUT") or 240)
+        except Exception:
+            _t = 240
+        r = _wc.ask("\n\n".join(parts),
+                    timeout=max(int(timeout or 120), _t), fallback=False)
     except Exception:
         return None
     ans = (r or {}).get("answer") or ""
@@ -1481,7 +1491,8 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
 
 
 def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium",
-          context: str = None, memory: str = None, attachments: str = None) -> dict:
+          context: str = None, memory: str = None, attachments: str = None,
+          use_engine: bool = True) -> dict:
     """Send a message to the configured provider using the saved key and return
     the assistant reply. OpenAI-compatible /chat/completions (works for the
     registry providers, incl. Anthropic's and Google's compatible endpoints).
@@ -1489,11 +1500,18 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
     import urllib.request
     import urllib.error
 
-    # ① المحرّك إن كان مركَّباً — وإلّا فالمسارُ القديمُ كما هو تماماً
-    _eng = _chat_via_engine(message, history, timeout, context, memory,
-                            attachments)
-    if _eng is not None:
-        return _eng
+    # ① المحرّك إن كان مركَّباً — وإلّا فالمسارُ القديمُ كما هو تماماً.
+    #
+    # و`use_engine=False` ليس تزيّناً: ثمّة نداءاتٌ ليست محادثةً بل **تحويلُ
+    # نصّ** — «أعِد محتوى الملفّ معدَّلاً، بلا شرحٍ ولا مقدّمات». والمحرّكُ
+    # وكيلٌ: يشرح، ويستعمل أدوات، وقد يُعيد صياغةَ ما طُلب نقلُه حرفاً. فلو
+    # مرّ تعديلُ ملفٍّ به لأفسد الملفّ. فتلك النداءاتُ تبقى على المسار
+    # المباشر، والمحادثةُ وحدها تذهب إلى المحرّك.
+    if use_engine:
+        _eng = _chat_via_engine(message, history, timeout, context, memory,
+                                attachments)
+        if _eng is not None:
+            return _eng
 
     s = keysync.get_settings()  # reads config/.env fresh (CLI + web share it)
     key = (s.get("WEAVER_API_KEY") or "").strip()

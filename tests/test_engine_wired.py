@@ -100,6 +100,27 @@ finally:
 
 print()
 print("=" * 70)
+print(" 2b) TEXT TRANSFORMS DO NOT GO THROUGH THE AGENT")
+print("=" * 70)
+# One of the three _chat call sites is a FILE EDIT: it sends the file content
+# and asks for the edited content back, "with no explanation and no preamble".
+# The engine is an agent -- it explains, it may use tools, it may rephrase.
+# Routing a file edit through it would corrupt the file. So that call site
+# opts out; only real conversation reaches the engine.
+chk("_chat takes use_engine", "use_engine: bool = True" in _src)
+chk("  -> and honours it", "if use_engine:" in _src)
+chk("the file-edit call site opts out",
+    "use_engine=False" in _src)
+_fe = _src.split("هذا محتوى ملف موجود")[-1][:900] if "هذا محتوى ملف موجود" in _src else ""
+chk("  -> specifically the one that returns edited file content",
+    "use_engine=False" in _fe, "(لم يُعثر على الموضع)" if not _fe else "")
+_conv = _src.count("_chat(msg, body.get(\"history\")")
+chk(f"and the real conversation sites ({_conv}) keep the engine",
+    _conv >= 2 and "use_engine=False" not in
+    _src.split("_chat(msg, body.get(\"history\")")[1][:200])
+
+print()
+print("=" * 70)
 print(" 3) ONE WIRE, BOTH SURFACES")
 print("=" * 70)
 _w = open(os.path.join(_ROOT, "weaver.py"), encoding="utf-8").read()
