@@ -545,12 +545,19 @@ def gateway_start(wait=None):
                 # إقلاعةٌ جديدة ⟶ تُضمَن صلاحيةُ البحث مرّةً واحدة. والبوّابةُ
                 # تحمل بيئتَها من لحظة إقلاعها، فهذا أوانُه الصحيح.
                 try:
-                    _st = probe_search("اختبار")
-                    if not _st.get("ok") and _st.get("chosen") != "duckduckgo":
-                        run(["config", "set", "tools.web.search.enabled",
-                             "true"], timeout=60)
-                        run(["config", "set", "tools.web.search.provider",
-                             "duckduckgo"], timeout=60)
+                    # ولا يُمَسُّ اختيارٌ صريحٌ للمستخدم بحال: لو اختار
+                    # مزوّداً بمعالج `configure --section web` ثمّ فشل نداءٌ
+                    # واحدٌ لانقطاعِ شبكةٍ عابر، لكان تلقائيُّنا يدوس اختيارَه
+                    # بلا أن يخبره. فالتلقائيُّ لمن لم يختر فقط.
+                    if not chosen_provider():
+                        _st = probe_search("اختبار")
+                        if not _st.get("ok"):
+                            run(["config", "set",
+                                 "tools.web.search.enabled", "true"],
+                                timeout=60)
+                            run(["config", "set",
+                                 "tools.web.search.provider",
+                                 WEB_SEARCH_FREE[0]], timeout=60)
                 except Exception:
                     pass
                 return True, f"أقلعت في {time.time() - _t0:.1f} ث"
@@ -703,6 +710,16 @@ def enable_web_search():
     # موجوداً فُضِّل مزوّدُه (perplexity برتبة ٥٠ قبل ddg برتبة ١٠٠) ولا
     # نلمس شيئاً.
     st = probe_search("اختبار")
+    _mine = chosen_provider()
+    if _mine and st.get("ok"):
+        rows.append(("اختيارُك محفوظ: " + _mine, True, ""))
+        return rows
+    if _mine and not st.get("ok"):
+        # اختيارُه قائمٌ لكنّه لا يعمل: يُقال له، ولا يُبدَّل من ورائه.
+        rows.append(("اختيارُك (" + _mine + ") لا يعمل الآن", False,
+                     (st.get("error") or "")[:160]
+                     + "  ·  للتبديل: --web-search choose"))
+        return rows
     if not st.get("chosen") or not st.get("ok"):
         # وحُلولُ المزوّدِ لا يكفي: قد يُحَلّ ثمّ يفشل. مقيسٌ على جهاز
         # المستخدم — perplexity حُلّ من مفتاح OpenRouter ثمّ ردّ:
@@ -1058,6 +1075,23 @@ def run_tty(args, timeout=None):
     except Exception as e:
         print(f"{type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
         return 1
+
+
+def chosen_provider():
+    """المزوّدُ الذي **عيّنه المستخدمُ صراحةً**، أو "" إن لم يُعيّن.
+
+    فرقٌ جوهريّ: `resolveWebSearchProviderId` قد تُعيد مزوّداً اكتُشف
+    تلقائياً من مفتاح، وذاك ليس اختياراً. وهذه تقرأ المفتاحَ المكتوبَ في
+    الإعداد — وهو ما يكتبه معالجُ `configure --section web` حين تختار."""
+    try:
+        code, out, _ = run(["config", "get", "tools.web.search.provider"],
+                           timeout=60)
+        if code != 0:
+            return ""
+        v = (out or "").strip().strip('"').strip()
+        return "" if v in ("", "null", "undefined", "auto") else v
+    except Exception:
+        return ""
 
 
 def configure_web():

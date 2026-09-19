@@ -150,6 +150,55 @@ chk("والإضافاتُ المُركَّبة تشمل المدفوعَ وال�
 
 print()
 print("=" * 70)
+print(" 7) اختيارُ المستخدمِ الصريحُ لا يُداس")
+print("=" * 70)
+# لو اختار مزوّداً بمعالج `configure --section web` ثمّ فشل نداءٌ واحدٌ
+# لانقطاعِ شبكةٍ عابر، لكان تلقائيُّنا يبدّله بلا أن يخبره. فالتلقائيُّ
+# لمن لم يختر فقط، ومن اختار يُقال له إنّ اختيارَه لا يعمل ويُترك له.
+_r4 = (W.run, W.probe_search)
+try:
+    _calls = []
+
+    def _run(args, timeout=180, input_text=None, cwd=None):
+        _calls.append(list(args))
+        if list(args)[:2] == ["config", "get"]:
+            return 0, '"brave"', ""
+        return 0, "", ""
+    W.run = _run
+    W.probe_search = lambda q="اختبار": {
+        "providers": ["brave"], "configured": ["brave"], "chosen": "brave",
+        "usable": True, "ok": False, "count": 0, "first": "",
+        "error": "network hiccup"}
+    chk("اختيارُه يُقرأ من الإعداد", W.chosen_provider() == "brave")
+    _calls.clear()
+    rows = W.enable_web_search()
+    _sets = [c for c in _calls
+             if c[:2] == ["config", "set"] and "provider" in " ".join(c)]
+    chk("  -> ولا يُكتَب مزوّدٌ فوقه رغم فشل النداء", _sets == [], _sets)
+    chk("  -> ويُقال له إنّ اختيارَه لا يعمل",
+        any("لا يعمل" in str(r[0]) for r in rows), rows[-1:])
+
+    W.probe_search = lambda q="اختبار": {
+        "providers": [], "configured": [], "chosen": "", "usable": False,
+        "ok": False, "count": 0, "first": "", "error": "no provider"}
+
+    def _run2(args, timeout=180, input_text=None, cwd=None):
+        _calls.append(list(args))
+        if list(args)[:2] == ["config", "get"]:
+            return 0, '""', ""
+        return 0, "", ""
+    W.run = _run2
+    _calls.clear()
+    W.enable_web_search()
+    _sets = [c for c in _calls
+             if c[:2] == ["config", "set"] and "provider" in " ".join(c)]
+    chk("ومن لم يختر ⟶ يُعيَّن له المجّانيُّ الموثَّقُ أوّلاً",
+        bool(_sets) and _sets[0][-1] == W.WEB_SEARCH_FREE[0], _sets[:1])
+finally:
+    (W.run, W.probe_search) = _r4
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)
