@@ -1039,6 +1039,46 @@ def trajectory(session, agent="main", timeout=90):
 PROBE_SEARCH = os.path.join(_ROOT, "engines", "weaver-core", "probe_search.mjs")
 
 
+def run_tty(args, timeout=None):
+    """نادِ المحرّكَ **بطرفيّةٍ موروثة** — لا يُلتقط خرجُه ولا دخلُه.
+
+    `run()` العاديّةُ تلتقط الخرج (`capture_output=True`)، وذلك يقتل TTY.
+    ومعالجُ الإعداد عند المحرّك يشترطها صراحةً، وهذا نصُّه حين تغيب:
+        «Interactive configuration requires an interactive terminal (TTY).»
+        docs/cli/configure.md:40
+
+    فهذه تُمرّر الطرفيّةَ كما هي، فيرسم المحرّكُ قائمتَه ويقرأ اختيارَك.
+    تعيد رمزَ الخروج."""
+    if not (available() and node_bin()):
+        print(why_unavailable(), file=sys.stderr)
+        return 127
+    try:
+        return subprocess.call([node_bin(), ENTRY] + list(args or []),
+                               cwd=_ROOT, env=engine_env(), timeout=timeout)
+    except Exception as e:
+        print(f"{type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
+        return 1
+
+
+def configure_web():
+    """معالجُ اختيار محرّك البحث — معالجُ أوبن كلاو نفسُه، بلا واسطة.
+
+        docs/cli/configure.md:74
+        «openclaw configure --section web picks a web-search provider and
+         configures its credentials.»
+
+    يعرض المزوّدين (المجّانيَّ والمدفوع)، ويأخذ المفتاحَ إن لزم، ويكتب
+    `tools.web.search.provider`. ونحن لا نعيد بناءَ شيءٍ منه — نناديه.
+
+    والبوّابةُ تُحمّل الإضافاتِ عند إقلاعها، فتُعاد بعده إن كانت حيّة
+    (docs/tools/duckduckgo-search.md: «openclaw gateway restart»)."""
+    code = run_tty(["configure", "--section", "web"])
+    if code == 0 and gateway_health():
+        gateway_stop()
+        gateway_start()
+    return code
+
+
 def probe_search(query="اختبار البحث"):
     """أيعمل البحثُ فعلاً؟ — بدوالّ المحرّك نفسِه.
 
@@ -1182,17 +1222,21 @@ def _cli():
             print("\n  ✗ البحثُ لا يعمل")
             if r.get("error"):
                 print("    السبب: " + str(r["error"])[:220])
-            if not r.get("chosen"):
-                # هذه آليّةُ أوبن كلاو لا رأيُنا: المزوّدُ يُختار تلقائياً
-                # بإشارةِ اعتماد (مفتاح). وduckduckgo بلا مفتاح، فلا إشارةَ
-                # له، فلا يُكتشَف أبداً — يجب تعيينُه صراحةً.
-                print("\n    المزوّدُ يُكتشَف بمفتاحه. وduckduckgo بلا مفتاح،"
-                      "\n    فلا يُكتشَف تلقائياً — يُعيَّن صراحةً:"
-                      "\n      python3 -m pipeline.weaver_core --web-search ddg"
+            # يُعرض المعالجُ كلّما تعثّر البحثُ — سواءٌ لم يُختَر مزوّدٌ
+            # أصلاً، أو اختِير ثمّ فشل (رصيدٌ نافد، أو حجبُ شبكة). فالمخرجُ
+            # واحدٌ في الحالين: اختر مزوّداً آخر.
+            if True:
+                print("\n    ولاختيار المزوّد بنفسك — قائمةُ أوبن كلاو نفسُها،"
+                      "\n    فيها المجّانيُّ والمدفوع:"
+                      "\n      python3 -m pipeline.weaver_core --web-search choose"
                       "\n    أو ضَع مفتاحَك ثمّ أعِد تشغيل البوّابة:"
                       "\n      python3 -m pipeline.weaver_core --gateway stop"
                       "\n      python3 -m pipeline.weaver_core --gateway start")
         return
+    if argv[:2] == ["--web-search", "choose"]:
+        # معالجُ المحرّك نفسُه. وإن لم تكن الطرفيّةُ تفاعليّةً قال هو ذلك
+        # ودلّ على البديل غير التفاعليّ — فلا نكرّر كلامه.
+        sys.exit(configure_web())
     if argv == ["--web-search", "ddg"]:
         # تعيينٌ صريح: يجعل duckduckgo هو المزوّد، فيعمل البحثُ بلا مفتاح.
         code, out, err = run(["config", "set",

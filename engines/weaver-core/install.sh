@@ -156,6 +156,37 @@ done
 ( cd "$ROOT" && WEAVER_NODE="$NODE" python3 -m pipeline.weaver_core --web-search 2>&1 \
   | sed 's/^/    /' ) || echo "    ⚠ تعذّر إعدادُ بحثِ الويب"
 
+# ── واختيارُك أنت: معالجُ أوبن كلاو نفسُه ──────────────────────────────────
+#
+#   docs/cli/configure.md:74
+#   «openclaw configure --section web picks a web-search provider and
+#    configures its credentials.»
+#
+# يعرض المزوّدين — المجّانيَّ والمدفوع — ويأخذ المفتاحَ إن لزم. ونحن لا نبني
+# قائمةً من عندنا: نناديه هو، فتبقى المعماريّةُ معماريّتَه، وتنمو قائمتُه
+# بترقيته بلا أن نلمس شيئاً.
+#
+# ويشترط طرفيّةً تفاعليّة (docs/cli/configure.md:40)، فلا يُعرض إلّا إن
+# وُجدت — ومَن تخطّاها يجدها أمراً في أيّ وقت.
+if [ -t 0 ] && [ -t 1 ]; then
+  echo
+  printf "  ⌕ تختار محرّكَ البحث الآن؟ (المجّانيّ والمدفوع) [y/N] "
+  read -r _ans </dev/tty || _ans=""
+  case "$_ans" in
+    [yY]*)
+      ( cd "$ROOT" && WEAVER_NODE="$NODE" \
+        python3 -m pipeline.weaver_core --web-search choose ) || true
+      ;;
+    *)
+      echo "    تخطّيت. ولاختياره لاحقاً في أيّ وقت:"
+      echo "      python3 -m pipeline.weaver_core --web-search choose"
+      ;;
+  esac
+else
+  echo "    ولاختيار محرّك البحث بنفسك:"
+  echo "      python3 -m pipeline.weaver_core --web-search choose"
+fi
+
 echo
 echo "── تمّ ──"
 "$NODE" "$DEST/openclaw.mjs" --version || true

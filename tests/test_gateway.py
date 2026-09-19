@@ -119,6 +119,37 @@ chk("والمنفذُ منفذُنا نحن", W.gateway_port() == W.OUR_PORT, W.
 
 print()
 print("=" * 70)
+print(" 6) اختيارُ محرّك البحث — معالجُ أوبن كلاو نفسُه")
+print("=" * 70)
+# docs/cli/configure.md:74
+#   «openclaw configure --section web picks a web-search provider and
+#    configures its credentials.»
+# ونحن لا نبني قائمةً من عندنا — نناديه. ويشترط طرفيّةً تفاعليّة
+# (docs/cli/configure.md:40)، فـ`run()` العاديّةُ تلتقط الخرجَ وتقتلها،
+# ولهذا `run_tty` تُورّث الطرفيّةَ كما هي.
+chk("run_tty موجودة وتُورّث الطرفيّة (لا capture_output)",
+    callable(W.run_tty))
+import inspect as _i                                       # noqa: E402
+_src = _i.getsource(W.run_tty)
+# يُستثنى التوثيقُ الداخليّ: هو **يشرح** لماذا لا تصلح capture_output،
+# فذكرُها فيه ليس استعمالاً لها. يُفحَص الكودُ وحده.
+_code = _src.split('"""')[-1]
+chk("  -> تستعمل subprocess.call لا capture_output",
+    "subprocess.call" in _code and "capture_output" not in _code)
+_src2 = _i.getsource(W.configure_web)
+chk("configure_web تنادي `configure --section web`",
+    '"configure"' in _src2 and '"--section"' in _src2 and '"web"' in _src2)
+chk("  -> وتُعيد تشغيل البوّابة بعده (شرطُ التوثيق بعد تغيير الإضافات)",
+    "gateway_stop" in _src2 and "gateway_start" in _src2)
+_src3 = _i.getsource(W)
+chk("والاحتياطُ المجّانيُّ بترتيب التوثيق: parallel-free قبل duckduckgo",
+    W.WEB_SEARCH_FREE == ("parallel-free", "duckduckgo"), W.WEB_SEARCH_FREE)
+chk("والإضافاتُ المُركَّبة تشمل المدفوعَ والمجّانيّ",
+    set(W.WEB_SEARCH_PLUGINS) >= {"perplexity", "parallel", "duckduckgo"},
+    W.WEB_SEARCH_PLUGINS)
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)
