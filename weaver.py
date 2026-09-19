@@ -831,6 +831,10 @@ def build_parser():
     sub = p.add_subparsers(dest="command")
 
     sub.add_parser("install", help="quick setup or restore an account")
+    # مَعبرُ المحرّك — يُلتقط في `main` قبل التحليل، وهذا لإظهاره في المساعدة.
+    sub.add_parser("core",
+                   help="مرّر أمراً إلى المحرّك كما هو (87 أمراً): "
+                        "weaver core --help")
 
     kp = sub.add_parser("keys", help="manage API keys")
     kp.add_argument("action", nargs="?",
@@ -849,7 +853,52 @@ def build_parser():
     return p
 
 
+def cmd_core(rest):
+    """مرّر ما بعد `weaver core` إلى المحرّك كما هو — معماريّتُه بحذافيرها.
+
+    كنتُ أكتب غلافاً لكلِّ حاجة: `--gateway`، `--model set`، `--web-search`…
+    وهي إعادةُ بناءٍ لما عنده أصلاً. وعنده **٨٧ أمراً** بأقسامها وخياراتها
+    وتوثيقها، وتنمو بترقية الحزمة بلا أن نلمس سطراً.
+
+    فهذا ليس غلافاً: هو مَعبر. يُنادى المحرّكُ بوسائطك حرفاً، في بيئتنا
+    المعزولة (بروفايل weaver · حالةٌ تحت ~/.weaver-write · منفذُنا ·
+    مفتاحُك)، وبطرفيّةٍ موروثة فتعمل معالجاتُه التفاعليّة كما هي.
+
+        weaver core --help              أوامرُه كلُّها
+        weaver core onboard             تهيئتُه
+        weaver core configure --section web
+        weaver core browser start
+        weaver core skills list
+        weaver core doctor
+        weaver core agent -m "سؤال"
+
+    ولا شيءَ نترجمه ولا نُخفيه."""
+    try:
+        from pipeline import weaver_core as core
+    except Exception as e:
+        print("تعذّر تحميلُ الجسر: " + str(e))
+        return 1
+    if not core.available():
+        print("المحرّك غير مركَّب.  التركيب:  bash engines/weaver-core/install.sh")
+        return 2
+    if not core.node_bin():
+        print(core.why_unavailable())
+        return 2
+    return core.run_tty(list(rest or []) or ["--help"])
+
+
 def main(argv=None):
+    # ── مَعبرُ المحرّك: `weaver core …` يذهب إليه كما هو ────────────────
+    #
+    # يُلتقط قبل التحليل، لأنّ وسائطَه وسائطُه لا وسائطُنا — فلو مرّت على
+    # `argparse` عندنا لرفض ما لا يعرفه (`--json`، `--section`، `-m`…).
+    _av = list(sys.argv[1:] if argv is None else argv)
+    if _av and _av[0] in ("core", "oc"):
+        raise SystemExit(cmd_core(_av[1:]))
+    return _main(argv)
+
+
+def _main(argv=None):
     # load synced settings from config/.env first (shared with the web UI)
     try:
         import sys as _s, os as _o
