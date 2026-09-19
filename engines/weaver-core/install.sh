@@ -142,7 +142,7 @@ _OC () { OPENCLAW_STATE_DIR="$STATE_DIR" OPENCLAW_PROFILE=weaver \
          "$NODE" "$DEST/openclaw.mjs" "$@" >/dev/null 2>&1; }
 STATE_DIR="${WEAVER_STATE_DIR:-$HOME/.weaver-write/state}"
 ROOT="$(cd "$HERE/../.." && pwd)"
-echo "  ⌕ بحثُ الويب (إضافتا أوبن كلاو الرسميّتان)…"
+echo "  ⌕ بحثُ الويب (إضافاتُ أوبن كلاو الرسميّة)…"
 for _P in duckduckgo perplexity; do
   if _OC plugins install "@openclaw/${_P}-plugin" --accept-capabilities; then
     echo "    ✓ ${_P}"

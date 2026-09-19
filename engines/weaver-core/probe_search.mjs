@@ -38,7 +38,7 @@ async function loadEngineConfig() {
 }
 
 const out = { providers: [], configured: [], chosen: "", usable: false,
-              ok: false, count: 0, first: "", error: "" };
+              ok: false, kind: "", count: 0, first: "", error: "" };
 try {
   const m = await import(rt);
   const config = await loadEngineConfig();
@@ -50,12 +50,41 @@ try {
   if (!out.usable) {
     out.error = "لا مزوّدَ صالح: لا مفتاحَ يُكتشَف، ولا مزوّدَ مُعيَّنٌ صراحةً";
   } else {
-    const r = await m.runWebSearch({ config, args: { query, maxResults: 5 } });
-    const arr = Array.isArray(r?.results) ? r.results : Array.isArray(r) ? r : [];
-    out.count = arr.length;
-    out.first = String(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
-    out.ok = out.count > 0;
-    if (!out.ok) out.error = "المزوّدُ ردّ بلا نتائج";
+    // شكلُ الجواب مُوثَّقٌ في docs/tools/web.md — اتّحادٌ موسومٌ بـ`kind`،
+    // لا `results` دائماً. وكنتُ أقرأ `results` وحدها فأحسب جوابَ مزوّدٍ
+    // مُركِّبٍ (kind:"answer") «بلا نتائج»، وأحسب خطأَه «بلا نتائج» أيضاً:
+    //
+    //   kind: "error"   ⟶ provider · error · message
+    //   kind: "results" ⟶ count · results[{title,url,snippet,…}]
+    //   kind: "answer"  ⟶ content · citations[{url,title}]
+    //   kind: "raw"     ⟶ data (مزوّدٌ خارجيٌّ لا يُطابق الشكلين)
+    //
+    // والوسيطُ اسمُه `count` لا `maxResults` (نفسُ الملفّ).
+    const r = await m.runWebSearch({ config, args: { query, count: 5 } });
+    const kind = r && typeof r === "object" ? r.kind : "";
+    out.kind = kind || "";
+    if (kind === "error") {
+      out.error = String(r.message || r.error || "خطأُ مزوّد").slice(0, 300);
+    } else if (kind === "results") {
+      const arr = Array.isArray(r.results) ? r.results : [];
+      out.count = typeof r.count === "number" ? r.count : arr.length;
+      out.first = String(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
+      out.ok = out.count > 0;
+      if (!out.ok) out.error = "المزوّدُ ردّ بقائمةٍ فارغة";
+    } else if (kind === "answer") {
+      const c = String(r.content || "");
+      out.count = Array.isArray(r.citations) ? r.citations.length : (c ? 1 : 0);
+      out.first = c.slice(0, 160);
+      out.ok = c.trim().length > 0;
+      if (!out.ok) out.error = "المزوّدُ ردّ بجوابٍ فارغ";
+    } else if (kind === "raw") {
+      const t = JSON.stringify(r.data ?? "");
+      out.count = (t.match(/https?:\/\//g) || []).length;
+      out.first = t.slice(0, 160);
+      out.ok = t.length > 2;
+    } else {
+      out.error = "شكلُ جوابٍ غيرُ معروف: " + JSON.stringify(r).slice(0, 200);
+    }
   }
 } catch (e) {
   out.error = String(e?.message || e).slice(0, 300);

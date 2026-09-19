@@ -639,7 +639,22 @@ TUNING = (("tools.toolSearch.enabled", "true"),
 #
 # وهذا لا يمسُّ قواعدَ النظام الأكاديمية بحال: تلك لأنابيب المستندات، وهذه
 # أدواتُ المحرّك وحده.
-WEB_SEARCH_PLUGINS = ("duckduckgo", "perplexity")
+# مأخوذةٌ من توثيق الحزمة نفسِها: docs/tools/web.md و docs/tools/*-search.md
+#
+#   • perplexity — يقرأ OPENROUTER_API_KEY، ورتبتُه ٥٠ في الاكتشاف التلقائيّ
+#   • parallel   — وفيه مزوّدان: `parallel` مدفوع، و`parallel-free` بلا مفتاح
+#                  «dense excerpts ranked for LLM context» (docs/tools/web.md)
+#   • duckduckgo — بلا مفتاح أيضاً، لكنّ توثيقَه يحذّر:
+#                  «experimental, unofficial … scrapes DuckDuckGo's
+#                   non-JavaScript HTML search pages … Bot-challenge risk»
+WEB_SEARCH_PLUGINS = ("perplexity", "parallel", "duckduckgo")
+
+# ترتيبُ الاحتياط حين يفشل المدفوع أو لا يوجد مفتاح. وهو ترتيبُ التوثيق:
+# parallel-free أوّلاً (واجهةٌ رسميّةٌ مرتّبةٌ للنموذج)، ثمّ duckduckgo
+# (كاشطُ HTML تجريبيّ). والتوثيق نفسُه يقول إنّ المجّانيَّ **لا يُكتشَف
+# تلقائياً أبداً**: «Key-free providers … never win auto-detection … used
+# only when you select them explicitly with tools.web.search.provider».
+WEB_SEARCH_FREE = ("parallel-free", "duckduckgo")
 WEB_SEARCH_KEY = "tools.web.search.enabled"
 
 
@@ -660,6 +675,16 @@ def enable_web_search():
                               "@openclaw/" + pid + "-plugin",
                               "--accept-capabilities"], timeout=420)
         rows.append((pid, code == 0, _real_error(err) or (err or "").strip()[:160]))
+    # التوثيقُ يشترطها بعد كلِّ تركيب، وكنتُ أُغفلها:
+    #   docs/tools/duckduckgo-search.md
+    #     openclaw plugins install @openclaw/duckduckgo-plugin
+    #     openclaw gateway restart          ← هذه
+    # والبوّابةُ تُحمّل الإضافاتِ عند إقلاعها، فما رُكّب بعدها لا تعرفه.
+    if gateway_health():
+        gateway_stop()
+        _ok, _why = gateway_start()
+        rows.append(("إعادةُ تشغيل البوّابة (شرطُ التوثيق بعد التركيب)",
+                     _ok, "" if _ok else str(_why)[:160]))
     code, out, err = run(["config", "set", WEB_SEARCH_KEY, "true"], timeout=90)
     rows.append((WEB_SEARCH_KEY, code == 0,
                  _real_error(err) or (err or "").strip()[:160]))
@@ -686,15 +711,20 @@ def enable_web_search():
         # فالمزوّدُ المدفوعُ يُحجز له أقصى كلفةٍ مقدّماً، ورصيدُه لا يحتمل.
         # وduckduckgo مجّانيٌّ بلا مفتاح، فهو الأمانُ حين يفشل المدفوع.
         _why = st.get("error", "")
-        if st.get("chosen") != "duckduckgo":
+        for _free in WEB_SEARCH_FREE:
+            if st.get("chosen") == _free and st.get("ok"):
+                break
             code2, _o2, err2 = run(["config", "set",
-                                    "tools.web.search.provider", "duckduckgo"],
+                                    "tools.web.search.provider", _free],
                                    timeout=90)
-            rows.append(("tools.web.search.provider = duckduckgo", code2 == 0,
+            rows.append(("tools.web.search.provider = " + _free, code2 == 0,
                          _real_error(err2)
-                         or (("المختارُ فشل: " + _why[:110]) if _why
+                         or (("السابقُ فشل: " + _why[:100]) if _why
                              else "لا مفتاحَ يُكتشَف — عُيِّن صراحةً")))
             st = probe_search("اختبار")
+            if st.get("ok"):
+                break
+            _why = st.get("error", "")
     rows.append(("المزوّدُ المختار: " + (st.get("chosen") or "لا شيء"),
                  bool(st.get("ok")), st.get("error", "")))
     return rows
@@ -1175,7 +1205,7 @@ def _cli():
         if not (available() and node_bin()):
             print(why_unavailable(), file=sys.stderr)
             sys.exit(2)
-        print("  تركيبُ مزوّدَي البحثِ من كتالوج أوبن كلاو…")
+        print("  تركيبُ مزوّدي البحثِ من كتالوج أوبن كلاو…")
         for name, ok, why in enable_web_search():
             print(f"    {'✓' if ok else '⚠'} {name}"
                   + ("" if ok else "   " + (why or "تعذّر")))
