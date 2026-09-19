@@ -142,6 +142,75 @@ finally:
 
 print()
 print("=" * 70)
+print(" 3.5) ٤٠٢ «تجاوزَ الميزانية» ⟶ يُنصَّف السقفُ ولا يُترك بلا جواب")
+print("=" * 70)
+# OpenRouter يحجز أقصى كلفةٍ ممكنة مقدّماً (max_tokens × السعر) لا الفعليّة.
+# فسقفٌ عالٍ يُرفَض به الطلبُ ولو كان الجوابُ سطراً. مقيسٌ على جهاز المستخدم:
+#   402 {"reason":"weight_exceeds_budget","message":"…lower max_tokens…"}
+# وهو عطبٌ دخل حين رُفع السقفُ من ٢٠٤٨ لعلاج القطع.
+_402 = json.dumps({"error": {"message": "This request's maximum cost exceeds "
+                             "your available credits. Add credits, or lower "
+                             "max_tokens or prompt size.", "code": 402,
+                             "metadata": {"reason": "weight_exceeds_budget"}}}).encode()
+
+
+class _Err402(urllib.error.HTTPError):
+    def __init__(self):
+        super().__init__("u", 402, "Payment Required", {}, None)
+
+    def read(self):
+        return _402
+
+
+_seen = []
+_realopen2 = urllib.request.urlopen
+_realset2 = S.keysync.get_settings
+try:
+    S.keysync.get_settings = lambda: {
+        "WEAVER_API_KEY": "k", "WEAVER_BASE_URL": "https://x/v1",
+        "WEAVER_MODEL": "m", "WEAVER_PROVIDER": "openrouter"}
+
+    def _open402(req, timeout=None):
+        b = json.loads(req.data.decode())
+        _seen.append(b["max_tokens"])
+        if b["max_tokens"] > 1024:
+            raise _Err402()
+        return _Resp({"choices": [{"message": {"content": "جواب"},
+                                   "finish_reason": "stop"}]})
+    urllib.request.urlopen = _open402
+    r = S._chat_direct("س", effort="max")
+    chk("يُنصَّف السقفُ حتى يمرّ", r.get("reply") == "جواب", r)
+    chk("  -> نزولاً من الأعلى إلى ما يحتمله الرصيد",
+        _seen == [32768, 16384, 8192, 4096, 2048, 1024], _seen)
+
+    _seen.clear()
+
+    def _openHard(req, timeout=None):
+        _seen.append(json.loads(req.data.decode())["max_tokens"])
+        raise _Err402()
+    urllib.request.urlopen = _openHard
+    r = S._chat_direct("س", effort="low")
+    chk("ورصيدٌ لا يحتمل شيئاً ⟶ خطأٌ مفهومٌ لا صمت",
+        "402" in str(r.get("message", "")), r)
+    chk("  -> ولا ينزل تحت ٥١٢", min(_seen) >= 512, _seen)
+
+    _seen.clear()
+
+    def _open500(req, timeout=None):
+        _seen.append(json.loads(req.data.decode())["max_tokens"])
+        e = urllib.error.HTTPError("u", 500, "err", {}, None)
+        e.read = lambda: b"boom"
+        raise e
+    urllib.request.urlopen = _open500
+    r = S._chat_direct("س", effort="medium")
+    chk("وخطأٌ غيرُ ٤٠٢ لا يُعاد بسقفٍ أقلّ (ليس مشكلةَ ميزانية)",
+        len(_seen) == 1 and "500" in str(r.get("message", "")), _seen)
+finally:
+    urllib.request.urlopen = _realopen2
+    S.keysync.get_settings = _realset2
+
+print()
+print("=" * 70)
 print(" 4) بطاقةٌ لكلِّ أداةٍ استدعاها الوكيل — لا «التفكير» وحده")
 print("=" * 70)
 # مُغلَّفُ --json يحمل الجوابَ فقط، فما استدعاه الوكيلُ من أدواتٍ لا يظهر فيه.

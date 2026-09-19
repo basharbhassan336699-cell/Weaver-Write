@@ -545,7 +545,8 @@ def gateway_start(wait=None):
                 # إقلاعةٌ جديدة ⟶ تُضمَن صلاحيةُ البحث مرّةً واحدة. والبوّابةُ
                 # تحمل بيئتَها من لحظة إقلاعها، فهذا أوانُه الصحيح.
                 try:
-                    if not probe_search("اختبار").get("chosen"):
+                    _st = probe_search("اختبار")
+                    if not _st.get("ok") and _st.get("chosen") != "duckduckgo":
                         run(["config", "set", "tools.web.search.enabled",
                              "true"], timeout=60)
                         run(["config", "set", "tools.web.search.provider",
@@ -677,15 +678,25 @@ def enable_web_search():
     # موجوداً فُضِّل مزوّدُه (perplexity برتبة ٥٠ قبل ddg برتبة ١٠٠) ولا
     # نلمس شيئاً.
     st = probe_search("اختبار")
-    if not st.get("chosen"):
-        code2, _o2, err2 = run(["config", "set",
-                                "tools.web.search.provider", "duckduckgo"],
-                               timeout=90)
-        rows.append(("tools.web.search.provider = duckduckgo", code2 == 0,
-                     _real_error(err2) or "لا مفتاحَ يُكتشَف — عُيِّن صراحةً"))
-        st = probe_search("اختبار")
+    if not st.get("chosen") or not st.get("ok"):
+        # وحُلولُ المزوّدِ لا يكفي: قد يُحَلّ ثمّ يفشل. مقيسٌ على جهاز
+        # المستخدم — perplexity حُلّ من مفتاح OpenRouter ثمّ ردّ:
+        #   402 weight_exceeds_budget: "This request's maximum cost exceeds
+        #        your available credits."
+        # فالمزوّدُ المدفوعُ يُحجز له أقصى كلفةٍ مقدّماً، ورصيدُه لا يحتمل.
+        # وduckduckgo مجّانيٌّ بلا مفتاح، فهو الأمانُ حين يفشل المدفوع.
+        _why = st.get("error", "")
+        if st.get("chosen") != "duckduckgo":
+            code2, _o2, err2 = run(["config", "set",
+                                    "tools.web.search.provider", "duckduckgo"],
+                                   timeout=90)
+            rows.append(("tools.web.search.provider = duckduckgo", code2 == 0,
+                         _real_error(err2)
+                         or (("المختارُ فشل: " + _why[:110]) if _why
+                             else "لا مفتاحَ يُكتشَف — عُيِّن صراحةً")))
+            st = probe_search("اختبار")
     rows.append(("المزوّدُ المختار: " + (st.get("chosen") or "لا شيء"),
-                 bool(st.get("usable")), st.get("error", "")))
+                 bool(st.get("ok")), st.get("error", "")))
     return rows
 
 

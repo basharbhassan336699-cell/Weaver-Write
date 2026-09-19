@@ -1807,21 +1807,47 @@ def _chat_direct(message: str, history=None, timeout: int = 120,
             return False
 
     def _post(pl):
-        """نداءٌ واحد. يعيد (بيانات، خطأ)."""
-        _rq = urllib.request.Request(
-            base + "/chat/completions",
-            data=json.dumps(pl).encode("utf-8"), headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(_rq, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8")), None
-        except urllib.error.HTTPError as e:
+        """نداءٌ واحد. يعيد (بيانات، خطأ).
+
+        ويتدبّر ٤٠٢ «تجاوزَ الميزانية»: OpenRouter يحجز **أقصى كلفةٍ ممكنة**
+        مقدّماً — أي `max_tokens` مضروباً في سعر النموذج — لا الكلفةَ
+        الفعليّة. فسقفٌ عالٍ يُرفَض الطلبُ به ولو كان الجوابُ سطراً. مقيسٌ
+        على جهاز المستخدم:
+            402 {"message":"This request's maximum cost exceeds your available
+                 credits. Add credits, or lower max_tokens or prompt size.",
+                 "metadata":{"reason":"weight_exceeds_budget"}}
+        وهذا عطبٌ أدخلتُه حين رفعتُ السقفَ من ٢٠٤٨ إلى ٨١٩٢ فأكثر لعلاج
+        القطع. فيُنصَّف السقفُ ويُعاد، مرّاتٍ معدودة — فالرصيدُ الضئيلُ يُجيب
+        بجوابٍ أقصرَ خيرٌ من ألّا يُجيب. وحلقةُ الإكمال تُتمّ ما نقص.
+        """
+        _p = dict(pl)
+        # ٨ محاولاتٍ تكفي للنزول من أعلى سقفٍ (٣٢٧٦٨) إلى أدناه (٥١٢).
+        for _try in range(8):
+            _rq = urllib.request.Request(
+                base + "/chat/completions",
+                data=json.dumps(_p).encode("utf-8"), headers=headers,
+                method="POST")
             try:
-                detail = e.read().decode("utf-8")[:400]
-            except Exception:
-                detail = str(e)
-            return None, {"error": "http_error", "message": f"{e.code}: {detail}"}
-        except Exception as e:
-            return None, {"error": "request_failed", "message": str(e)}
+                with urllib.request.urlopen(_rq, timeout=timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8")), None
+            except urllib.error.HTTPError as e:
+                try:
+                    detail = e.read().decode("utf-8")[:400]
+                except Exception:
+                    detail = str(e)
+                _mt = int(_p.get("max_tokens") or 0)
+                if (e.code == 402 and _mt > 512
+                        and ("weight_exceeds_budget" in detail
+                             or "maximum cost" in detail
+                             or "lower max_tokens" in detail)):
+                    _p["max_tokens"] = max(512, _mt // 2)
+                    continue
+                return None, {"error": "http_error",
+                              "message": f"{e.code}: {detail}"}
+            except Exception as e:
+                return None, {"error": "request_failed", "message": str(e)}
+        return None, {"error": "http_error",
+                      "message": "402: الرصيدُ لا يحتمل حتى أدنى سقف"}
 
     # Some flash providers return HTTP 200 with EMPTY content under concurrent
     # load (a silent throttle) instead of a 429. Retry once on an empty reply.
