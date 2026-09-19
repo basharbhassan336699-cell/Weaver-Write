@@ -83,6 +83,8 @@ OUR_PORT = 18889            # ومنفذُنا، بعيداً عنه وعن من
 #
 # ولا يُخمَّن المزوّد: يُقرأ من `WEAVER_PROVIDER` إن صُرّح به، وإلّا فمن
 # اسم المضيف في `WEAVER_BASE_URL` — وهو دليلٌ لا حدس.
+# خريطةٌ احتياطيّةٌ صغيرة — تُقرأ من المحرّك أوّلاً (`key_env_name`)،
+# وهذه تُستعمل فقط حين يتعذّر النداء.
 _PROVIDER_ENV = {
     "openrouter": "OPENROUTER_API_KEY", "deepseek": "DEEPSEEK_API_KEY",
     "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY",
@@ -172,19 +174,34 @@ def model_id():
         return ""
 
 
+def key_env_name(provider=None):
+    """اسمُ متغيّرِ المفتاح لمزوّدك — بسؤال المحرّك أوّلاً.
+
+        config-provider-contract-BdOif1pq.mjs  resolveHermesProviderApiKeyEnv
+    يعرفها للمزوّدين كلِّهم ويشتقُّ ما لا يُسمّيه صراحةً. وخريطتُنا اليدويّةُ
+    احتياطٌ حين يتعذّر النداء."""
+    prov = (provider or provider_id() or "").lower()
+    if not prov:
+        return ""
+    for r in auth_catalog():
+        if str(r.get("providerId", "")).lower() == prov and r.get("envVar"):
+            return str(r["envVar"])
+    return _PROVIDER_ENV.get(prov, "")
+
+
 def credentials():
     """{اسمُ المتغيّر: المفتاح} كما يفهمها المحرّك — أو {}."""
     try:
         key = _setting("WEAVER_API_KEY")
-        prov = provider_id()
-        if not key or not prov:
+        name = key_env_name()
+        if not (key and name):
             return {}
-        return {_PROVIDER_ENV[prov]: key}
+        return {name: key}
     except Exception:
         return {}
 
 
-def engine_env(extra=None):
+def engine_env(extra=None, no_credentials=False):
     """بيئةُ تشغيل المحرّك — معزولةٌ تماماً عن أيّ نسخةٍ أخرى على الجهاز.
 
     ثلاثُ عزلات، وكلُّها بآليّات المحرّك نفسِه لا بحيلٍ من عندنا:
@@ -226,7 +243,7 @@ def engine_env(extra=None):
     env.setdefault("OPENCLAW_STATE_DIR", _STATE_DIR)                   # ③
     env.setdefault("OPENCLAW_GATEWAY_PORT", str(OUR_PORT))
     env["HOME"] = _ENGINE_HOME
-    for _k, _v in credentials().items():      # مفتاحُك، باسمٍ يفهمه المحرّك
+    for _k, _v in ({} if no_credentials else credentials()).items():
         env.setdefault(_k, _v)
     for k, v in (extra or {}).items():
         env[str(k)] = str(v)
@@ -562,8 +579,19 @@ def gateway_start(wait=None):
         try:
             # مفصولةٌ عن هذه العملية: تبقى حيّةً بعد انتهاء الطلب، وتُهمل
             # إشارةَ المقاطعة التي تصل الأبَ (start_new_session).
+            # `--allow-unconfigured` تُقلعها بلا إنفاذ `gateway.mode=local`،
+            # فتُولّد رمزاً لحظياً وتتجاهل المحفوظ، فيُرفض كلُّ أمرٍ بعدها:
+            #   «unauthorized: gateway token mismatch»
+            # فلا تُستعمل إلّا إن لم يكن الوضعُ مضبوطاً بعد.
+            _args = [nb, ENTRY, "gateway", "run"]
+            try:
+                _c, _o, _ = run(["config", "get", "gateway.mode"], timeout=60)
+                if not (_c == 0 and "local" in (_o or "")):
+                    _args.append("--allow-unconfigured")
+            except Exception:
+                _args.append("--allow-unconfigured")
             subprocess.Popen(
-                [nb, ENTRY, "gateway", "run", "--allow-unconfigured"],
+                _args,
                 stdout=_log, stderr=_log, stdin=subprocess.DEVNULL,
                 cwd=_ROOT, env=engine_env(), start_new_session=True)
         except Exception as e:
@@ -576,6 +604,7 @@ def gateway_start(wait=None):
                 try:
                     # ضبطُ النموذج أوّلاً: بلا `agents.defaults.model.primary`
                     # يسقط المحرّكُ إلى `openai/gpt-5.6-sol` فتفشل كلُّ نوبة.
+                    configure_runtime()
                     configure_model()
                 except Exception:
                     pass
@@ -600,39 +629,81 @@ def gateway_start(wait=None):
         return False, f"لم تسمع خلال {wait} ث — انظر {GATEWAY_LOG}"
 
 
+def _gateway_pids():
+    """أرقامُ عمليّاتِ البوّابة الحيّة — بالقفلِ وبالاسمِ معاً.
+
+    القفلُ وحده لا يكفي: قيس أنّه يقول `pid 1688` والعمليةُ الحيّةُ `2712`،
+    فإطفاءٌ بالقفلِ يقتل ميتاً ويترك الحيّ. والعمليةُ تُعيد تسميةَ نفسِها
+    `openclaw-gateway`، فيُبحَث بالاسم أيضاً. وتُستثنى عمليتُنا."""
+    out, me = [], os.getpid()
+    d = _gateway_lock()
+    pid = d.get("pid")
+    if isinstance(pid, int) and pid > 1 and pid != me:
+        try:
+            os.kill(pid, 0)          # أحيّةٌ؟ لا تُقتل
+            out.append(pid)
+        except Exception:
+            pass
+    try:
+        ps = subprocess.run(["ps", "-eo", "pid=,comm="], capture_output=True,
+                            text=True, timeout=30)
+        for ln in (ps.stdout or "").splitlines():
+            ln = ln.strip()
+            if not ln:
+                continue
+            _p, _, _c = ln.partition(" ")
+            # `comm` مقطوعٌ عند ١٥ حرفاً في لينكس، فاسمُ العملية يصل
+            # «openclaw-gatewa» — بلا الياء والهاء. مقيسٌ لا مُخمَّن:
+            #   $ ps -eo pid=,comm=  ⟶  2712 openclaw-gatewa
+            # فكانت مطابقتي تطلب «gateway» كاملةً فلا تجد شيئاً، ويبقى
+            # الحيُّ يعمل بينما أقتل ما في القفلِ الميت.
+            _cl = _c.lower()
+            if "openclaw" not in _cl or "gatew" not in _cl:
+                continue
+            try:
+                n = int(_p)
+            except ValueError:
+                continue
+            if n != me and n not in out:
+                out.append(n)
+    except Exception:
+        pass
+    return out
+
+
 def gateway_stop():
-    """أطفئ البوّابة — بإشارةٍ إلى العملية التي يسمّيها قفلُه هو.
+    """أطفئ البوّابة — كلَّ عمليّاتها، لا ما يقوله قفلٌ قد يكون بائتاً.
 
     ولا `gateway stop`: هي إدارةُ خدمةٍ (systemd/launchd)، وترفض أصلاً حين
     يكون `OPENCLAW_STATE_DIR` غيرَ الافتراضيّ — وهو حالُنا دائماً:
         «service management skipped: non-default state dir or config path»
 
     ولا `pkill -f`: نمطُها يُطابق سطرَ الأوامر كاملاً — بما فيه سطرُ `pkill`
-    نفسِه ومَن ناداه — فتقتل الصَّدفةَ التي تُشغّلها. مقيسٌ لا مُخمَّن: جرّبتُها
-    فقتلت جلستي.
+    نفسِه — فتقتل الصَّدفةَ التي تُشغّلها. مقيسٌ: جرّبتُها فقتلت جلستي.
 
-    والعمليةُ تُعيد تسميةَ نفسِها إلى `openclaw-gateway`، فلا يُجدي البحثُ عن
-    سطر التشغيل. فيُقرأ رقمُها من القفل — وهو مصدرُ الحقيقة عند المحرّك.
-
-    وإطفاءٌ بإشارةٍ لطيفة (SIGTERM) كي تُنظّف قفلَها بنفسها؛ فالقتلُ القاسي
-    يُخلّف قفلاً بائتاً يمنع كلَّ إقلاعٍ بعده:
-        «Another gateway (pid …) already owns this state directory»"""
-    d = _gateway_lock()
-    pid = d.get("pid")
-    if not isinstance(pid, int) or pid <= 1 or pid == os.getpid():
-        return (not gateway_health()), "لا قفلَ صالحاً"
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
+    وإطفاءٌ بإشارةٍ لطيفة (SIGTERM) كي تُنظّف قفلَها بنفسها."""
+    pids = _gateway_pids()
+    if not pids:
         return (not gateway_health()), "لم تكن تعمل"
-    except Exception as e:
-        return False, f"{type(e).__name__}: {str(e)[:120]}"
+    for n in pids:
+        try:
+            os.kill(n, signal.SIGTERM)
+        except Exception:
+            pass
     _t0 = time.time()
     while time.time() - _t0 < 25:
         if not gateway_health():
-            return True, f"أُطفئت في {time.time() - _t0:.1f} ث"
+            return True, f"أُطفئت ({len(pids)} عملية) في {time.time()-_t0:.1f} ث"
         time.sleep(1)
-    return False, "لم تستجب لـSIGTERM خلال ٢٥ ث"
+    # عنيدةٌ: إشارةٌ حاسمة، ثمّ يُنظَّف القفلُ البائتُ كي لا يمنع الإقلاع
+    for n in _gateway_pids():
+        try:
+            os.kill(n, signal.SIGKILL)
+        except Exception:
+            pass
+    time.sleep(2)
+    return (not gateway_health()), "أُطفئت قسراً" if not gateway_health() \
+        else "لم تستجب"
 
 
 def gateway_state():
@@ -1139,6 +1210,82 @@ def run_tty(args, timeout=None):
 # معماريّتُه `auth.profiles`.
 #
 # وأسماءُ الاختيار والأعلام مقروءةٌ من `onboard --help` لا مُخمَّنة.
+PROBE_AUTH = os.path.join(_ROOT, "engines", "weaver-core", "probe_auth.mjs")
+
+
+_AUTH_CACHE = {"rows": None}
+
+
+def auth_catalog(refresh=False):
+    """كتالوجُ مزوّدي الاعتماد — من المحرّك، لا من قائمةٍ عندنا.
+
+    المحرّكُ يبنيها من بيانات إضافاته:
+        auth-choice-options-tnlfLecZ.mjs → buildAuthChoiceGroups
+    فمن رُكّبت إضافتُه ظهر، ومن جاء بترقيةٍ ظهر — بلا أن نلمس سطراً.
+    مقيس: ٨٣ خياراً لـ٥٧ مزوّداً، مقابل ١٤ كنتُ أكتبها يدوياً.
+
+    يعيد [{choice,label,providerId,group,hint}] أو []."""
+    # يُقلع node في كلِّ نداء (~٢ ث)، و`auth_choice` و`key_env_name` تُناديانه
+    # مراراً. فيُقرأ مرّةً ويُحفَظ في الذاكرة — والكتالوجُ لا يتغيّر إلّا
+    # بتركيب إضافةٍ أو ترقيةٍ، وعندها `--providers refresh`.
+    if _AUTH_CACHE["rows"] is not None and not refresh:
+        return _AUTH_CACHE["rows"]
+    nb = node_bin()
+    if not (nb and os.path.isfile(PROBE_AUTH)):
+        return []
+    try:
+        # بيئةٌ بلا اعتماد: `engine_env()` تنادي `credentials()` التي تنادي
+        # `key_env_name()` التي تنادي هذه الدالّة — دورةٌ لا تنتهي، أدخلتُها
+        # للتوّ وكشفها تعليقُ الأمر. وقراءةُ الكتالوج لا تحتاج مفتاحاً أصلاً.
+        _e = engine_env(no_credentials=True)
+        p = subprocess.run([nb, PROBE_AUTH], capture_output=True, text=True,
+                           timeout=180, cwd=_ROOT, env=_e)
+        out = (p.stdout or "").strip()
+        i, j = out.find("["), out.rfind("]")
+        if i < 0 or j < i:
+            return []
+        import json as _j
+        d = _j.loads(out[i:j + 1])
+        _AUTH_CACHE["rows"] = d if isinstance(d, list) else []
+        return _AUTH_CACHE["rows"]
+    except Exception:
+        return []
+
+
+def auth_choice(provider=None):
+    """خيارُ الاعتماد الذي يناسب مزوّدَك — بسؤال المحرّك أوّلاً.
+
+    الترتيب: كتالوجُ المحرّك (وفيه ٥٧ مزوّداً) ثمّ الخريطةُ اليدويّةُ
+    احتياطاً حين يتعذّر النداء. ويُفضَّل ما كان بمفتاحٍ (`*-api-key`) لأنّه
+    ما نملكه — لا OAuth الذي يحتاج متصفّحاً."""
+    prov = (provider or provider_id() or "").lower()
+    if not prov:
+        return ""
+    rows = [r for r in auth_catalog()
+            if str(r.get("providerId", "")).lower() == prov]
+    if rows:
+        keyed = [r for r in rows if "api-key" in str(r.get("choice", ""))
+                 or str(r.get("choice", "")) == "apiKey"]
+        pick = (keyed or rows)[0]
+        return str(pick.get("choice") or "")
+    return _AUTH_CHOICE.get(prov, "")
+
+
+def auth_flag(choice):
+    """عَلَمُ سطر الأوامر لخيارِ اعتماد: `--<choice>` — كما في `onboard --help`.
+
+    مقيس: `openrouter-api-key` ⟶ `--openrouter-api-key`، و`apiKey`
+    (أنثروبيك) ⟶ `--anthropic-api-key` لأنّ الخيارَ عامٌّ والعَلَمَ باسم
+    المزوّد."""
+    c = str(choice or "")
+    if not c:
+        return ""
+    if c in ("apiKey", "token", "setup-token"):
+        return ""          # عامٌّ: يحتاج --token-provider، لا عَلَماً باسمه
+    return "--" + c
+
+
+# خريطةٌ احتياطيّةٌ صغيرة — تُستعمل فقط حين يتعذّر نداءُ المحرّك.
 _AUTH_CHOICE = {
     "openrouter": "openrouter-api-key", "deepseek": "deepseek-api-key",
     "openai": "openai-api-key", "anthropic": "anthropic-api-key",
@@ -1169,14 +1316,20 @@ def onboard(force=False):
     يعيد (نجح، سبب). لا يرفع استثناءً."""
     prov = provider_id()
     key = _setting("WEAVER_API_KEY")
-    choice = _AUTH_CHOICE.get(prov)
-    if not (prov and key and choice):
-        return False, ("لا مزوّدَ/مفتاحَ في config/.env" if not (prov and key)
-                       else "مزوّدٌ لا يعرفه معالجُ التهيئة: " + prov)
+    choice = auth_choice(prov)
+    flag = auth_flag(choice)
+    if not (prov and key):
+        return False, "لا مزوّدَ/مفتاحَ في config/.env"
+    if not (choice and flag):
+        _known = sorted({r.get("providerId") for r in auth_catalog()
+                         if r.get("providerId")})
+        return False, ("مزوّدٌ لا يعرفه المحرّك: " + prov
+                       + ("  ·  يعرف " + str(len(_known)) + " مزوّداً"
+                          if _known else ""))
     if onboarded() and not force:
         return True, "سبق أن جرى (wizard.lastRunAt)"
     args = ["onboard", "--non-interactive", "--accept-risk",
-            "--auth-choice", choice, "--" + choice, key,
+            "--auth-choice", choice, flag, key,
             "--gateway-port", str(OUR_PORT),
             "--skip-channels", "--skip-daemon", "--skip-health",
             "--skip-hooks", "--no-install-daemon"]
@@ -1234,6 +1387,60 @@ def configure_model():
                                 "env.vars." + env_name, key], timeout=90)
         rows.append(("env.vars." + env_name + " = ***" + key[-4:],
                      code2 == 0, _real_error(err2)))
+    return rows
+
+
+def configure_runtime():
+    """ضبطُ ما يجب أن يتّفق عليه الإعدادُ والبيئة — لا أن يختلفا.
+
+    عطبٌ كشفه `browser doctor`: `gateway.port` غيرُ مضبوطٍ في الإعداد،
+    فالمحرّكُ يشتقُّ منفذاً افتراضياً للبروفايل (٢١٣٤١ عندنا)، بينما بيئتُنا
+    تُشغّل البوّابةَ على ١٨٨٨٩. فكلُّ أمرٍ يقرأ الإعدادَ يقصد منفذاً خاوياً:
+        FAIL gateway: Gateway not reachable at ws://127.0.0.1:21341
+    فيُكتب المنفذُ في الإعداد أيضاً، فيتّفقان.
+
+    والمتصفّحُ: docs/tools/browser/setup.md يشترط **الاثنين معاً**:
+        «Defaults need both `plugins.entries.browser.enabled` **and**
+         `browser.enabled=true`»
+    وهو متصفّحٌ معزولٌ للوكيل، لا متصفّحُك (docs/tools/browser.md)."""
+    rows = []
+    # رمزُ البوّابة: بلا رمزٍ محفوظٍ تُولّد البوّابةُ رمزاً لحظياً عند كلِّ
+    # إقلاع — ويقولها سجلُّها حرفاً:
+    #   «auth token was missing. Generated a runtime token for this startup
+    #    without changing config; restart will generate a different token.
+    #    Persist one with `openclaw config set gateway.auth.token <token>`.»
+    # فكلُّ أمرٍ يتّصل بها بعد ذلك يُرفَض:
+    #   «unauthorized: device token mismatch»
+    # فيُولَّد مرّةً ويُحفَظ. ولا يُطبع.
+    try:
+        _c, _o, _ = run(["config", "get", "gateway.auth.token"], timeout=60)
+        _tok = (_o or "").strip().strip('"')
+        if not _tok or _tok in ("null", "undefined"):
+            import secrets as _s
+            _tok = _s.token_hex(24)
+            _c2, _o2, _e2 = run(["config", "set", "gateway.auth.token", _tok],
+                                timeout=90)
+            rows.append(("رمزُ البوّابة — gateway.auth.token (مُولَّدٌ ومحفوظ)",
+                         _c2 == 0, _real_error(_e2)))
+    except Exception:
+        pass
+    for path, val, what in (
+            ("gateway.port", str(OUR_PORT), "منفذُ البوّابة"),
+            ("gateway.mode", "local", "وضعُ البوّابة"),
+            ("gateway.auth.mode", "token", "وضعُ اعتماد البوّابة"),
+            ("plugins.entries.browser.enabled", "true", "إضافةُ المتصفّح"),
+            ("browser.enabled", "true", "المتصفّح"),
+            # بلا هذا يرفض كروم الإقلاعَ في بيئةٍ محدودة الصلاحيات — وهي
+            # حالُ Termux وحالُ الجذر. والمحرّكُ نفسُه يقولها عند الفشل:
+            #   «If running in a container or as root, try setting
+            #    browser.noSandbox: true»
+            ("browser.noSandbox", "true", "كروم بلا صندوقٍ رمليّ"),
+            # لا يُرسَل شيءٌ عنك إلى الشبكة بلا علمك. مقيس: المحرّكُ حاول
+            # بلوغَ telemetry.openclaw.ai في تشغيلةٍ عادية.
+            ("telemetry.enabled", "false", "التتبّعُ الخارجيّ (مُطفأ)")):
+        code, _o, err = run(["config", "set", path, val], timeout=90)
+        rows.append((what + " — " + path + " = " + val, code == 0,
+                     _real_error(err)))
     return rows
 
 
@@ -1430,6 +1637,25 @@ def _cli():
                       "\n      python3 -m pipeline.weaver_core --gateway stop"
                       "\n      python3 -m pipeline.weaver_core --gateway start")
         return
+    if argv[:1] == ["--providers"]:
+        rows = auth_catalog(refresh=("refresh" in argv))
+        if not rows:
+            print("  تعذّرت قراءةُ الكتالوج من المحرّك")
+            return
+        _by = {}
+        for r in rows:
+            _by.setdefault(r.get("providerId") or "?", []).append(r)
+        print(f"  {len(rows)} خيارَ اعتماد · {len(_by)} مزوّداً"
+              "   (من المحرّك، لا من قائمةٍ عندنا)\n")
+        _mine = provider_id()
+        for pid in sorted(_by):
+            _mark = " ←" if pid == _mine else "  "
+            print(f"{_mark} {pid:<22} "
+                  + ", ".join(r["choice"] for r in _by[pid])[:74])
+        if _mine:
+            print("\n  مزوّدُك: " + _mine + "  ·  الخيار: "
+                  + (auth_choice() or "غيرُ معروف"))
+        return
     if argv[:1] == ["--onboard"]:
         _force = "--force" in argv
         print("  تهيئةُ أوبن كلاو الكاملة (auth · models · gateway ·"
@@ -1438,7 +1664,7 @@ def _cli():
         print(("  ✓ " if ok else "  ⚠ ") + str(why))
         if ok:
             # المعالجُ يضع `openrouter/auto`؛ نثبّت نموذجَك بعينه.
-            for n, k, w in configure_model():
+            for n, k, w in list(configure_runtime()) + list(configure_model()):
                 print(("    ✓ " if k else "    ⚠ ") + n
                       + ("" if k else "   " + str(w)[:140]))
             if gateway_health():
@@ -1456,7 +1682,7 @@ def _cli():
         print("\n  للضبط: python3 -m pipeline.weaver_core --model set")
         return
     if argv == ["--model", "set"]:
-        for n, ok, why in configure_model():
+        for n, ok, why in list(configure_runtime()) + list(configure_model()):
             print(("  ✓ " if ok else "  ⚠ ") + n
                   + ("" if ok else "   " + str(why)[:160]))
         if gateway_health():

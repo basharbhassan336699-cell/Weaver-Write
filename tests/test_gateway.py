@@ -328,6 +328,53 @@ finally:
 
 print()
 print("=" * 70)
+print(" 11) المزوّدون من المحرّك · والمتصفّح · واتّفاقُ المنفذ")
+print("=" * 70)
+_r7 = (W.auth_catalog, W.run)
+try:
+    W.auth_catalog = lambda refresh=False: [
+        {"choice": "openrouter-oauth", "providerId": "openrouter",
+         "envVar": "OPENROUTER_API_KEY"},
+        {"choice": "openrouter-api-key", "providerId": "openrouter",
+         "envVar": "OPENROUTER_API_KEY"},
+        {"choice": "venice-api-key", "providerId": "venice"},
+        {"choice": "apiKey", "providerId": "anthropic",
+         "envVar": "ANTHROPIC_API_KEY"}]
+    chk("يُفضَّل الخيارُ بمفتاحٍ لا OAuth (لا متصفّحَ عندنا)",
+        W.auth_choice("openrouter") == "openrouter-api-key",
+        W.auth_choice("openrouter"))
+    chk("ويعرف مزوّداً لم تكن خريطتُنا اليدويّةُ تعرفه",
+        W.auth_choice("venice") == "venice-api-key"
+        and "venice" not in W._AUTH_CHOICE, W.auth_choice("venice"))
+    chk("واسمُ متغيّرِ المفتاح من المحرّك",
+        W.key_env_name("anthropic") == "ANTHROPIC_API_KEY")
+    chk("والخيارُ العامُّ لا عَلَمَ باسمه", W.auth_flag("apiKey") == "")
+    chk("وذو الاسم له عَلَمُه",
+        W.auth_flag("venice-api-key") == "--venice-api-key")
+
+    _w = []
+
+    def _run8(args, timeout=180, input_text=None, cwd=None):
+        _w.append(list(args))
+        if list(args)[:2] == ["config", "get"]:
+            return 0, '"x"', ""
+        return 0, "", ""
+    W.run = _run8
+    rows = W.configure_runtime()
+    _set = {a[2]: a[3] for a in _w if a[:2] == ["config", "set"]}
+    chk("منفذُ البوّابة يُكتب في الإعداد (وإلّا قصدت الأوامرُ منفذاً آخر)",
+        _set.get("gateway.port") == str(W.OUR_PORT), _set.get("gateway.port"))
+    chk("والمتصفّحُ يحتاج المفتاحين معاً (شرطُ التوثيق)",
+        _set.get("plugins.entries.browser.enabled") == "true"
+        and _set.get("browser.enabled") == "true", _set)
+    chk("  -> وبلا صندوقٍ رمليّ (شرطُ Termux والجذر)",
+        _set.get("browser.noSandbox") == "true")
+    chk("والتتبّعُ الخارجيُّ يُطفأ", _set.get("telemetry.enabled") == "false")
+finally:
+    (W.auth_catalog, W.run) = _r7
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)
