@@ -1117,6 +1117,75 @@ def run_tty(args, timeout=None):
         return 1
 
 
+# ── التهيئة الكاملة: أمرُ أوبن كلاو نفسُه ────────────────────────────────
+#
+# «openclaw onboard — Guided setup for auth, models, Gateway, workspace,
+#  channels, and skills»
+#
+# أمرٌ واحدٌ يفعل كلَّ ما كنتُ أبنيه قطعةً قطعة. وما يكتبه — مقيسٌ على
+# تشغيلةٍ حقيقيّةٍ في مجلّدٍ معزول:
+#
+#   auth.profiles.<مزوّد>:default.{provider,mode}   ← نظامُ اعتمادِه هو
+#   agents.defaults.model.primary                   ← النموذج
+#   agents.defaults.models.<ref>.alias              ← اسمٌ مقروء
+#   agents.entries.main.{name,workspace,agentDir,identity}
+#   plugins.entries.<مزوّد>.enabled = true
+#   gateway.{mode,auth.mode,auth.token,port,bind}
+#   tools.profile = coding
+#   skills.install.nodeManager = npm
+#   wizard.lastRun*                                 ← فلا يُعاد بلا داع
+#
+# وكنتُ أكتب المفتاحَ في `env.vars` — تعمل، لكنّها ليست معماريّتَه.
+# معماريّتُه `auth.profiles`.
+#
+# وأسماءُ الاختيار والأعلام مقروءةٌ من `onboard --help` لا مُخمَّنة.
+_AUTH_CHOICE = {
+    "openrouter": "openrouter-api-key", "deepseek": "deepseek-api-key",
+    "openai": "openai-api-key", "anthropic": "anthropic-api-key",
+    "groq": "groq-api-key", "mistral": "mistral-api-key",
+    "google": "gemini-api-key", "xai": "xai-api-key",
+    "cerebras": "cerebras-api-key", "together": "together-api-key",
+    "fireworks": "fireworks-api-key", "kimi": "moonshot-api-key",
+    "minimax": "minimax-api-key", "zai": "zai-api-key",
+}
+
+
+def onboarded():
+    """أسبق أن جرى المعالجُ الكامل؟ (`wizard.lastRunAt` يكتبه هو)"""
+    try:
+        code, out, _ = run(["config", "get", "wizard.lastRunAt"], timeout=60)
+        return code == 0 and len((out or "").strip().strip('"')) > 8
+    except Exception:
+        return False
+
+
+def onboard(force=False):
+    """شغّل تهيئةَ أوبن كلاو الكاملة بمفتاحك — بلا أسئلة.
+
+    `--non-interactive` يشترط `--accept-risk` (يقوله الأمرُ نفسُه: «required
+    for --non-interactive»). و`--skip-daemon` لأنّ تثبيتَ الخدمة يحتاج
+    systemd/launchd ولا وجودَ لهما على Termux — والبوّابةُ نُديرها نحن.
+
+    يعيد (نجح، سبب). لا يرفع استثناءً."""
+    prov = provider_id()
+    key = _setting("WEAVER_API_KEY")
+    choice = _AUTH_CHOICE.get(prov)
+    if not (prov and key and choice):
+        return False, ("لا مزوّدَ/مفتاحَ في config/.env" if not (prov and key)
+                       else "مزوّدٌ لا يعرفه معالجُ التهيئة: " + prov)
+    if onboarded() and not force:
+        return True, "سبق أن جرى (wizard.lastRunAt)"
+    args = ["onboard", "--non-interactive", "--accept-risk",
+            "--auth-choice", choice, "--" + choice, key,
+            "--gateway-port", str(OUR_PORT),
+            "--skip-channels", "--skip-daemon", "--skip-health",
+            "--skip-hooks", "--no-install-daemon"]
+    code, out, err = run(args, timeout=600)
+    if code != 0:
+        return False, _real_error(err) or _real_error(out) or "تعذّرت التهيئة"
+    return True, "تمّت"
+
+
 def model_ref():
     """مرجعُ النموذج كما يكتبه المحرّك: `<مزوّد>/<نموذج>`.
 
@@ -1360,6 +1429,22 @@ def _cli():
                       "\n    أو ضَع مفتاحَك ثمّ أعِد تشغيل البوّابة:"
                       "\n      python3 -m pipeline.weaver_core --gateway stop"
                       "\n      python3 -m pipeline.weaver_core --gateway start")
+        return
+    if argv[:1] == ["--onboard"]:
+        _force = "--force" in argv
+        print("  تهيئةُ أوبن كلاو الكاملة (auth · models · gateway ·"
+              " workspace · skills)…")
+        ok, why = onboard(force=_force)
+        print(("  ✓ " if ok else "  ⚠ ") + str(why))
+        if ok:
+            # المعالجُ يضع `openrouter/auto`؛ نثبّت نموذجَك بعينه.
+            for n, k, w in configure_model():
+                print(("    ✓ " if k else "    ⚠ ") + n
+                      + ("" if k else "   " + str(w)[:140]))
+            if gateway_health():
+                gateway_stop()
+            _g, _w = gateway_start()
+            print("    " + ("✓ البوّابة حيّة" if _g else "⚠ " + str(_w)[:120]))
         return
     if argv == ["--model"]:
         print("  في نظامك : " + (model_ref() or "لا شيء (config/.env)"))

@@ -149,9 +149,16 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 # والشكلُ موثَّقٌ في docs/providers/openrouter.md:
 #     { env: { vars: { OPENROUTER_API_KEY: … } },
 #       agents: { defaults: { model: { primary: "openrouter/…" } } } }
-echo "  ⚙ نموذجُك في المحرّك…"
-( cd "$ROOT" && WEAVER_NODE="$NODE" python3 -m pipeline.weaver_core --model set 2>&1 \
-  | sed 's/^/    /' ) || echo "    ⚠ تعذّر ضبطُ النموذج"
+# ── تهيئةُ أوبن كلاو الكاملة ──────────────────────────────────────────────
+#
+# «openclaw onboard — Guided setup for auth, models, Gateway, workspace,
+#  channels, and skills» — أمرُه هو، يفعل في نداءٍ واحدٍ ما كنّا نبنيه
+# قطعةً قطعة: ملفَّ اعتمادٍ (auth.profiles)، ووكيلاً باسمٍ ومساحةِ عمل،
+# وتفعيلَ إضافةِ المزوّد، وإعدادَ البوّابة، وملفَّ الأدوات، والمهارات.
+# ويثبّت الجسرُ بعده نموذجَك بعينه فوق `openrouter/auto`.
+echo "  ⚙ تهيئةُ المحرّك بمفتاحك (auth · models · gateway · workspace)…"
+( cd "$ROOT" && WEAVER_NODE="$NODE" python3 -m pipeline.weaver_core --onboard 2>&1 \
+  | sed 's/^/    /' ) || echo "    ⚠ تعذّرت التهيئة"
 
 echo "  ⌕ بحثُ الويب (إضافاتُ أوبن كلاو الرسميّة)…"
 for _P in duckduckgo perplexity; do

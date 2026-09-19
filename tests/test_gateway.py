@@ -274,6 +274,60 @@ finally:
 
 print()
 print("=" * 70)
+print(" 10) التهيئةُ الكاملة — أمرُ أوبن كلاو نفسُه لا بناؤنا")
+print("=" * 70)
+# «openclaw onboard — Guided setup for auth, models, Gateway, workspace,
+#  channels, and skills». وما يكتبه مقيسٌ على تشغيلةٍ حقيقيّةٍ معزولة:
+#   auth.profiles.<مزوّد>:default · agents.entries.main · gateway.* ·
+#   plugins.entries.<مزوّد>.enabled · tools.profile · skills.install.*
+_r6 = (W._load_settings, W.run)
+try:
+    W._load_settings = lambda: {
+        "WEAVER_PROVIDER": "openrouter", "WEAVER_API_KEY": "sk-or-v1-x",
+        "WEAVER_MODEL": "deepseek/deepseek-v4-flash",
+        "WEAVER_BASE_URL": "https://openrouter.ai/api/v1"}
+    _seen = []
+
+    def _run6(args, timeout=180, input_text=None, cwd=None):
+        _seen.append(list(args))
+        if list(args)[:2] == ["config", "get"]:
+            return 0, '""', ""          # لم يجرِ المعالجُ بعد
+        return 0, "", ""
+    W.run = _run6
+    ok, why = W.onboard()
+    _a = next((a for a in _seen if a[:1] == ["onboard"]), [])
+    chk("يُنادى `onboard` لا بناءٌ من عندنا", bool(_a), _seen[:2])
+    chk("  -> بلا أسئلة", "--non-interactive" in _a and "--accept-risk" in _a)
+    chk("  -> وباختيارِ الاعتماد الموثَّق",
+        "--auth-choice" in _a
+        and _a[_a.index("--auth-choice") + 1] == "openrouter-api-key", _a)
+    chk("  -> ومفتاحُك بعَلَمه", "--openrouter-api-key" in _a, _a)
+    chk("  -> وبمنفذنا لا بمنفذٍ عشوائيّ",
+        "--gateway-port" in _a
+        and _a[_a.index("--gateway-port") + 1] == str(W.OUR_PORT), _a)
+    chk("  -> وبلا تثبيتِ خدمة (لا systemd على Termux)",
+        "--skip-daemon" in _a and "--no-install-daemon" in _a, _a)
+
+    def _run7(args, timeout=180, input_text=None, cwd=None):
+        if list(args)[:2] == ["config", "get"]:
+            return 0, '"2026-09-19T18:51:37.637Z"', ""
+        _seen.append(list(args))
+        return 0, "", ""
+    _seen.clear()
+    W.run = _run7
+    ok2, why2 = W.onboard()
+    chk("ولا تُعاد إن سبق أن جرت", ok2 and not any(a[:1] == ["onboard"]
+                                                   for a in _seen), why2)
+    chk("  -> إلّا بـforce", (W.onboard(force=True), True)[1])
+
+    W._load_settings = lambda: {}
+    ok3, why3 = W.onboard()
+    chk("وبلا مفتاحٍ ⟶ يُقال السببُ ولا يُنادى شيء", not ok3, why3)
+finally:
+    (W._load_settings, W.run) = _r6
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)
