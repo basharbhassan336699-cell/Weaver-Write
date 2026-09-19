@@ -38,7 +38,8 @@ async function loadEngineConfig() {
 }
 
 const out = { providers: [], configured: [], chosen: "", usable: false,
-              ok: false, kind: "", count: 0, first: "", error: "" };
+              ok: false, kind: "", provider: "", count: 0, first: "",
+              tookMs: 0, error: "" };
 try {
   const m = await import(rt);
   const config = await loadEngineConfig();
@@ -60,8 +61,24 @@ try {
     //   kind: "raw"     ⟶ data (مزوّدٌ خارجيٌّ لا يُطابق الشكلين)
     //
     // والوسيطُ اسمُه `count` لا `maxResults` (نفسُ الملفّ).
-    const r = await m.runWebSearch({ config, args: { query, count: 5 } });
-    const kind = r && typeof r === "object" ? r.kind : "";
+    const raw = await m.runWebSearch({ config, args: { query, count: 5 } });
+    // `runWebSearch` تُغلّف الجوابَ الموثَّقَ داخل `result`:
+    //   { provider, result: { kind?, query, provider, count, results, … } }
+    // وdocs/tools/web.md يصف **الداخلَ** لا الغلاف. فيُفكّ أوّلاً.
+    // مقيسٌ على خرج جهاز المستخدم:
+    //   {"provider":"duckduckgo","result":{"query":"…","count":5,
+    //    "tookMs":2423,"externalContent":{…}}}
+    const r = (raw && typeof raw === "object" && raw.result
+               && typeof raw.result === "object") ? raw.result : raw;
+    out.provider = String((raw && raw.provider) || r?.provider || "");
+    // وقد يغيب `kind` في بعض الأغلفة، فيُستنتَج من الحقول الموجودة.
+    let kind = r && typeof r === "object" ? (r.kind || "") : "";
+    if (!kind && r && typeof r === "object") {
+      if (r.error) kind = "error";
+      else if (Array.isArray(r.results) || typeof r.count === "number") kind = "results";
+      else if (typeof r.content === "string") kind = "answer";
+      else if (r.data !== undefined) kind = "raw";
+    }
     out.kind = kind || "";
     if (kind === "error") {
       out.error = String(r.message || r.error || "خطأُ مزوّد").slice(0, 300);
@@ -69,6 +86,7 @@ try {
       const arr = Array.isArray(r.results) ? r.results : [];
       out.count = typeof r.count === "number" ? r.count : arr.length;
       out.first = String(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
+      out.tookMs = typeof r.tookMs === "number" ? r.tookMs : 0;
       out.ok = out.count > 0;
       if (!out.ok) out.error = "المزوّدُ ردّ بقائمةٍ فارغة";
     } else if (kind === "answer") {

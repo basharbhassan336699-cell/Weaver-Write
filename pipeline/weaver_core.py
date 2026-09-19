@@ -1249,7 +1249,10 @@ def _cli():
         print("  صالحٌ للاستعمال     : "
               + ("نعم" if r.get("usable") else "لا"))
         if r.get("ok"):
-            print(f"\n  ✓ البحثُ يعمل — {r.get('count')} نتيجة")
+            _ms = r.get("tookMs") or 0
+            print(f"\n  ✓ البحثُ يعمل — {r.get('count')} نتيجة"
+                  + (f"  ({_ms/1000:.1f} ث)" if _ms else "")
+                  + (f"  ·  {r.get('provider')}" if r.get("provider") else ""))
             if r.get("first"):
                 print("    أوّلُ نتيجة: " + str(r["first"])[:120])
         else:
