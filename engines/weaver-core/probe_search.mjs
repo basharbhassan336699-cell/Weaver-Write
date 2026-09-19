@@ -37,6 +37,23 @@ async function loadEngineConfig() {
   } catch { return undefined; }
 }
 
+// نزعُ غلافِ الثقة **للعرض وحده**. المحرّكُ يلفّ كلَّ نصٍّ آتٍ من الشبكة:
+//     <<<EXTERNAL_UNTRUSTED_CONTENT id="…">>>
+//     Source: Web Search
+//     ---
+//     <النصّ>
+//     <<<END_EXTERNAL_UNTRUSTED_CONTENT id="…">>>
+// وهو حصنٌ مقصودٌ ضدّ حقن التعليمات (docs/tools/web.md: «re-wrapped exactly
+// once at the core boundary, so no provider metadata can spoof the marker»).
+// فلا يُمَسُّ في ما يصل النموذج — إنّما يُنزع من سطرِ المعاينة ليقرأه الإنسان.
+function unwrap(t) {
+  let x = String(t == null ? "" : t);
+  x = x.replace(/<<<\/?(END_)?EXTERNAL_UNTRUSTED_CONTENT[^>]*>>>/g, "");
+  x = x.replace(/^\s*Source:[^\n]*\n/m, "");
+  x = x.replace(/^\s*---\s*$/m, "");
+  return x.replace(/\s+/g, " ").trim();
+}
+
 const out = { providers: [], configured: [], chosen: "", usable: false,
               ok: false, kind: "", provider: "", count: 0, first: "",
               tookMs: 0, error: "" };
@@ -85,20 +102,20 @@ try {
     } else if (kind === "results") {
       const arr = Array.isArray(r.results) ? r.results : [];
       out.count = typeof r.count === "number" ? r.count : arr.length;
-      out.first = String(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
+      out.first = unwrap(arr[0]?.title || arr[0]?.url || "").slice(0, 160);
       out.tookMs = typeof r.tookMs === "number" ? r.tookMs : 0;
       out.ok = out.count > 0;
       if (!out.ok) out.error = "المزوّدُ ردّ بقائمةٍ فارغة";
     } else if (kind === "answer") {
       const c = String(r.content || "");
       out.count = Array.isArray(r.citations) ? r.citations.length : (c ? 1 : 0);
-      out.first = c.slice(0, 160);
+      out.first = unwrap(c).slice(0, 160);
       out.ok = c.trim().length > 0;
       if (!out.ok) out.error = "المزوّدُ ردّ بجوابٍ فارغ";
     } else if (kind === "raw") {
       const t = JSON.stringify(r.data ?? "");
       out.count = (t.match(/https?:\/\//g) || []).length;
-      out.first = t.slice(0, 160);
+      out.first = unwrap(t).slice(0, 160);
       out.ok = t.length > 2;
     } else {
       out.error = "شكلُ جوابٍ غيرُ معروف: " + JSON.stringify(r).slice(0, 200);
