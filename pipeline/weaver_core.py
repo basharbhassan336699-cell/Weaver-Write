@@ -499,7 +499,16 @@ def run(args, timeout=180, input_text=None, cwd=None):
 # وتحلّ معها مشكلةٌ ثانية: `--session-id` يمنح استمرارَ المحادثة، وهو ما لا
 # يستطيعه المعزولُ أبداً.
 GATEWAY_LOG = os.path.join(STATE, "gateway.log")
-_GW_READY_WAIT = 90          # ثانيةً ننتظر إقلاعَ البوّابة
+# مهلةُ إقلاع البوّابة. كانت ٩٠ ثانية، فلم تكفِ على هاتف المستخدم:
+#     ⚠ لم تسمع خلال 90 ث
+# والإقلاعُ عندي على خادمٍ سريعٍ ٥ ثوانٍ فقط — والهاتفُ أبطأ أضعافاً:
+# معالجُ ARM، وتخزينٌ أبطأ، و٥٩ إضافةً تُحمَّل، وقاعدةُ حالةٍ تُفتح (وسجلُّه
+# يشكو «slow SQLite transaction hold» أصلاً). فرُفعت، وتُضبَط بـ
+# `WEAVER_GATEWAY_WAIT` لمن أراد.
+try:
+    _GW_READY_WAIT = int(os.environ.get("WEAVER_GATEWAY_WAIT", "300") or 300)
+except Exception:
+    _GW_READY_WAIT = 300
 _gw_lock = threading.Lock()
 
 
@@ -534,6 +543,26 @@ def _gateway_lock():
         return d if isinstance(d, dict) else {}
     except Exception:
         return {}
+
+
+def _log_reason(lines=400):
+    """السببُ من ذيل سجلِّ البوّابة — لا إحالةٌ إلى ملفٍّ يبحث فيه.
+
+    يُنقَّى كما يُنقَّى خرجُ الأوامر (ألوانٌ وضجيج)، ويُفضَّل سطرُ خطأٍ صريح."""
+    try:
+        with open(GATEWAY_LOG, encoding="utf-8", errors="replace") as fh:
+            tail = fh.readlines()[-int(lines):]
+    except Exception:
+        return ""
+    import re as _re
+    txt = _real_error("".join(tail))
+    # سطرٌ يحمل خطأً صريحاً أولى من آخر سطر
+    for ln in reversed(tail):
+        c = _real_error(ln)
+        if _re.search(r"(?i)\b(error|fatal|EADDRINUSE|EACCES|ECONNREFUSED|"
+                      r"refusing|failed|cannot|denied)\b", c):
+            return c[:300]
+    return txt[:300]
 
 
 def gateway_health(timeout=2):
@@ -571,6 +600,23 @@ def gateway_start(wait=None):
         nb = node_bin()
         if not (available() and nb):
             return False, why_unavailable()
+        # قفلٌ بائتٌ يمنع كلَّ إقلاعٍ بعده. المحرّكُ يقولها ويقف:
+        #   «Another gateway (pid …) already owns this state directory;
+        #    refusing to run … Stop it with "openclaw gateway stop"»
+        # والمنفذُ مغلقٌ ولا عمليةَ حيّة — فالقفلُ يكذب. يُنظَّف.
+        if not _gateway_pids():
+            try:
+                uid = os.getuid() if hasattr(os, "getuid") else None
+                sub = ("openclaw-%d" % uid) if uid is not None else "openclaw"
+                d = os.path.join(_STATE_DIR, "tmp", sub)
+                for f in os.listdir(d):
+                    if f.startswith("gateway.") and ".lock" in f:
+                        try:
+                            os.remove(os.path.join(d, f))
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         try:
             os.makedirs(STATE, exist_ok=True)
             _log = open(GATEWAY_LOG, "ab", buffering=0)
@@ -626,7 +672,10 @@ def gateway_start(wait=None):
                     pass
                 return True, f"أقلعت في {time.time() - _t0:.1f} ث"
             time.sleep(1)
-        return False, f"لم تسمع خلال {wait} ث — انظر {GATEWAY_LOG}"
+        # ولا يُقال «انظر السجلّ» ويُترك المستخدمُ يبحث: يُقرأ السببُ منه.
+        return False, (f"لم تسمع خلال {wait} ث"
+                       + (" — " + _log_reason()) if _log_reason()
+                       else f"لم تسمع خلال {wait} ث — انظر {GATEWAY_LOG}")
 
 
 def _gateway_pids():

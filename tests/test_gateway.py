@@ -375,6 +375,53 @@ finally:
 
 print()
 print("=" * 70)
+print(" 12) الإقلاعُ على هاتف: مهلةٌ تكفي، وسببٌ يُقرأ، وقفلٌ يُنظَّف")
+print("=" * 70)
+# خرجُ جهاز المستخدم: «⚠ لم تسمع خلال 90 ث — انظر …/gateway.log».
+# مهلةٌ لا تكفي هاتفاً (٥ ث عندي على خادمٍ سريع، وعشراتٌ عليه)، وإحالةٌ
+# إلى ملفٍّ يبحث فيه بدل سببٍ يُقال له.
+chk("المهلةُ تكفي هاتفاً ولا تبقى ٩٠", W._GW_READY_WAIT >= 240,
+    W._GW_READY_WAIT)
+# يُفحَص السلوكُ لا موضعُ السطر: تُعاد قراءةُ الوحدة بمتغيّرٍ مضبوط.
+import importlib as _il, os as _os2                        # noqa: E402
+_old = _os2.environ.get("WEAVER_GATEWAY_WAIT")
+try:
+    _os2.environ["WEAVER_GATEWAY_WAIT"] = "137"
+    _W2 = _il.reload(W)
+    chk("  -> وتُضبَط بمتغيّرِ بيئة", _W2._GW_READY_WAIT == 137,
+        _W2._GW_READY_WAIT)
+finally:
+    if _old is None:
+        _os2.environ.pop("WEAVER_GATEWAY_WAIT", None)
+    else:
+        _os2.environ["WEAVER_GATEWAY_WAIT"] = _old
+    W = _il.reload(W)
+
+import tempfile as _tf                                     # noqa: E402
+_reallog = W.GATEWAY_LOG
+try:
+    _f = _tf.NamedTemporaryFile("w", suffix=".log", delete=False,
+                                encoding="utf-8")
+    _f.write("\x1b[36m[gateway]\x1b[39m loading configuration…\n"
+             "\x1b[33m[sqlite/transaction]\x1b[39m slow SQLite transaction hold\n"
+             "\x1b[31m[gateway]\x1b[39m Another gateway (pid 99) already owns "
+             "this state directory; refusing to run\n")
+    _f.close()
+    W.GATEWAY_LOG = _f.name
+    _why = W._log_reason()
+    chk("السببُ يُقرأ من السجلّ لا يُحال إليه",
+        "already owns this state directory" in _why, _why)
+    chk("  -> بلا ألوانٍ ولا ضجيجِ sqlite",
+        "\x1b" not in _why and "sqlite" not in _why.lower(), repr(_why))
+finally:
+    W.GATEWAY_LOG = _reallog
+
+chk("وقفلٌ بائتٌ يُنظَّف قبل الإقلاع (وإلّا رفض المحرّكُ القيام)",
+    "refusing to run" in _i.getsource(W.gateway_start)
+    and "os.remove" in _i.getsource(W.gateway_start))
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)
