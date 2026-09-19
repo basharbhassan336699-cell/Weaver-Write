@@ -199,6 +199,37 @@ finally:
 
 print()
 print("=" * 70)
+print(" 8) سببُ الفشل يصل نظيفاً — لا ألوانٌ ولا عنوانٌ بلا سبب")
+print("=" * 70)
+# ظهرت بطاقةُ الفشل على جهاز المستخدم هكذا:
+#   [31m[sqlite/transaction][39m … [openclaw] The CLI command failed. [openclaw] Re…
+# أي رموزُ ألوانٍ وضجيجٌ وعنوانٌ مقطوع. وسببُه أمران في `_real_error`:
+#   ① ANSI لم تُنزَع  ② كان يبحث عن error="…" (شكلُ exec) لا عن Reason:
+#      (شكلُ البوّابة)، فيأخذ آخرَ سطر — وهو «Help: …».
+_gw_err = ("\x1b[31m[sqlite/transaction]\x1b[39m \x1b[33mslow SQLite "
+           "transaction hold\x1b[39m\n"
+           "[openclaw] The CLI command failed.\n"
+           "[openclaw] Reason: connect ECONNREFUSED 127.0.0.1:18889\n"
+           "[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.\n"
+           "[openclaw] Try: openclaw --profile weaver doctor\n"
+           "[openclaw] Help: openclaw --profile weaver --help")
+_r = W._real_error(_gw_err)
+chk("يلتقط Reason: لا آخرَ سطر", _r == "connect ECONNREFUSED 127.0.0.1:18889", _r)
+chk("  -> ولا يبقى رمزُ لونٍ واحد",
+    "\x1b" not in _r and "[31m" not in _r and "[39m" not in _r, repr(_r))
+chk("  -> ولا ضجيجُ sqlite", "sqlite" not in _r.lower(), _r)
+chk("وشكلُ exec القديم ما زال يُقرأ",
+    W._real_error('lane error="model refused the tool call"') ==
+    "model refused the tool call")
+chk("وألوانٌ حرفيّةٌ بلا ESC تُنزَع أيضاً",
+    W._real_error("[31m[x][39m noise\nReason: gateway refused")
+    == "gateway refused")
+chk("وبلا Reason ⟶ آخرُ سطرٍ ذي معنى لا سطرُ الإرشاد",
+    W._real_error("\x1b[33mwarn\x1b[39m\nECONNREFUSED 1\n[openclaw] Help: x")
+    == "ECONNREFUSED 1")
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)

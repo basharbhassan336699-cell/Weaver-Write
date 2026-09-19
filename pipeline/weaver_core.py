@@ -398,18 +398,47 @@ def _record_run(args, code, out, err):
 
 
 def _real_error(err):
-    """السببُ من بين ضجيج التشخيص — لا العنوانُ وحده.
+    """السببُ من بين ضجيج التشخيص — لا العنوانُ ولا آخرُ سطر.
 
-    المحرّكُ يطبع تحذيراتٍ ليست أخطاءً («slow SQLite transaction hold» هو
-    `.warn` عن بطء التخزين، وهو متوقَّعٌ على الهاتف). فتُسقَط، ويُستخرَج ما
-    بين `error="…"` إن وُجد، وإلّا فآخرُ سطرٍ ذي معنى."""
+    عطبٌ كشفته بطاقةُ الفشل على جهاز المستخدم: ظهر فيها
+        [31m[sqlite/transaction][39m … [openclaw] The CLI command failed. …
+    أي ضجيجٌ ورموزُ ألوانٍ وعنوانٌ بلا سبب. وسببُه أمران:
+
+    ① رموزُ ANSI لم تُنزَع. المحرّكُ يلوّن خرجَه، فتدخل `[31m` و`[39m`
+       في النصّ وتُفسده.
+    ② كنتُ أبحث عن `error="…"` — وهو شكلُ `agent exec` وحده. أمّا مسارُ
+       البوّابة فيطبع:
+           [openclaw] The CLI command failed.
+           [openclaw] Reason: <السببُ الحقيقيّ>
+           [openclaw] Debug: set OPENCLAW_DEBUG=1 …
+           [openclaw] Try: …      [openclaw] Help: …
+       فآخرُ سطرٍ ذي معنى هو «Help:» — لا قيمةَ له. والسببُ في `Reason:`.
+
+    فصار يُنزع اللونُ أوّلاً، ثمّ يُلتقط `Reason:`، ثمّ `error="…"`، ثمّ
+    آخرُ سطرٍ بعد إسقاط الصفيح."""
     import re as _re
     t = str(err or "")
+    # ① نزعُ ANSI: CSI وOSC معاً
+    t = _re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", t)
+    t = _re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", t)
+    # وبعضُ السجلّات تصل بالرموز حرفيّةً بلا ESC («[31m» نصّاً)
+    t = _re.sub(r"\[(?:\d{1,3}(?:;\d{1,3})*)m", "", t)
+
+    # ② السببُ كما يسمّيه المحرّكُ نفسُه
+    m = _re.search(r"Reason:\s*(.+)", t)
+    if m:
+        _r = m.group(1).strip()
+        if _r:
+            return _r[:400]
     m = _re.search(r'error="([^"]{3,400})"', t)
     if m:
         return m.group(1).strip()
+
+    # ③ وإلّا: آخرُ سطرٍ بعد إسقاط الصفيح — والصفيحُ يشمل سطورَ الإرشاد
+    #    التي تلي السبب، فهي آخرُ ما يُطبع وأقلُّ ما يُفيد.
     _noise = ("slow SQLite transaction hold", "[diagnostic]", "npm warn",
-              "ExperimentalWarning", "(node:")
+              "ExperimentalWarning", "(node:", "The CLI command failed",
+              "Debug: set", "Try: ", "Help: ", "--help", "doctor")
     lines = [l.strip() for l in t.split("\n")
              if l.strip() and not any(n in l for n in _noise)]
     return lines[-1][:400] if lines else t.strip()[:400]
@@ -921,8 +950,13 @@ def ask(text, timeout=300, cwd=None, fallback=True, session=None):
             return {"answer": _from_envelope(out), "engine": "weaver-core",
                     "note": ""}
         if not fallback:
+            # كان يُعاد الخرجُ خاماً هنا — بألوانه وضجيجه — فتظهر بطاقةُ
+            # الفشل في الويب هكذا:
+            #   [31m[sqlite/transaction][39m … The CLI command failed. Re…
+            # عنوانٌ بلا سبب. فيُنقّى كما يُنقّى في المسار الآخر سواءً.
             return {"answer": "", "engine": "weaver-core",
-                    "note": (err or out).strip()[:400]}
+                    "note": (_real_error(err) or _real_error(out)
+                             or "المحرّك لم يُجب بلا سببٍ معلوم")[:400]}
         _note = ("المحرّك لم يُجب [رمز " + str(code) + "]: "
                  + (_real_error(err) or "بلا سبب معلوم")
                  + "  ·  الخرجُ كاملاً: python3 -m pipeline.weaver_core --last"
