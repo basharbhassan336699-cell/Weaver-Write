@@ -574,6 +574,12 @@ def gateway_start(wait=None):
                 # إقلاعةٌ جديدة ⟶ تُضمَن صلاحيةُ البحث مرّةً واحدة. والبوّابةُ
                 # تحمل بيئتَها من لحظة إقلاعها، فهذا أوانُه الصحيح.
                 try:
+                    # ضبطُ النموذج أوّلاً: بلا `agents.defaults.model.primary`
+                    # يسقط المحرّكُ إلى `openai/gpt-5.6-sol` فتفشل كلُّ نوبة.
+                    configure_model()
+                except Exception:
+                    pass
+                try:
                     # ولا يُمَسُّ اختيارٌ صريحٌ للمستخدم بحال: لو اختار
                     # مزوّداً بمعالج `configure --section web` ثمّ فشل نداءٌ
                     # واحدٌ لانقطاعِ شبكةٍ عابر، لكان تلقائيُّنا يدوس اختيارَه
@@ -1111,6 +1117,57 @@ def run_tty(args, timeout=None):
         return 1
 
 
+def model_ref():
+    """مرجعُ النموذج كما يكتبه المحرّك: `<مزوّد>/<نموذج>`.
+
+    docs/providers/openrouter.md: «Model refs follow the pattern
+    `openrouter/<provider>/<model>`». فنموذجُك `deepseek/deepseek-v4-flash`
+    على OpenRouter يصير `openrouter/deepseek/deepseek-v4-flash`."""
+    prov, m = provider_id(), _setting("WEAVER_MODEL")
+    if not (prov and m):
+        return ""
+    return m if m.startswith(prov + "/") else prov + "/" + m
+
+
+def configure_model():
+    """اكتب نموذجَك ومفتاحَك في إعداد المحرّك — بمفاتيحه هو.
+
+    الجذرُ الذي أتعبَ المستخدم: `models` و`agents` غيرُ مضبوطَين، فيسقط
+    المحرّكُ إلى افتراضيّه:
+        [gateway] agent model: openai/gpt-5.6-sol
+    ولا مفتاحَ لـopenai، فتفشل كلُّ نوبةٍ بـ:
+        «No route-compatible authentication source is configured for openai.»
+
+    وكنتُ أمرّر `--model` في كلِّ نداء — رقعةٌ لا ضبط. والضبطُ الصحيحُ
+    موثَّقٌ في docs/providers/openrouter.md:
+
+        { env: { vars: { OPENROUTER_API_KEY: "sk-or-…" } },
+          agents: { defaults: { model: { primary: "openrouter/…" } } } }
+
+    فيُكتب مرّةً، ويعمّ البوّابةَ وكلَّ نوبة، ولا يحتاج علَماً في كلِّ نداء.
+
+    يعيد قائمةَ (اسم، نجح، سبب). لا يرفع استثناءً."""
+    rows = []
+    ref = model_ref()
+    creds = credentials()
+    if not ref:
+        rows.append(("نموذجُك", False,
+                     "لا WEAVER_MODEL/WEAVER_PROVIDER في config/.env"))
+        return rows
+    code, _o, err = run(["config", "set",
+                         "agents.defaults.model.primary", ref], timeout=90)
+    rows.append(("agents.defaults.model.primary = " + ref, code == 0,
+                 _real_error(err)))
+    for env_name, key in (creds or {}).items():
+        # المفتاحُ يُكتب في `env.vars` كما يوثّقه المحرّك، فتراه البوّابةُ
+        # وكلُّ نوبةٍ بلا أن نحقنه في بيئةِ كلِّ نداء.
+        code2, _o2, err2 = run(["config", "set",
+                                "env.vars." + env_name, key], timeout=90)
+        rows.append(("env.vars." + env_name + " = ***" + key[-4:],
+                     code2 == 0, _real_error(err2)))
+    return rows
+
+
 def chosen_provider():
     """المزوّدُ الذي **عيّنه المستخدمُ صراحةً**، أو "" إن لم يُعيّن.
 
@@ -1303,6 +1360,25 @@ def _cli():
                       "\n    أو ضَع مفتاحَك ثمّ أعِد تشغيل البوّابة:"
                       "\n      python3 -m pipeline.weaver_core --gateway stop"
                       "\n      python3 -m pipeline.weaver_core --gateway start")
+        return
+    if argv == ["--model"]:
+        print("  في نظامك : " + (model_ref() or "لا شيء (config/.env)"))
+        code, out, _ = run(["config", "get", "agents.defaults.model"],
+                           timeout=60)
+        print("  في المحرّك: "
+              + ((out or "").strip().replace("\n", " ") if code == 0
+                 else "غيرُ مضبوط"))
+        print("\n  للضبط: python3 -m pipeline.weaver_core --model set")
+        return
+    if argv == ["--model", "set"]:
+        for n, ok, why in configure_model():
+            print(("  ✓ " if ok else "  ⚠ ") + n
+                  + ("" if ok else "   " + str(why)[:160]))
+        if gateway_health():
+            print("  ⇒ إعادةُ تشغيل البوّابة لتقرأه…")
+            gateway_stop()
+            ok, why = gateway_start()
+            print("    " + ("✓ حيّة" if ok else "⚠ " + str(why)[:120]))
         return
     if argv[:2] == ["--web-search", "choose"]:
         # معالجُ المحرّك نفسُه. وإن لم تكن الطرفيّةُ تفاعليّةً قال هو ذلك

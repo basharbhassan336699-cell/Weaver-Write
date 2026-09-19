@@ -142,6 +142,17 @@ _OC () { OPENCLAW_STATE_DIR="$STATE_DIR" OPENCLAW_PROFILE=weaver \
          "$NODE" "$DEST/openclaw.mjs" "$@" >/dev/null 2>&1; }
 STATE_DIR="${WEAVER_STATE_DIR:-$HOME/.weaver-write/state}"
 ROOT="$(cd "$HERE/../.." && pwd)"
+# ── نموذجُك ومفتاحُك في إعداد المحرّك ─────────────────────────────────────
+#
+# بلا هذا يسقط المحرّكُ إلى افتراضيّه `openai/gpt-5.6-sol`، ولا مفتاحَ له،
+# فتفشل كلُّ نوبةٍ بـ«No route-compatible authentication source».
+# والشكلُ موثَّقٌ في docs/providers/openrouter.md:
+#     { env: { vars: { OPENROUTER_API_KEY: … } },
+#       agents: { defaults: { model: { primary: "openrouter/…" } } } }
+echo "  ⚙ نموذجُك في المحرّك…"
+( cd "$ROOT" && WEAVER_NODE="$NODE" python3 -m pipeline.weaver_core --model set 2>&1 \
+  | sed 's/^/    /' ) || echo "    ⚠ تعذّر ضبطُ النموذج"
+
 echo "  ⌕ بحثُ الويب (إضافاتُ أوبن كلاو الرسميّة)…"
 for _P in duckduckgo perplexity; do
   if _OC plugins install "@openclaw/${_P}-plugin" --accept-capabilities; then

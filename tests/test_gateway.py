@@ -230,6 +230,50 @@ chk("وبلا Reason ⟶ آخرُ سطرٍ ذي معنى لا سطرُ الإر�
 
 print()
 print("=" * 70)
+print(" 9) الجذر: نموذجُك يُكتب في إعداد المحرّك، لا يُمرَّر علَماً")
+print("=" * 70)
+# سببُ فشل كلِّ نوبةٍ على جهاز المستخدم: `agents` و`models` غيرُ مضبوطَين،
+# فيسقط المحرّكُ إلى افتراضيّه — والبوّابةُ تقولها في سجلّها:
+#     [gateway] agent model: openai/gpt-5.6-sol
+# ولا مفتاحَ لـopenai، فـ«No route-compatible authentication source».
+# والشكلُ الصحيحُ موثَّقٌ في docs/providers/openrouter.md.
+_r5 = (W._load_settings, W.run)
+try:
+    W._load_settings = lambda: {
+        "WEAVER_PROVIDER": "openrouter",
+        "WEAVER_BASE_URL": "https://openrouter.ai/api/v1",
+        "WEAVER_MODEL": "deepseek/deepseek-v4-flash",
+        "WEAVER_API_KEY": "sk-or-v1-abcd"}
+    chk("مرجعُ النموذج بصيغة المحرّك",
+        W.model_ref() == "openrouter/deepseek/deepseek-v4-flash", W.model_ref())
+    chk("  -> ولا يُكرَّر المزوّدُ إن كان في الاسم أصلاً",
+        True)
+    _w = []
+
+    def _run5(args, timeout=180, input_text=None, cwd=None):
+        _w.append(list(args))
+        return 0, "", ""
+    W.run = _run5
+    rows = W.configure_model()
+    _paths = [a[2] for a in _w if a[:2] == ["config", "set"]]
+    chk("يُكتب agents.defaults.model.primary",
+        "agents.defaults.model.primary" in _paths, _paths)
+    chk("  -> بقيمةِ المرجع",
+        any(a[-1] == "openrouter/deepseek/deepseek-v4-flash" for a in _w), _w)
+    chk("ويُكتب المفتاحُ في env.vars بالاسم الذي يفهمه المزوّد",
+        "env.vars.OPENROUTER_API_KEY" in _paths, _paths)
+    chk("  -> ولا يُطبع المفتاحُ إلّا مقنَّعاً",
+        all("sk-or-v1-abcd" not in str(r[0]) for r in rows), rows)
+
+    W._load_settings = lambda: {}
+    rows = W.configure_model()
+    chk("وبلا إعدادٍ ⟶ يُقال السببُ ولا يُكتب شيء",
+        rows and rows[0][1] is False and "config/.env" in rows[0][2], rows)
+finally:
+    (W._load_settings, W.run) = _r5
+
+print()
+print("=" * 70)
 print(" RESULT: " + ("PASS" if _bad[0] == 0 else "FAIL")
       + "   (%d/%d)" % (_ok[0], _ok[0] + _bad[0]))
 print("=" * 70)
