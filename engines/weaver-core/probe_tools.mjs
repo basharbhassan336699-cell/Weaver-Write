@@ -20,6 +20,7 @@
 //
 // يُنادى:  node probe_tools.mjs [مزوّد] [نموذج]      ⟶ JSON
 import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const provider = process.argv[2] || "";
@@ -32,7 +33,8 @@ const codex = join(dist, "codex-native-web-search-core-DKmZL1Sz.mjs");
 
 const out = { ok: false, profile: "", agentId: "", groups: [], tools: [],
               web_search: false, web_fetch: false, browser: false,
-              suppressed: false, suppressReason: "", error: "" };
+              suppressed: false, suppressReason: "", error: "",
+              chars: 0, tokens: 0 };
 
 // الإعدادُ من ملفّه — وبدونه تُحسب الأدواتُ على إعدادٍ فارغ، فيكون الجوابُ
 // عن نظامٍ آخر لا عن نظامك. (نفسُ العطب الذي خدعني في فحص البحث.)
@@ -66,6 +68,36 @@ try {
   out.web_fetch = out.tools.includes("web_fetch");
   out.browser = out.tools.includes("browser");
   out.ok = out.tools.length > 0;
+
+  // وكم يكلّف هذا الكتالوجُ في **كلِّ رسالة**؟ — السؤالُ الذي لم أسأله.
+  //
+  // مخطَّطُ كلِّ أداةٍ يُرسَل كاملاً مع كلِّ نداء. وقياسُه على إعداد
+  // المستخدم: ٤٨ أداةً = ٨٨٬١٩٥ حرفاً ≈ ٢٤٬٤٩٩ رمزاً — لسؤالٍ من أربع
+  // كلمات. ولهذا كانت الدقيقتان. فيُقاس ويُعرَض، لا يُخمَّن.
+  //
+  // ويُقاس بالدالّة التي تبني الأدوات فعلاً (`createOpenClawCodingTools`)
+  // لا بالجرد، لأنّ الجردَ يحمل الوصفَ ولا يحمل `parameters` — وهي
+  // الجسمُ الأكبر.
+  try {
+    const at = await import(join(dist, "agent-tools-CNTtT1Sj.mjs"));
+    const built = at.createOpenClawCodingTools({
+      config: cfg, agentId: out.agentId || "main",
+      workspaceDir: homedir(),
+      agentDir: join(homedir(), ".openclaw"),
+      modelProvider: provider || undefined,
+      modelId: model || undefined,
+      modelApi: "openai-completions",
+    });
+    let chars = 0;
+    for (const t of built || []) {
+      if (!t?.name) continue;
+      chars += JSON.stringify({ name: t.name,
+                                description: t.description || "",
+                                parameters: t.parameters || {} }).length;
+    }
+    out.chars = chars;
+    out.tokens = Math.round(chars / 3.6);   // نسبةٌ مقيسةٌ على JSON إنجليزيّ
+  } catch { /* لا يُفشِل الفحصَ كلَّه */ }
 
   // ولماذا غاب `web_search` إن غاب؟ المحرّكُ يقول السببَ بنفسه.
   try {

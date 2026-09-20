@@ -84,6 +84,33 @@ else:
     print("    ⓘ لا node صالحٌ هنا — تُخطَّى محطّةُ الجرد: "
           + str(_inv.get("error"))[:80])
 
+print("\n— سياسةُ الأدوات: ٢٤ ألفَ رمزٍ في كلِّ رسالة —")
+ok("tools_policy موجودة", callable(getattr(wc, "tools_policy", None)))
+_p, _a = wc.tools_policy()
+ok("الرشيقةُ هي الافتراض", _p == "minimal" and bool(_a), (_p, _a))
+ok("وفيها البحثُ والملفّاتُ والتنفيذ",
+   set(("group:web", "group:fs", "group:runtime")) <= set(_a), _a)
+ok("والمتصفّحُ والذاكرة",
+   "browser" in _a and "memory_search" in _a, _a)
+_old_tp = os.environ.get("WEAVER_TOOL_PROFILE")
+os.environ["WEAVER_TOOL_PROFILE"] = "full"
+ok("والبيئةُ تُعيد الكاملَ بلا تعديلِ كود", wc.tools_policy() == ("full", []))
+if _old_tp is None:
+    os.environ.pop("WEAVER_TOOL_PROFILE", None)
+else:
+    os.environ["WEAVER_TOOL_PROFILE"] = _old_tp
+ok("وتُكتب في إعداد المحرّك", '"tools.profile"' in _src
+   and '"tools.alsoAllow"' in _src)
+_inv2 = wc.tool_inventory()
+if _inv2.get("ok"):
+    ok("الكلفةُ تُقاس لا تُخمَّن", (_inv2.get("tokens") or 0) > 0,
+       _inv2.get("tokens"))
+    ok("والرشيقةُ أرخصُ من نصفِ الكامل",
+       (_inv2.get("tokens") or 99999) < 12000, _inv2.get("tokens"))
+    ok("ومع ذلك web_search وweb_fetch وbrowser حاضرة",
+       _inv2.get("web_search") and _inv2.get("web_fetch")
+       and _inv2.get("browser"), _inv2.get("tools"))
+
 print("\n— مساحةُ العمل: EACCES على link() في أندرويد —")
 ok("seed_workspace.mjs موجود", os.path.isfile(wc.SEED_WS))
 ok("seed_workspace موجودة", callable(getattr(wc, "seed_workspace", None)))

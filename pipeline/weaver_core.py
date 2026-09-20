@@ -1545,6 +1545,50 @@ def _merge(dst, src):
     return dst
 
 
+# ── سياسةُ الأدوات: ٢٤ ألفَ رمزٍ في كلِّ رسالة ────────────────────────────
+#
+# شكوى المستخدم: «من ٢ إلى ٣ دقائق في الرد على أسئلة سخيفة». والقياسُ
+# بدوالّ المحرّك نفسِها على إعداده:
+#
+#   profile = full     48 أداة   88,195 حرفاً  ≈ 24,499 رمزاً
+#   profile = coding   33 أداة   53,379 حرفاً  ≈ 14,828 رمزاً
+#   minimal + المطلوب  13 أداة   17,581 حرفاً  ≈  4,884 رمزاً
+#
+# مخطَّطُ كلِّ أداةٍ يُرسَل كاملاً مع **كلِّ** رسالة. فسؤالٌ من أربع كلمات
+# يرفع ٨٨ كيلوبايت من هاتفٍ قبل أن يبدأ النموذجُ التفكير. وأوبن كلاو يقولها
+# بنفسه في docs/tools/tool-search.md:
+#
+#   «Large catalogs are useful but expensive. Sending every tool schema to
+#    the model makes the request larger, slows planning, and increases
+#    accidental tool selection.»
+#
+# وآليّتُه لذلك موثّقةٌ في docs/gateway/config-tools/tool-policy.md:
+#
+#   tools.profile     قاعدةٌ قبل allow/deny: minimal · coding · messaging · full
+#   tools.alsoAllow   توسيعُ ملفٍّ محدودٍ بمجموعاتٍ أو أدواتٍ بعينها
+#   group:web         web_search · x_search · web_fetch
+#   group:fs          read · write · edit · apply_patch
+#   group:runtime     exec · process · code_execution
+#
+# و«full» ليس اختياراً منّا: «Local onboarding sets tools.profile: "full"
+# when no profile is configured» — أي أنّه ما كتبه `onboard` تلقائياً.
+#
+# فيُضبَط على ما يحتاجه نظامُك فعلاً: بحثٌ، وملفّات، وتنفيذ، ومتصفّح،
+# وذاكرة. ويُستعاد الكاملُ بكلمةٍ واحدة (`--tools-profile full`) لمن أراد.
+TOOLS_LEAN_ALLOW = ("group:web", "group:fs", "group:runtime",
+                    "browser", "memory_search", "memory_get")
+
+
+def tools_policy():
+    """(ملفُّ الأدوات، قائمةُ التوسيع) — الرشيقةُ افتراضاً، وتُضبَط بالبيئة.
+
+    `WEAVER_TOOL_PROFILE=full` تُعيد الكاملَ كما كان بلا تعديلِ كود."""
+    want = (os.environ.get("WEAVER_TOOL_PROFILE", "") or "lean").strip().lower()
+    if want in ("full", "coding", "messaging"):
+        return want, []
+    return "minimal", list(TOOLS_LEAN_ALLOW)
+
+
 def configure_model():
     """اكتب نموذجَك ومفتاحَك في إعداد المحرّك — بمفاتيحه هو.
 
@@ -1614,6 +1658,7 @@ def configure_runtime():
             _tok_new = _s.token_hex(24)     # يُكتب مع البقيّة، لا وحده
     except Exception:
         pass
+    _tp, _ta = tools_policy()
     # وكانت هذه ثمانيَ عمليّاتِ node منفصلة — ثمانِ إقلاعاتٍ كاملةٍ للحزمة
     # في صمت. صارت كتابةً واحدةً بآليّة المحرّك نفسِه (`config patch`).
     # والقيمُ هنا أنواعُها الحقيقيّة (عدد · نصّ · منطقيّ) لا نصوصاً، لأنّ
@@ -1640,7 +1685,8 @@ def configure_runtime():
         # لا يُرسَل شيءٌ عنك إلى الشبكة بلا علمك. مقيس: المحرّكُ حاول
         # بلوغَ telemetry.openclaw.ai في تشغيلةٍ عادية.
         ("telemetry.enabled", False, "التتبّعُ الخارجيّ (مُطفأ)"),
-    )
+    ) + ((("tools.profile", _tp, "ملفُّ الأدوات"),)
+         + ((("tools.alsoAllow", _ta, "توسيعُ الأدوات"),) if _ta else ()))
     tree = {}
     for path, val, _what in spec:
         _merge(tree, _nest(path, val))
@@ -1653,7 +1699,8 @@ def configure_runtime():
     for path, val, what in spec:
         rows.append((what + " — " + path + " = "
                      + ("true" if val is True else
-                        "false" if val is False else str(val)),
+                        "false" if val is False else
+                        ", ".join(val) if isinstance(val, list) else str(val)),
                      okp, "" if okp else why))
     return rows
 
@@ -1942,8 +1989,11 @@ def net_doctor(live=False, query=None, out=None):
         add(5, False, "تعذّر حسابُ الجرد", inv["error"])
     else:
         add(5, _okt,
-            "%d أداة · ملفّ «%s» · web_search %s · web_fetch %s · browser %s"
-            % (len(inv.get("tools") or []), inv.get("profile") or "?",
+            "%d أداة · %s رمزاً/رسالة · ملفّ «%s» · web_search %s · web_fetch %s"
+            " · browser %s"
+            % (len(inv.get("tools") or []),
+               ("≈" + str(inv.get("tokens"))) if inv.get("tokens") else "؟",
+               inv.get("profile") or "?",
                "حاضرة" if inv.get("web_search") else "غائبة ✗",
                "حاضرة" if inv.get("web_fetch") else "غائبة",
                "حاضر" if inv.get("browser") else "غائب"),
@@ -2101,6 +2151,33 @@ def _cli():
         print("\n  كُتب %d · موجودٌ سلفاً %d"
               % (r.get("created") or 0, r.get("existed") or 0))
         sys.exit(0 if r.get("ok") else 1)
+    if argv[:1] == ["--tools-profile"]:
+        _want = argv[1] if len(argv) > 1 else ""
+        if _want not in ("lean", "full", "coding", "messaging"):
+            print("  الاستعمال: --tools-profile <lean|coding|messaging|full>"
+                  "\n\n  lean     المطلوبُ وحده — بحثٌ وملفّاتٌ وتنفيذٌ "
+                  "ومتصفّحٌ وذاكرة   (≈4,884 رمزاً)"
+                  "\n  coding   ملفُّ أوبن كلاو للبرمجة                      "
+                  "  (≈14,828)"
+                  "\n  full     الكاملُ كما يكتبه `onboard`                  "
+                  "  (≈24,499)", file=sys.stderr)
+            sys.exit(2)
+        os.environ["WEAVER_TOOL_PROFILE"] = _want
+        _p, _a = tools_policy()
+        _tree = {}
+        _merge(_tree, _nest("tools.profile", _p))
+        _merge(_tree, _nest("tools.alsoAllow", _a))
+        okp, why = config_patch(_tree)
+        print(("  ✓ " if okp else "  ✗ ") + "tools.profile = " + _p
+              + (("   ·   alsoAllow = " + ", ".join(_a)) if _a else "")
+              + ("" if okp else "   — " + str(why)[:160]))
+        if okp:
+            _inv = tool_inventory()
+            print("  ⟵ %d أداة  ≈ %d رمزاً في كلِّ رسالة"
+                  % (len(_inv.get("tools") or []), _inv.get("tokens") or 0))
+            print("\n  وتُثبَّت بلا هذا الأمر: WEAVER_TOOL_PROFILE=" + _want
+                  + " في بيئتك")
+        sys.exit(0 if okp else 1)
     if argv == ["--tools"]:
         inv = tool_inventory()
         if inv.get("error"):
@@ -2109,6 +2186,10 @@ def _cli():
         print("  الوكيل : " + (inv.get("agentId") or "—")
               + "   ·   ملفُّ الأدوات: " + (inv.get("profile") or "—"))
         print("  النموذج: " + (model_id() or "— غير محدَّد"))
+        # الكلفةُ في كلِّ رسالة — وهي ما لم يكن يُقاس، فكانت الدقيقتان.
+        if inv.get("chars"):
+            print("  الكلفة : %d حرفاً  ≈ %d رمزاً في **كلِّ** رسالة"
+                  % (inv["chars"], inv.get("tokens") or 0))
         for g in inv.get("groups") or []:
             print("\n  [%s] %s — %d" % (g.get("id"), g.get("label"),
                                          g.get("count") or 0))
