@@ -629,12 +629,23 @@ def gateway_health(timeout=2):
             pass
 
 
-def gateway_start(wait=None):
+def gateway_start(wait=None, say=None):
     """أقلِع البوّابةَ في الخلفية وانتظرها حتى تسمع. يعيد (نجح، سبب).
 
     مؤمَّنٌ بقفلٍ كي لا يُقلعها خيطان معاً، وأوّلُ ما يفعل أن يسأل: أهي حيّةٌ
-    سلفاً؟ فالإقلاعُ الثاني ضياعٌ ومنفذٌ مشغول."""
+    سلفاً؟ فالإقلاعُ الثاني ضياعٌ ومنفذٌ مشغول.
+
+    و`say` دالّةُ طباعةٍ اختياريّة. وبلا نبضِ حياةٍ ظنّ المستخدمُ أنّ الأمرَ
+    علّق ثمانيَ دقائق، وهو يُقلع بوّابةً ثمّ يكتب إعداداً — في صمتٍ تامّ.
+    فالصمتُ نفسُه كان العطب."""
     wait = int(wait or _GW_READY_WAIT)
+
+    def _say(t):
+        if say:
+            try:
+                say(str(t))
+            except Exception:
+                pass
     with _gw_lock:
         if gateway_health():
             return True, "كانت حيّةً سلفاً"
@@ -684,17 +695,27 @@ def gateway_start(wait=None):
         except Exception as e:
             return False, f"{type(e).__name__}: {str(e)[:160]}"
         _t0 = time.time()
+        _say("… البوّابةُ تُقلع (حتى %d ث)" % wait)
+        _beat = 0.0
         while time.time() - _t0 < wait:
+            _el = time.time() - _t0
+            if _el - _beat >= 15:
+                _beat = _el
+                _say("  … %d ث" % int(_el))
             if gateway_health():
+                _say("✓ أقلعت في %.1f ث" % _el)
                 # إقلاعةٌ جديدة ⟶ تُضمَن صلاحيةُ البحث مرّةً واحدة. والبوّابةُ
                 # تحمل بيئتَها من لحظة إقلاعها، فهذا أوانُه الصحيح.
                 try:
                     # ضبطُ النموذج أوّلاً: بلا `agents.defaults.model.primary`
                     # يسقط المحرّكُ إلى `openai/gpt-5.6-sol` فتفشل كلُّ نوبة.
+                    _say("… كتابةُ إعدادِ التشغيل (كتابةٌ واحدة)")
                     configure_runtime()
+                    _say("… كتابةُ النموذجِ والمفتاح")
                     configure_model()
-                except Exception:
-                    pass
+                    _say("✓ الإعدادُ مكتوب")
+                except Exception as _e:
+                    _say("⚠ تعذّرت كتابةُ الإعداد: " + str(_e)[:120])
                 try:
                     # ولا يُمَسُّ اختيارٌ صريحٌ للمستخدم بحال: لو اختار
                     # مزوّداً بمعالج `configure --section web` ثمّ فشل نداءٌ
@@ -1453,6 +1474,65 @@ def model_ref():
     return m if m.startswith(prov + "/") else prov + "/" + m
 
 
+# ── كتابةُ الإعداد: كتابةٌ واحدةٌ لا عشر ──────────────────────────────────
+#
+# كلُّ `config set` عمليةُ node كاملة: تُحمَّل الحزمةُ، وتُفتح قاعدةُ الحالة،
+# ويُقرأ الإعدادُ ويُكتب. على خادمٍ سريعٍ ٥ ثوانٍ، وعلى هاتفٍ أضعافُها.
+# وكنّا نكتب عشرةَ مفاتيحَ بعشرِ عمليّات — فذهبت دقائقُ في الصمت، وظنّ
+# المستخدمُ أنّ الأمرَ علّق. وهو لم يُعلّق، بل كان يُقلع node عشرَ مرّات.
+#
+# وللمحرّك آليّتُه لذلك، موثّقةً في دليل أمرِه:
+#
+#     config patch — «Patch config from a JSON5 object in **one validated
+#     write**. Objects merge recursively, arrays/scalars replace, and null
+#     deletes a path.»        openclaw config patch --stdin
+#
+# مقيس: أربعةُ مفاتيحَ في نداءٍ واحدٍ ٥٫٤ ث، مقابل أربع عمليّاتٍ منفصلة.
+# وجوابُه: «Applied 4 config update(s). Change will apply without
+# restarting the gateway.»
+def config_patch(tree, timeout=180):
+    """اكتب شجرةَ إعدادٍ كاملةً في نداءٍ واحد. يعيد (نجح، سبب)."""
+    if not tree:
+        return True, "لا شيءَ يُكتب"
+    nb = node_bin()
+    if not (available() and nb):
+        return False, why_unavailable()
+    import json as _j
+    try:
+        p = subprocess.run([nb, ENTRY, "config", "patch", "--stdin"],
+                           input=_j.dumps(tree, ensure_ascii=False),
+                           capture_output=True, text=True, timeout=timeout,
+                           cwd=_ROOT, env=engine_env())
+        _record_run(["config", "patch", "--stdin"], p.returncode,
+                    p.stdout or "", p.stderr or "")
+        if p.returncode == 0:
+            return True, (p.stdout or "").strip().split("\n")[0][:160]
+        return False, (_real_error(p.stderr) or _real_error(p.stdout)
+                       or "تعذّرت الكتابة")[:200]
+    except subprocess.TimeoutExpired:
+        return False, "تجاوز المهلة (%d ث)" % timeout
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:160])
+
+
+def _nest(path, value):
+    """`a.b.c`, v  ⟶  {"a": {"b": {"c": v}}} — لتُدمَج في شجرةِ الترقيع."""
+    out = value
+    for part in reversed(str(path).split(".")):
+        out = {part: out}
+    return out
+
+
+def _merge(dst, src):
+    """دمجٌ عميق — نفسُ سلوكِ `config patch` (الكائناتُ تُدمج)."""
+    for k, v in (src or {}).items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _merge(dst[k], v)
+        else:
+            dst[k] = v
+    return dst
+
+
 def configure_model():
     """اكتب نموذجَك ومفتاحَك في إعداد المحرّك — بمفاتيحه هو.
 
@@ -1478,17 +1558,16 @@ def configure_model():
         rows.append(("نموذجُك", False,
                      "لا WEAVER_MODEL/WEAVER_PROVIDER في config/.env"))
         return rows
-    code, _o, err = run(["config", "set",
-                         "agents.defaults.model.primary", ref], timeout=90)
-    rows.append(("agents.defaults.model.primary = " + ref, code == 0,
-                 _real_error(err)))
+    # كتابةٌ واحدة: المفتاحُ يُكتب في `env.vars` كما يوثّقه المحرّك، فتراه
+    # البوّابةُ وكلُّ نوبةٍ بلا أن نحقنه في بيئةِ كلِّ نداء.
+    tree = {"agents": {"defaults": {"model": {"primary": ref}}}}
+    names = ["agents.defaults.model.primary = " + ref]
     for env_name, key in (creds or {}).items():
-        # المفتاحُ يُكتب في `env.vars` كما يوثّقه المحرّك، فتراه البوّابةُ
-        # وكلُّ نوبةٍ بلا أن نحقنه في بيئةِ كلِّ نداء.
-        code2, _o2, err2 = run(["config", "set",
-                                "env.vars." + env_name, key], timeout=90)
-        rows.append(("env.vars." + env_name + " = ***" + key[-4:],
-                     code2 == 0, _real_error(err2)))
+        _merge(tree, _nest("env.vars." + env_name, key))
+        names.append("env.vars." + env_name + " = ***" + key[-4:])
+    okp, why = config_patch(tree)
+    for n in names:
+        rows.append((n, okp, "" if okp else why))
     return rows
 
 
@@ -1514,43 +1593,56 @@ def configure_runtime():
     # فكلُّ أمرٍ يتّصل بها بعد ذلك يُرفَض:
     #   «unauthorized: device token mismatch»
     # فيُولَّد مرّةً ويُحفَظ. ولا يُطبع.
+    _tok_new = ""
     try:
-        _c, _o, _ = run(["config", "get", "gateway.auth.token"], timeout=60)
+        _c, _o, _ = run(["config", "get", "gateway.auth.token"], timeout=90)
         _tok = (_o or "").strip().strip('"')
         if not _tok or _tok in ("null", "undefined"):
             import secrets as _s
-            _tok = _s.token_hex(24)
-            _c2, _o2, _e2 = run(["config", "set", "gateway.auth.token", _tok],
-                                timeout=90)
-            rows.append(("رمزُ البوّابة — gateway.auth.token (مُولَّدٌ ومحفوظ)",
-                         _c2 == 0, _real_error(_e2)))
+            _tok_new = _s.token_hex(24)     # يُكتب مع البقيّة، لا وحده
     except Exception:
         pass
-    for path, val, what in (
-            # مهلةُ النوبة في إعداد المحرّك نفسِه — وهي «قيمةُ الإعداد» التي
-            # يذكرها وصفُ علمه: «default 600 or config value».
-            #   builtin-openclaw-B-H-7lKk.mjs:14983
-            #     cfg?.agents?.defaults?.timeoutSeconds
-            # فلا نعتمد على علمٍ نمرّره في كلِّ نداء، بل على إعدادِه هو —
-            # فيصحُّ حتى حين يُنادى المحرّكُ من غير طريقنا.
-            ("agents.defaults.timeoutSeconds", str(agent_deadline()),
-             "مهلةُ نوبة الوكيل (ثانية)"),
-            ("gateway.port", str(OUR_PORT), "منفذُ البوّابة"),
-            ("gateway.mode", "local", "وضعُ البوّابة"),
-            ("gateway.auth.mode", "token", "وضعُ اعتماد البوّابة"),
-            ("plugins.entries.browser.enabled", "true", "إضافةُ المتصفّح"),
-            ("browser.enabled", "true", "المتصفّح"),
-            # بلا هذا يرفض كروم الإقلاعَ في بيئةٍ محدودة الصلاحيات — وهي
-            # حالُ Termux وحالُ الجذر. والمحرّكُ نفسُه يقولها عند الفشل:
-            #   «If running in a container or as root, try setting
-            #    browser.noSandbox: true»
-            ("browser.noSandbox", "true", "كروم بلا صندوقٍ رمليّ"),
-            # لا يُرسَل شيءٌ عنك إلى الشبكة بلا علمك. مقيس: المحرّكُ حاول
-            # بلوغَ telemetry.openclaw.ai في تشغيلةٍ عادية.
-            ("telemetry.enabled", "false", "التتبّعُ الخارجيّ (مُطفأ)")):
-        code, _o, err = run(["config", "set", path, val], timeout=90)
-        rows.append((what + " — " + path + " = " + val, code == 0,
-                     _real_error(err)))
+    # وكانت هذه ثمانيَ عمليّاتِ node منفصلة — ثمانِ إقلاعاتٍ كاملةٍ للحزمة
+    # في صمت. صارت كتابةً واحدةً بآليّة المحرّك نفسِه (`config patch`).
+    # والقيمُ هنا أنواعُها الحقيقيّة (عدد · نصّ · منطقيّ) لا نصوصاً، لأنّ
+    # الترقيعةَ JSON5 تُتحقَّق من المخطَّط قبل الكتابة.
+    spec = (
+        # مهلةُ النوبة في إعداد المحرّك نفسِه — وهي «قيمةُ الإعداد» التي
+        # يذكرها وصفُ علمه: «default 600 or config value».
+        #   builtin-openclaw-B-H-7lKk.mjs:14983
+        #     cfg?.agents?.defaults?.timeoutSeconds
+        # فلا نعتمد على علمٍ نمرّره في كلِّ نداء، بل على إعدادِه هو —
+        # فيصحُّ حتى حين يُنادى المحرّكُ من غير طريقنا.
+        ("agents.defaults.timeoutSeconds", agent_deadline(),
+         "مهلةُ نوبة الوكيل (ثانية)"),
+        ("gateway.port", OUR_PORT, "منفذُ البوّابة"),
+        ("gateway.mode", "local", "وضعُ البوّابة"),
+        ("gateway.auth.mode", "token", "وضعُ اعتماد البوّابة"),
+        ("plugins.entries.browser.enabled", True, "إضافةُ المتصفّح"),
+        ("browser.enabled", True, "المتصفّح"),
+        # بلا هذا يرفض كروم الإقلاعَ في بيئةٍ محدودة الصلاحيات — وهي
+        # حالُ Termux وحالُ الجذر. والمحرّكُ نفسُه يقولها عند الفشل:
+        #   «If running in a container or as root, try setting
+        #    browser.noSandbox: true»
+        ("browser.noSandbox", True, "كروم بلا صندوقٍ رمليّ"),
+        # لا يُرسَل شيءٌ عنك إلى الشبكة بلا علمك. مقيس: المحرّكُ حاول
+        # بلوغَ telemetry.openclaw.ai في تشغيلةٍ عادية.
+        ("telemetry.enabled", False, "التتبّعُ الخارجيّ (مُطفأ)"),
+    )
+    tree = {}
+    for path, val, _what in spec:
+        _merge(tree, _nest(path, val))
+    if _tok_new:
+        _merge(tree, _nest("gateway.auth.token", _tok_new))
+    okp, why = config_patch(tree)
+    if _tok_new:
+        rows.append(("رمزُ البوّابة — gateway.auth.token (مُولَّدٌ ومحفوظ)",
+                     okp, "" if okp else why))
+    for path, val, what in spec:
+        rows.append((what + " — " + path + " = "
+                     + ("true" if val is True else
+                        "false" if val is False else str(val)),
+                     okp, "" if okp else why))
     return rows
 
 
@@ -1676,17 +1768,29 @@ NET_HOPS = ("المحرّك", "البوّابة", "جاهزيّةُ المحاد
             "أدواتُ النموذج", "مزوّدُ البحث", "مهلةُ النوبة", "نوبةٌ حقيقيّة")
 
 
-def net_doctor(live=False, query=None):
+def net_doctor(live=False, query=None, out=None):
     """افحص مسارَ الاتصال كلَّه. يعيد قائمةَ محطّاتٍ ولا يرفع استثناءً.
 
     كلُّ محطّة: {n, name, ok, say, why}. و`live=True` تُضيف نوبةً حقيقيّةً
     تُنادي النموذجَ وتقرأ مسارَه (`sessions export-trajectory`) لترى هل
-    استدعى `web_search` فعلاً — وهو الدليلُ الوحيدُ القاطع."""
+    استدعى `web_search` فعلاً — وهو الدليلُ الوحيدُ القاطع.
+
+    و`out` دالّةُ طباعة: تُطبع كلُّ محطّةٍ **فور انتهائها** لا عند النهاية.
+    فكلُّ محطّةٍ تُقلع node مرّةً على الأقلّ (٥ ث على خادم، أضعافُها على
+    هاتف)، وجمعُ الكلِّ ثمّ طبعُه يعني صمتاً طويلاً يبدو عُطلاً."""
     rows = []
+    _t_all = time.time()
 
     def add(n, ok, say, why=""):
-        rows.append({"n": n, "name": NET_HOPS[n - 1], "ok": bool(ok),
-                     "say": str(say), "why": str(why)})
+        row = {"n": n, "name": NET_HOPS[n - 1], "ok": bool(ok),
+               "say": str(say), "why": str(why),
+               "sec": round(time.time() - _t_all, 1)}
+        rows.append(row)
+        if out:
+            try:
+                out(row)
+            except Exception:
+                pass
 
     # ① المحرّك
     _av, _nb = available(), node_bin()
@@ -1725,6 +1829,11 @@ def net_doctor(live=False, query=None):
                         "بالاعتماد")
 
     # ⑤ أدواتُ النموذج — الدليلُ على وصول `web_search` إليه
+    if out:
+        try:
+            out({"n": 5, "name": NET_HOPS[4], "busy": True})
+        except Exception:
+            pass
     inv = tool_inventory()
     _okt = bool(inv.get("ok") and inv.get("web_search"))
     if inv.get("error"):
@@ -1740,6 +1849,11 @@ def net_doctor(live=False, query=None):
                              + (inv.get("suppressReason") or "غيرُ معروف")))
 
     # ⑥ مزوّدُ البحث — نداءُ بحثٍ حقيقيّ
+    if out:
+        try:
+            out({"n": 6, "name": NET_HOPS[5], "busy": True})
+        except Exception:
+            pass
     sr = probe_search(query or "أخبار اليوم")
     if sr.get("ok"):
         _ms = sr.get("tookMs") or 0
@@ -1773,6 +1887,11 @@ def net_doctor(live=False, query=None):
     if not live:
         add(8, True, "لم تُشغَّل (أضف `live` لتشغيلها)", "")
         return rows
+    if out:
+        try:
+            out({"n": 8, "name": NET_HOPS[7], "busy": True})
+        except Exception:
+            pass
     _sk = "netdoctor-" + str(int(time.time()))
     _q = (query or "ابحث في الويب عن آخر خبرٍ منشورٍ اليوم، "
                    "واذكر عنوانَه ورابطَه وتاريخَه.")
@@ -1812,14 +1931,31 @@ def _cli():
             if a != "live":
                 _q = a
         print("  الاتصالُ بالإنترنت — المسارُ كلُّه، محطّةً محطّة"
-              + ("  (ومعه نوبةٌ حقيقيّة)" if _live else "") + "\n")
-        rows = net_doctor(live=_live, query=_q)
-        _first_bad = None
-        for r in rows:
-            mark = "✓" if r["ok"] else "✗"
-            print("  %s %d) %-18s %s" % (mark, r["n"], r["name"], r["say"]))
+              + ("  (ومعه نوبةٌ حقيقيّة)" if _live else ""))
+        print("  (كلُّ محطّةٍ تُقلع node مرّةً — فالانتظارُ عملٌ لا عُطل)\n")
+
+        # سطرُ «جارٍ» يُمسح ويُستبدل — لكن المحوَ رموزُ طرفيّة، فإن أُعيد
+        # التوجيهُ إلى ملفٍّ ظهرت خاماً (`[2K`). فلا تُكتب إلّا على طرفيّة.
+        _tty = sys.stdout.isatty()
+
+        def _emit(r):
+            if r.get("busy"):
+                if _tty:
+                    sys.stdout.write("  … %d) %s" % (r["n"], r["name"]))
+                    sys.stdout.flush()
+                return
+            if _tty:
+                sys.stdout.write("\r\033[2K")   # امسح سطرَ «جارٍ»
+            print("  %s %d) %-18s %s   [%.0f ث]"
+                  % ("✓" if r["ok"] else "✗", r["n"], r["name"], r["say"],
+                     r.get("sec") or 0))
             if r["why"]:
                 print("        └─ " + r["why"][:300])
+            sys.stdout.flush()
+
+        rows = net_doctor(live=_live, query=_q, out=_emit)
+        _first_bad = None
+        for r in rows:
             if not r["ok"] and _first_bad is None:
                 _first_bad = r
         print()
@@ -1916,7 +2052,10 @@ def _cli():
     if argv[:1] == ["--gateway"]:
         sub = argv[1] if len(argv) > 1 else "status"
         if sub == "start":
-            ok, why = gateway_start()
+            def _p(t):
+                print("  " + str(t))
+                sys.stdout.flush()
+            ok, why = gateway_start(say=_p)
             print(("  ✓ البوّابة حيّة — " if ok else "  ⚠ لم تقم — ") + str(why))
             return
         if sub == "stop":

@@ -30,6 +30,22 @@ def chk(label, cond, extra=""):
         print("   XX  " + label + ("   " + str(extra) if extra else ""))
 
 
+# صارت الكتابةُ ترقيعةً واحدةً (`config patch --stdin`) بدل عشرِ `config set`
+# — عشرُ إقلاعاتٍ لـnode صارت واحدة. والفحصُ يجب أن يسأل: **أيُّ قيمةٍ
+# استقرّت في الإعداد؟** لا: بأيِّ أمرٍ كُتبت. فالأوّلُ هو المطلوب، والثاني
+# تفصيلُ تنفيذٍ تغيّر مرّةً وقد يتغيّر.
+def _flat(tree, pre=""):
+    """{"a":{"b":1}} ⟶ {"a.b": 1} — لتُقارَن بمساراتِ النقاط."""
+    out = {}
+    for k, v in (tree or {}).items():
+        path = (pre + "." + k) if pre else k
+        if isinstance(v, dict):
+            out.update(_flat(v, path))
+        else:
+            out[path] = v
+    return out
+
+
 from pipeline import weaver_core as W   # noqa: E402
 
 print("=" * 70)
@@ -249,24 +265,36 @@ try:
     chk("  -> ولا يُكرَّر المزوّدُ إن كان في الاسم أصلاً",
         True)
     _w = []
+    _patched = {}
 
     def _run5(args, timeout=180, input_text=None, cwd=None):
         _w.append(list(args))
         return 0, "", ""
+
+    def _patch5(tree, timeout=180):
+        _patched.update(_flat(tree))
+        return True, ""
     W.run = _run5
+    _op5 = W.config_patch
+    W.config_patch = _patch5
     rows = W.configure_model()
-    _paths = [a[2] for a in _w if a[:2] == ["config", "set"]]
+    _paths = list(_patched) + [a[2] for a in _w if a[:2] == ["config", "set"]]
     chk("يُكتب agents.defaults.model.primary",
         "agents.defaults.model.primary" in _paths, _paths)
     chk("  -> بقيمةِ المرجع",
-        any(a[-1] == "openrouter/deepseek/deepseek-v4-flash" for a in _w), _w)
+        _patched.get("agents.defaults.model.primary")
+        == "openrouter/deepseek/deepseek-v4-flash", _patched)
     chk("ويُكتب المفتاحُ في env.vars بالاسم الذي يفهمه المزوّد",
         "env.vars.OPENROUTER_API_KEY" in _paths, _paths)
+    chk("  -> وكتابةً واحدةً لا نداءً لكلِّ مفتاح",
+        len([a for a in _w if a[:2] == ["config", "set"]]) == 0, _w)
     chk("  -> ولا يُطبع المفتاحُ إلّا مقنَّعاً",
         all("sk-or-v1-abcd" not in str(r[0]) for r in rows), rows)
 
+    _patched.clear()
     W._load_settings = lambda: {}
     rows = W.configure_model()
+    W.config_patch = _op5
     chk("وبلا إعدادٍ ⟶ يُقال السببُ ولا يُكتب شيء",
         rows and rows[0][1] is False and "config/.env" in rows[0][2], rows)
 finally:
@@ -353,15 +381,30 @@ try:
         W.auth_flag("venice-api-key") == "--venice-api-key")
 
     _w = []
+    _pt8 = {}
 
     def _run8(args, timeout=180, input_text=None, cwd=None):
         _w.append(list(args))
         if list(args)[:2] == ["config", "get"]:
             return 0, '"x"', ""
         return 0, "", ""
+
+    def _patch8(tree, timeout=180):
+        _pt8.update(_flat(tree))
+        return True, ""
     W.run = _run8
+    _op8 = W.config_patch
+    W.config_patch = _patch8
     rows = W.configure_runtime()
-    _set = {a[2]: a[3] for a in _w if a[:2] == ["config", "set"]}
+    W.config_patch = _op8
+    # القيمُ الآن بأنواعها الحقيقيّة (True/عدد) لا نصوصاً — فتُوحَّد للمقارنة.
+    _set = {k: ("true" if v is True else "false" if v is False else str(v))
+            for k, v in _pt8.items()}
+    _set.update({a[2]: a[3] for a in _w if a[:2] == ["config", "set"]})
+    chk("كتابةٌ واحدةٌ لا ثمانٍ (config patch)",
+        len([a for a in _w if a[:2] == ["config", "set"]]) == 0, _w)
+    chk("ومهلةُ النوبةِ فيها — ٦٠٠ كما عند المحرّك",
+        _set.get("agents.defaults.timeoutSeconds") == "600", _set)
     chk("منفذُ البوّابة يُكتب في الإعداد (وإلّا قصدت الأوامرُ منفذاً آخر)",
         _set.get("gateway.port") == str(W.OUR_PORT), _set.get("gateway.port"))
     chk("والمتصفّحُ يحتاج المفتاحين معاً (شرطُ التوثيق)",
