@@ -174,16 +174,23 @@ chk("and Termux/nvm locations are searched",
                          encoding="utf-8").read())
 
 # Tier 3: an answer comes back even with no engine and no usable node.
-_r = W.ask("2+2", fallback=False)
+#
+# مهلةٌ صريحةٌ قصيرة: `ask()` بلا مهلةٍ تأخذ مهلةَ المحرّك (٦٠٠ ث + فسحة)،
+# وهي المهلةُ الصحيحةُ لنوبةٍ حقيقيّةٍ تبحث وتفتح صفحات — لا لفحصٍ يسأل
+# «أيعيد المفاتيحَ الثلاثة؟». فيُطلب القصيرُ صراحةً، و`ask` تحترمه.
+_T = 45
+_r = W.ask("2+2", fallback=False, timeout=_T)
 if not (W.available() and W.node_bin()):
     chk("no engine + fallback off -> it says why, plainly",
         _r["engine"] == "" and bool(_r["note"]))
     chk("  and names the real cause, not a shrug",
         "node" in _r["note"] or "install.sh" in _r["note"], _r["note"][:60])
 chk("ask() always returns the three keys",
-    set(W.ask("x", fallback=False)) == {"answer", "engine", "note"})
+    set(W.ask("x", fallback=False, timeout=_T))
+    == {"answer", "engine", "note"})
 chk("and says WHICH engine answered -- never hidden",
-    W.ask("x", fallback=False).get("engine") in ("", "weaver-core", "python"))
+    W.ask("x", fallback=False, timeout=_T).get("engine")
+    in ("", "weaver-core", "python"))
 
 # the shell installer and the python bridge must never disagree
 _sh = open(os.path.join(_ROOT, "engines", "weaver-core", "install.sh"),

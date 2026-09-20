@@ -1587,9 +1587,10 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
                      or _wc.agent_deadline())
         except Exception:
             _t = 600
+        # ساعةُ الحائط = مهلةُ المحرّك + فسحةُ الإقلاع. ولا تُقَصّ تحتها.
+        _wall = max(int(timeout or 0), int(_t) + _wc._AGENT_GRACE)
         r = _wc.ask("\n\n".join(parts),
-                    timeout=max(int(timeout or 120), _t), fallback=False,
-                    session=session)
+                    timeout=_wall, fallback=False, session=session)
     except Exception as _e:
         _engine_fail(type(_e).__name__ + ": " + str(_e)[:200])
         return None

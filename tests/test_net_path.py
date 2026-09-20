@@ -55,6 +55,10 @@ ok("لم يعد يُطرح ٢٠ من المهلة",
    'str(max(30, int(timeout) - 20))' not in _code)
 ok("العلمُ يأخذ مهلةَ المحرّك", '_to = str(_deadline)' in _src)
 ok("ساعةُ الحائط أوسعُ من المهلة", 'timeout=_wall' in _src)
+ok("وبلا مهلةٍ صريحةٍ ⟶ مهلةُ المحرّك",
+   'def ask(text, timeout=None' in _code)
+ok("ومهلةُ المتّصلِ الصريحةُ تُحترم ولا تُرفَع",
+   '_wall = max(60, int(timeout))' in _code)
 ok("المهلةُ تُكتب في إعداد المحرّك",
    '"agents.defaults.timeoutSeconds"' in _src)
 
@@ -69,7 +73,7 @@ print("\n— فحصُ الأدوات —")
 ok("probe_tools.mjs موجود", os.path.isfile(wc.PROBE_TOOLS))
 ok("tool_inventory موجودة", callable(getattr(wc, "tool_inventory", None)))
 ok("net_doctor موجودة", callable(getattr(wc, "net_doctor", None)))
-ok("محطّاتُ المسار ثمان", len(wc.NET_HOPS) == 8, str(len(wc.NET_HOPS)))
+ok("محطّاتُ المسار تسع", len(wc.NET_HOPS) == 9, str(len(wc.NET_HOPS)))
 _inv = wc.tool_inventory()
 ok("الجردُ لا يرفع استثناءً", isinstance(_inv, dict))
 if _inv.get("ok"):
@@ -79,6 +83,22 @@ if _inv.get("ok"):
 else:
     print("    ⓘ لا node صالحٌ هنا — تُخطَّى محطّةُ الجرد: "
           + str(_inv.get("error"))[:80])
+
+print("\n— مساحةُ العمل: EACCES على link() في أندرويد —")
+ok("seed_workspace.mjs موجود", os.path.isfile(wc.SEED_WS))
+ok("seed_workspace موجودة", callable(getattr(wc, "seed_workspace", None)))
+ok("ensure_workspace موجودة", callable(getattr(wc, "ensure_workspace", None)))
+ok("ask تبذر قبل النوبة", "ensure_workspace()" in _src)
+ok("والبوّابةُ تبذر عند إقلاعةٍ جديدة",
+   "ensure_workspace(say=_say)" in _src)
+ok("والفحصُ الرخيصُ ملفٌّ لا عمليّة",
+   "os.path.isfile(os.path.join(workspace_dir()" in _src)
+_sw = open(wc.SEED_WS, encoding="utf-8").read()
+ok("يستعمل resolveAgentWorkspaceDir من المحرّك", "agent-scope-config" in _sw)
+ok("وقوالبَ المحرّك ومساراتِها", "resolveWorkspaceTemplateSearchDirs" in _sw
+   or "mWs.C(" in _sw)
+ok("وينزع الواجهةَ كما ينزعها هو", "frontmatter" in _sw)
+ok("ولا يدوس ملفّاً موجوداً", 'flag: "wx"' in _sw)
 
 print("\n— probe_tools.mjs: يستعمل دالّةَ المحرّك لا تقليداً —")
 _mj = open(wc.PROBE_TOOLS, encoding="utf-8").read()

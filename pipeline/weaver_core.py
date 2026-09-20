@@ -709,6 +709,8 @@ def gateway_start(wait=None, say=None):
                 try:
                     # ضبطُ النموذج أوّلاً: بلا `agents.defaults.model.primary`
                     # يسقط المحرّكُ إلى `openai/gpt-5.6-sol` فتفشل كلُّ نوبة.
+                    _say("… بذرُ مساحة العمل (ملفّاتُ التمهيد)")
+                    ensure_workspace(say=_say)
                     _say("… كتابةُ إعدادِ التشغيل (كتابةٌ واحدة)")
                     configure_runtime()
                     _say("… كتابةُ النموذجِ والمفتاح")
@@ -1085,7 +1087,7 @@ def _session_id(key):
     return ("weaver-" + k) if k else "weaver-default"
 
 
-def ask(text, timeout=300, cwd=None, fallback=True, session=None):
+def ask(text, timeout=None, cwd=None, fallback=True, session=None):
     """اسأل — بالمحرّك إن أمكن، وإلّا بالمسار البايثونيّ.
 
     الدرجةُ الثالثة: **أيُّ سؤالٍ يُجاب على أيّ إصدارِ node، ولو لم يكن ثمّة
@@ -1103,17 +1105,26 @@ def ask(text, timeout=300, cwd=None, fallback=True, session=None):
     الموقف — تولّى المسارُ البايثونيُّ وقال السبب — لكنّ الخطأ كان خطئي:
     زعمتُ في تعليقٍ أنّه «مدخلُ الحزمة للتشغيل غير التفاعليّ» بلا دليل."""
     if available() and node_bin():
+        # قبل أيِّ نوبة: مساحةُ العمل مبذورة. وإلّا مات التمهيدُ بـEACCES
+        # على `link()` فلم يُنادَ النموذجُ أصلاً (التعليلُ عند `seed_workspace`).
+        # وكلفتُها حين لا تلزم: فحصُ وجودِ ملفٍّ واحد.
+        ensure_workspace()
         # المهلةُ من المحرّك لا من عندنا — `agent_deadline()` وتعليلُها فوق.
         # وساعةُ الحائط عندنا أوسعُ من مهلته بفسحةٍ، وإلّا قتلناه قبل أن
-        # يبلغ مهلتَه هو. وإن نادى المتّصلُ بمهلةٍ أوسعَ من ٦٠٠ فهي تُحترم.
-        _deadline = agent_deadline()
-        try:
-            _want = int(timeout or 0) - _AGENT_GRACE
-        except Exception:
-            _want = 0
-        if _want > _deadline:
-            _deadline = _want
-        _wall = _deadline + _AGENT_GRACE
+        # يبلغ مهلتَه هو.
+        #
+        # و`timeout=None` تعني «مهلةَ المحرّك» — وهي الحالُ الافتراضيّة.
+        # ومن نادى بمهلةٍ صريحةٍ فهي ساعتُه، فتُحترم ولا تُرفَع فوقها: كان
+        # الافتراضيُّ ٣٠٠ فصار ٦٩٠ صامتاً، فعلّق فحصٌ كان ينتهي في دقائق.
+        if timeout is None:
+            _deadline = agent_deadline()
+            _wall = _deadline + _AGENT_GRACE
+        else:
+            try:
+                _wall = max(60, int(timeout))
+            except Exception:
+                _wall = agent_deadline() + _AGENT_GRACE
+            _deadline = max(30, _wall - _AGENT_GRACE)
         _to = str(_deadline)
         _via_gateway = False
         if gateway_on():
@@ -1288,6 +1299,7 @@ def trajectory(session, agent="main", timeout=90):
 
 PROBE_SEARCH = os.path.join(_ROOT, "engines", "weaver-core", "probe_search.mjs")
 PROBE_TOOLS = os.path.join(_ROOT, "engines", "weaver-core", "probe_tools.mjs")
+SEED_WS = os.path.join(_ROOT, "engines", "weaver-core", "seed_workspace.mjs")
 
 
 def run_tty(args, timeout=None):
@@ -1719,6 +1731,95 @@ def probe_search(query="اختبار البحث"):
         return _bad
 
 
+# ── بذرُ مساحة العمل: العطبُ الذي كان يقتل كلَّ نوبة ──────────────────────
+#
+# على جهاز المستخدم (Termux/Android) كانت كلُّ نوبةٍ تموت قبل أن يُنادى
+# النموذجُ أصلاً — ورآها `--net-doctor live` بعينها:
+#
+#   ✗ 8) نوبة حقيقيّة — لم يجب
+#     EACCES: permission denied, link
+#       '…/state/workspace/openclaw-bootstrap-IWLWOR/AGENTS.md'
+#       -> '…/state/workspace/AGENTS.md'
+#
+# المحرّكُ ينشر ملفّاتِ التمهيد بوصلةٍ صلبةٍ ذرّيّة (`fs.linkSync`)، وأندرويد
+# يردّ EACCES على `link()`. ومصنّفُ المحرّك لا يعدُّ EACCES من أخطاء السقوط:
+#
+#   @openclaw/fs-safe/dist/publish-file.js:14
+#     HARDLINK_FALLBACK_CODES = { EPERM, EXDEV, ENOTSUP, EOPNOTSUPP, ENOSYS }
+#
+# فلا نسخةَ احتياطيّة، ويُرمى الخطأُ خاماً فيسقط التمهيدُ ومعه النوبة.
+#
+# والعلاجُ من معماريّته هو، لا من عندنا — سطرٌ في دالّته نفسِها:
+#
+#   workspace-YW5Pl2cf.mjs:231   if (existing) return false;
+#
+# «الموجودُ لا يُنشر». فتكفي أن تكون الملفّاتُ موجودةً قبلَه، فلا يُنادى
+# `linkSync` أبداً. وتُكتب بقوالبه هو من مجلّداتِه هو بعد نزعِ الواجهة كما
+# ينزعها هو — فالمحتوى مطابقٌ لما كان سيكتبه، والفرقُ الوحيدُ `write` بدل
+# `link`. والتفصيلُ كلُّه في رأس `seed_workspace.mjs`.
+_WS_SEEDED = {"done": False}
+
+
+def workspace_dir():
+    """مجلّدُ عمل الوكيل كما يشتقُّه المحرّك — بلا إقلاع node.
+
+    فحصٌ رخيصٌ يُنادى قبل كلِّ نوبة، فلا يجوز أن يُقلع عملية. والمسارُ
+    مقيسٌ من رسالة الخطأ على الجهاز: `<state>/workspace`."""
+    return os.path.join(_STATE_DIR, "workspace")
+
+
+def workspace_seeded():
+    """أموجودٌ ملفُّ التمهيد الأساسيُّ؟ — فحصُ ملفٍّ لا أكثر."""
+    try:
+        return os.path.isfile(os.path.join(workspace_dir(), "AGENTS.md"))
+    except Exception:
+        return False
+
+
+def seed_workspace(timeout=180):
+    """ابذر ملفّاتِ التمهيد بقوالب المحرّك. يعيد dict ولا يرفع استثناءً."""
+    _bad = {"ok": False, "workspace": "", "files": [], "created": 0,
+            "existed": 0, "error": ""}
+    nb = node_bin()
+    if not nb:
+        _bad["error"] = why_unavailable()
+        return _bad
+    if not os.path.isfile(SEED_WS):
+        _bad["error"] = "seed_workspace.mjs مفقود"
+        return _bad
+    try:
+        p = subprocess.run([nb, SEED_WS], capture_output=True, text=True,
+                           timeout=timeout, cwd=_ROOT, env=engine_env())
+        out = (p.stdout or "").strip()
+        import json as _j
+        i, j = out.find("{"), out.rfind("}")
+        if i < 0 or j < i:
+            _bad["error"] = (_real_error(p.stderr) or out or "بلا خرج")[:250]
+            return _bad
+        d = _j.loads(out[i:j + 1])
+        return d if isinstance(d, dict) else _bad
+    except Exception as e:
+        _bad["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+        return _bad
+
+
+def ensure_workspace(say=None):
+    """ابذر مرّةً واحدةً إن لزم. رخيصةٌ حين لا يلزم: فحصُ ملفٍّ لا غير."""
+    if _WS_SEEDED["done"] or workspace_seeded():
+        _WS_SEEDED["done"] = True
+        return True, "مبذورة"
+    r = seed_workspace()
+    _WS_SEEDED["done"] = bool(r.get("ok"))
+    if say:
+        try:
+            say("… بذرُ مساحة العمل: %d ملفّاً" % (r.get("created") or 0)
+                if r.get("ok") else "⚠ تعذّر بذرُ مساحة العمل: "
+                + str(r.get("error"))[:120])
+        except Exception:
+            pass
+    return bool(r.get("ok")), (r.get("error") or "%d ملفّاً" % (r.get("created") or 0))
+
+
 def tool_inventory():
     """أيُّ أدواتٍ يراها النموذجُ فعلاً؟ — بحساب المحرّك نفسِه.
 
@@ -1765,7 +1866,8 @@ def tool_inventory():
 #
 # وكلُّ محطّةٍ تُقاس بدالّة المحرّك نفسِه حيث وُجدت، لا بحيلةٍ من عندنا.
 NET_HOPS = ("المحرّك", "البوّابة", "جاهزيّةُ المحادثة", "النموذجُ والمفتاح",
-            "أدواتُ النموذج", "مزوّدُ البحث", "مهلةُ النوبة", "نوبةٌ حقيقيّة")
+            "أدواتُ النموذج", "مزوّدُ البحث", "مهلةُ النوبة",
+            "مساحةُ العمل", "نوبةٌ حقيقيّة")
 
 
 def net_doctor(live=False, query=None, out=None):
@@ -1883,13 +1985,24 @@ def net_doctor(live=False, query=None, out=None):
         "" if _okd else "أقصرُ من مهلة المحرّك نفسِه (٦٠٠) — النوبةُ تُقتل "
                         "وهي تبحث")
 
-    # ⑧ نوبةٌ حقيقيّة — لا تُشغَّل إلّا بطلبك: تكلّف رموزاً ووقتاً.
+    # ⑧ مساحةُ العمل — التمهيدُ يموت بـEACCES على `link()` في أندرويد،
+    #    فلا يُنادى النموذجُ أصلاً. وهذه المحطّةُ تسمّيه باسمه قبل النوبة.
+    _wsd = workspace_dir()
+    _wsok = workspace_seeded()
+    add(8, _wsok,
+        ("ملفّاتُ التمهيد موجودة · " + _wsd) if _wsok
+        else ("AGENTS.md غائبٌ في " + _wsd),
+        "" if _wsok else "التمهيدُ سيُنشئه بوصلةٍ صلبة، وأندرويد يردّ EACCES "
+                         "على link() — فتموت النوبةُ قبل النموذج. "
+                         "العلاج: --seed-workspace")
+
+    # ⑨ نوبةٌ حقيقيّة — لا تُشغَّل إلّا بطلبك: تكلّف رموزاً ووقتاً.
     if not live:
-        add(8, True, "لم تُشغَّل (أضف `live` لتشغيلها)", "")
+        add(9, True, "لم تُشغَّل (أضف `live` لتشغيلها)", "")
         return rows
     if out:
         try:
-            out({"n": 8, "name": NET_HOPS[7], "busy": True})
+            out({"n": 9, "name": NET_HOPS[8], "busy": True})
         except Exception:
             pass
     _sk = "netdoctor-" + str(int(time.time()))
@@ -1901,7 +2014,7 @@ def net_doctor(live=False, query=None, out=None):
     _names = [c.get("name") for c in calls if c.get("name")]
     _searched = any("search" in str(n) or "fetch" in str(n) or "browser"
                     in str(n) for n in _names)
-    add(8, bool(_ans.strip()) and _searched,
+    add(9, bool(_ans.strip()) and _searched,
         ("استدعى: " + ", ".join(_names[:8])) if _names
         else ("أجاب بلا استدعاء أيّ أداة" if _ans.strip()
               else "لم يُجب"),
@@ -1970,6 +2083,24 @@ def _cli():
             if _first_bad["why"]:
                 print("    " + _first_bad["why"][:300])
         sys.exit(0 if _first_bad is None else 1)
+    if argv[:1] == ["--seed-workspace"]:
+        print("  بذرُ ملفّاتِ التمهيد بقوالب المحرّك نفسِه\n")
+        r = seed_workspace()
+        if r.get("error"):
+            print("  ✗ " + str(r["error"])[:250], file=sys.stderr)
+            sys.exit(1)
+        print("  المجلّد : " + str(r.get("workspace") or "—"))
+        for d in r.get("templateDirs") or []:
+            print("  القوالب: " + str(d))
+        print()
+        for f in r.get("files") or []:
+            _st = str(f.get("state") or "")
+            print("  %-14s %s%s" % (f.get("name"), _st,
+                                    ("  (%d بايت)" % f["bytes"])
+                                    if f.get("bytes") else ""))
+        print("\n  كُتب %d · موجودٌ سلفاً %d"
+              % (r.get("created") or 0, r.get("existed") or 0))
+        sys.exit(0 if r.get("ok") else 1)
     if argv == ["--tools"]:
         inv = tool_inventory()
         if inv.get("error"):
