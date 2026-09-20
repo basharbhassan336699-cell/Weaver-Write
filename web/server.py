@@ -2440,6 +2440,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # بطاقةُ أداةٍ بحمولةٍ حقيقيّة: الأمرُ الذي نُفّذ فعلاً
                     # ومُغلَّفُ جوابه كما عاد — مقروءان من سجلّ المحرّك، لا
                     # مُلفَّقَين. وتُرسَل بعد الجواب كي لا تُؤخّره.
+                    # الجوابُ أوّلاً — ثمّ البطاقات.
+                    #
+                    # كان التعليقُ هنا يقول «تُرسَل بعد الجواب كي لا تُؤخّره»
+                    # والكودُ يفعل عكسَه: البطاقاتُ قبل السطر الذي يُرسل
+                    # الجواب. و`_engine_trajectory_cards` تنادي المحرّكَ
+                    # (`sessions export-trajectory`) — إقلاعةُ node كاملة،
+                    # مقيسةٌ على هاتف المستخدم بـ**٤٢ ثانية**:
+                    #     ✓ 1) المحرّك … [42 ث]   ⟵ مجرّد `--version`
+                    # فكلُّ جوابٍ كان ينتظرها وهو جاهز.
+                    #
+                    # وSSE مجرىً: الجوابُ يُرسَم فورَ وصوله، والبطاقاتُ
+                    # تُلحَق بعده (`stepsTool` تُراكم وتُعيد الرسم، و`amsg.tools`
+                    # تُحفَظ بعد انتهاء المجرى كلِّه). فلا يضيع شيء.
+                    reply = r.get("reply") or ""
+                    if reply.strip():
+                        reply += _sources_md(srcs, isar)
+                    sse({"t": "reply", "reply": reply})
                     _tc = _engine_tool_card(r, isar)
                     if _tc:
                         # بطاقةٌ لكلِّ أداةٍ استدعاها الوكيلُ فعلاً — من مسار
@@ -2454,10 +2471,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         _fc = _engine_fail_card(_engine_fail(), isar)
                         if _fc:
                             sse({"t": "tool", "tool": _fc})
-                    reply = r.get("reply") or ""
-                    if reply.strip():
-                        reply += _sources_md(srcs, isar)
-                    sse({"t": "reply", "reply": reply})
                 sse({"t": "done"})
                 return
 
