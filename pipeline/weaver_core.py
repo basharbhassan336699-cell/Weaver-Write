@@ -511,6 +511,47 @@ except Exception:
     _GW_READY_WAIT = 300
 _gw_lock = threading.Lock()
 
+# ── مهلةُ نوبة الوكيل: قيمةُ المحرّك، لا قيمةٌ من عندنا ────────────────────
+#
+# هذا كان العطبَ الذي أعمانا. كنّا نقصُّ مهلةَ النوبة إلى ٢٢٠ ثانية:
+#
+#     _to = str(max(30, int(timeout) - 20))        ⟵ مع timeout=240
+#
+# والمحرّكُ نفسُه مهلتُه الافتراضيّةُ **٦٠٠** ثانية، مكتوبةً في تسجيل أمرِه:
+#
+#     register.agent-turn-gi9D9FTy.mjs:41
+#       .option("--timeout <seconds>", "Agent deadline in seconds", "600")
+#     register.agent-turn-gi9D9FTy.mjs:14   (المسارُ عبر البوّابة)
+#       "Override agent command timeout (seconds, default 600 or config value)"
+#
+# و«قيمةُ الإعداد» مفتاحُها عنده:
+#
+#     builtin-openclaw-B-H-7lKk.mjs:14983
+#       const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds
+#
+# ونوباتُ المستخدم المقيسةُ على هاتفه: ٧ دقائق، ودقيقتان، و٦ دقائق —
+# أي ٤٢٠ و١٢٠ و٣٦٠ ثانية. فنوبتان من ثلاثٍ تتجاوزان ٢٢٠، فتُقتلان:
+#
+#     run() ⟶ subprocess.TimeoutExpired ⟶ رمز 124
+#          ⟶ ask() تعيد خطأً
+#          ⟶ _chat_via_engine تعيد None
+#          ⟶ _chat_direct: نداءٌ واحدٌ **بلا أدوات** ⟶ بلا إنترنت
+#
+# فالنتيجةُ التي يراها المستخدم: جوابٌ واثقٌ لا يعرف شيئاً عن اليوم. لا
+# لأنّ البحثَ معطوب — بل لأنّنا نقتل النوبةَ قبل أن يبحث.
+_AGENT_GRACE = 90          # إقلاعُ البوّابة وفتحُ العملية على هاتف
+_AGENT_DEADLINE_DEFAULT = 600
+
+
+def agent_deadline():
+    """مهلةُ نوبة الوكيل بالثواني — ٦٠٠ كما عند المحرّك، وتُضبَط بالبيئة."""
+    try:
+        v = int(os.environ.get("WEAVER_AGENT_DEADLINE", "")
+                or _AGENT_DEADLINE_DEFAULT)
+        return v if v >= 60 else _AGENT_DEADLINE_DEFAULT
+    except Exception:
+        return _AGENT_DEADLINE_DEFAULT
+
 
 def gateway_on():
     """أمسموحٌ باستعمال البوّابة؟ (`WEAVER_GATEWAY=0` يُطفئها)"""
@@ -1041,7 +1082,18 @@ def ask(text, timeout=300, cwd=None, fallback=True, session=None):
     الموقف — تولّى المسارُ البايثونيُّ وقال السبب — لكنّ الخطأ كان خطئي:
     زعمتُ في تعليقٍ أنّه «مدخلُ الحزمة للتشغيل غير التفاعليّ» بلا دليل."""
     if available() and node_bin():
-        _to = str(max(30, int(timeout) - 20))
+        # المهلةُ من المحرّك لا من عندنا — `agent_deadline()` وتعليلُها فوق.
+        # وساعةُ الحائط عندنا أوسعُ من مهلته بفسحةٍ، وإلّا قتلناه قبل أن
+        # يبلغ مهلتَه هو. وإن نادى المتّصلُ بمهلةٍ أوسعَ من ٦٠٠ فهي تُحترم.
+        _deadline = agent_deadline()
+        try:
+            _want = int(timeout or 0) - _AGENT_GRACE
+        except Exception:
+            _want = 0
+        if _want > _deadline:
+            _deadline = _want
+        _wall = _deadline + _AGENT_GRACE
+        _to = str(_deadline)
         _via_gateway = False
         if gateway_on():
             _ok, _why = gateway_start()
@@ -1071,7 +1123,7 @@ def ask(text, timeout=300, cwd=None, fallback=True, session=None):
             # بلا هذا يسقط المحرّكُ إلى نموذجه الافتراضيّ (openai/…) ثمّ
             # يفشل بـauth — وهو بالضبط ما رآه المستخدم.
             args += ["--model", _m]
-        code, out, err = run(args, timeout=timeout, cwd=cwd)
+        code, out, err = run(args, timeout=_wall, cwd=cwd)
         if code == 0 and out.strip():
             return {"answer": _from_envelope(out), "engine": "weaver-core",
                     "note": ""}
@@ -1214,6 +1266,7 @@ def trajectory(session, agent="main", timeout=90):
 
 
 PROBE_SEARCH = os.path.join(_ROOT, "engines", "weaver-core", "probe_search.mjs")
+PROBE_TOOLS = os.path.join(_ROOT, "engines", "weaver-core", "probe_tools.mjs")
 
 
 def run_tty(args, timeout=None):
@@ -1474,6 +1527,14 @@ def configure_runtime():
     except Exception:
         pass
     for path, val, what in (
+            # مهلةُ النوبة في إعداد المحرّك نفسِه — وهي «قيمةُ الإعداد» التي
+            # يذكرها وصفُ علمه: «default 600 or config value».
+            #   builtin-openclaw-B-H-7lKk.mjs:14983
+            #     cfg?.agents?.defaults?.timeoutSeconds
+            # فلا نعتمد على علمٍ نمرّره في كلِّ نداء، بل على إعدادِه هو —
+            # فيصحُّ حتى حين يُنادى المحرّكُ من غير طريقنا.
+            ("agents.defaults.timeoutSeconds", str(agent_deadline()),
+             "مهلةُ نوبة الوكيل (ثانية)"),
             ("gateway.port", str(OUR_PORT), "منفذُ البوّابة"),
             ("gateway.mode", "local", "وضعُ البوّابة"),
             ("gateway.auth.mode", "token", "وضعُ اعتماد البوّابة"),
@@ -1566,6 +1627,170 @@ def probe_search(query="اختبار البحث"):
         return _bad
 
 
+def tool_inventory():
+    """أيُّ أدواتٍ يراها النموذجُ فعلاً؟ — بحساب المحرّك نفسِه.
+
+    الجردُ يُحسب بـ`resolveEffectiveToolInventory` — نفسُ الدالّة التي يُجيب
+    بها أمرُ المحرّك `/tools` — أي **بعد** كلِّ المصافي: سياسةُ المزوّد،
+    وحذفُ `web_search` حين يكون بحثُ Codex الأصليُّ فعّالاً، وملفُّ الأدوات.
+
+    يعيد dict: ok · profile · tools · web_search · web_fetch · browser ·
+    suppressed · suppressReason · error."""
+    _bad = {"ok": False, "profile": "", "agentId": "", "groups": [],
+            "tools": [], "web_search": False, "web_fetch": False,
+            "browser": False, "suppressed": False, "suppressReason": "",
+            "error": ""}
+    nb = node_bin()
+    if not nb:
+        _bad["error"] = why_unavailable()
+        return _bad
+    if not os.path.isfile(PROBE_TOOLS):
+        _bad["error"] = "probe_tools.mjs مفقود"
+        return _bad
+    try:
+        p = subprocess.run([nb, PROBE_TOOLS, provider_id() or "",
+                            model_id() or ""],
+                           capture_output=True, text=True, timeout=180,
+                           cwd=_ROOT, env=engine_env())
+        out = (p.stdout or "").strip()
+        import json as _j
+        i, j = out.find("{"), out.rfind("}")
+        if i < 0 or j < i:
+            _bad["error"] = (_real_error(p.stderr) or out or "بلا خرج")[:250]
+            return _bad
+        d = _j.loads(out[i:j + 1])
+        return d if isinstance(d, dict) else _bad
+    except Exception as e:
+        _bad["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        return _bad
+
+
+# ── تشخيصُ الاتصال: محطّةً محطّة، بالدليل ───────────────────────────────
+#
+# «لا يملك إتصال بالإنترنت» عَرَضٌ واحد، ومساره ثمانُ محطّات، وأيُّ واحدةٍ
+# تسقط تُنتج العَرَضَ نفسَه بلا أن تقول أيُّها سقطت. وثلاثةُ أيّامٍ ضاعت في
+# التخمين لأنّ المسارَ لم يكن مقروءاً. فهذا يقرؤه.
+#
+# وكلُّ محطّةٍ تُقاس بدالّة المحرّك نفسِه حيث وُجدت، لا بحيلةٍ من عندنا.
+NET_HOPS = ("المحرّك", "البوّابة", "جاهزيّةُ المحادثة", "النموذجُ والمفتاح",
+            "أدواتُ النموذج", "مزوّدُ البحث", "مهلةُ النوبة", "نوبةٌ حقيقيّة")
+
+
+def net_doctor(live=False, query=None):
+    """افحص مسارَ الاتصال كلَّه. يعيد قائمةَ محطّاتٍ ولا يرفع استثناءً.
+
+    كلُّ محطّة: {n, name, ok, say, why}. و`live=True` تُضيف نوبةً حقيقيّةً
+    تُنادي النموذجَ وتقرأ مسارَه (`sessions export-trajectory`) لترى هل
+    استدعى `web_search` فعلاً — وهو الدليلُ الوحيدُ القاطع."""
+    rows = []
+
+    def add(n, ok, say, why=""):
+        rows.append({"n": n, "name": NET_HOPS[n - 1], "ok": bool(ok),
+                     "say": str(say), "why": str(why)})
+
+    # ① المحرّك
+    _av, _nb = available(), node_bin()
+    add(1, _av and _nb,
+        (("مركَّب · " + (version() or "إصدارٌ غيرُ معروف")) if (_av and _nb)
+         else "غيرُ صالحٍ للتشغيل"),
+        "" if (_av and _nb) else why_unavailable())
+
+    # ② البوّابة
+    st = gateway_state()
+    if not st["allowed"]:
+        add(2, True, "مُعطَّلةٌ باختيارك (WEAVER_GATEWAY=0) — يُستعمل "
+                     "`agent exec` المعزول", "")
+    else:
+        add(2, st["alive"],
+            ("حيّة · منفذ %s · pid %s" % (st["port"], st["pid"]))
+            if st["alive"] else "لا تردّ على المنفذ %s" % st["port"],
+            "" if st["alive"] else "السجلّ: " + st["log"])
+
+    # ③ جاهزيّةُ المحادثة — نفسُ الشرط الذي تفحصه واجهةُ الويب حرفاً.
+    _ready = bool(_av and _nb)
+    add(3, _ready,
+        "المحادثةُ تمرّ بالمحرّك (وفيه الأدوات)" if _ready
+        else "المحادثةُ تسقط إلى النداء المباشر — **بلا أدوات، فبلا إنترنت**",
+        "" if _ready else why_unavailable())
+
+    # ④ النموذجُ والمفتاح
+    _p, _m, _c = provider_id(), model_id(), credentials()
+    _okm = bool(_m and _c)
+    add(4, _okm,
+        ((_m or "—") + " · مفتاح " + ", ".join(
+            "%s=…%s" % (k, v[-4:]) for k, v in _c.items()))
+        if _okm else ("النموذج: " + (_m or "غيرُ محدَّد")
+                      + " · المفتاح: " + ("موجود" if _c else "غائب")),
+        "" if _okm else "بلا نموذجٍ محدَّدٍ يسقط المحرّكُ إلى افتراضيّه فيفشل "
+                        "بالاعتماد")
+
+    # ⑤ أدواتُ النموذج — الدليلُ على وصول `web_search` إليه
+    inv = tool_inventory()
+    _okt = bool(inv.get("ok") and inv.get("web_search"))
+    if inv.get("error"):
+        add(5, False, "تعذّر حسابُ الجرد", inv["error"])
+    else:
+        add(5, _okt,
+            "%d أداة · ملفّ «%s» · web_search %s · web_fetch %s · browser %s"
+            % (len(inv.get("tools") or []), inv.get("profile") or "?",
+               "حاضرة" if inv.get("web_search") else "غائبة ✗",
+               "حاضرة" if inv.get("web_fetch") else "غائبة",
+               "حاضر" if inv.get("browser") else "غائب"),
+            "" if _okt else ("سببُ الحذف عند المحرّك: "
+                             + (inv.get("suppressReason") or "غيرُ معروف")))
+
+    # ⑥ مزوّدُ البحث — نداءُ بحثٍ حقيقيّ
+    sr = probe_search(query or "أخبار اليوم")
+    if sr.get("ok"):
+        _ms = sr.get("tookMs") or 0
+        _say6 = "%s · %d نتيجة%s" % (
+            sr.get("provider") or sr.get("chosen") or "?",
+            sr.get("count") or 0,
+            ("  (%.1f ث)" % (_ms / 1000.0)) if _ms else "")
+    else:
+        _say6 = ("المختار: " + (sr.get("chosen") or "لا شيء")
+                 + " · صالح: " + ("نعم" if sr.get("usable") else "لا"))
+    add(6, sr.get("ok"), _say6,
+        "" if sr.get("ok") else (sr.get("error") or ""))
+
+    # ⑦ مهلةُ النوبة — العطبُ الذي أعمانا: كنّا نقتلها عند ٢٢٠ ث
+    _dl = agent_deadline()
+    _cfg = ""
+    try:
+        _c2, _o2, _ = run(["config", "get", "agents.defaults.timeoutSeconds"],
+                          timeout=60)
+        _cfg = (_o2 or "").strip().strip('"') if _c2 == 0 else ""
+    except Exception:
+        pass
+    _okd = _dl >= 600
+    add(7, _okd,
+        "%d ث · ساعةُ الحائط %d ث · في إعداد المحرّك: %s"
+        % (_dl, _dl + _AGENT_GRACE, _cfg or "غيرُ مضبوطة"),
+        "" if _okd else "أقصرُ من مهلة المحرّك نفسِه (٦٠٠) — النوبةُ تُقتل "
+                        "وهي تبحث")
+
+    # ⑧ نوبةٌ حقيقيّة — لا تُشغَّل إلّا بطلبك: تكلّف رموزاً ووقتاً.
+    if not live:
+        add(8, True, "لم تُشغَّل (أضف `live` لتشغيلها)", "")
+        return rows
+    _sk = "netdoctor-" + str(int(time.time()))
+    _q = (query or "ابحث في الويب عن آخر خبرٍ منشورٍ اليوم، "
+                   "واذكر عنوانَه ورابطَه وتاريخَه.")
+    r = ask(_q, timeout=_dl + _AGENT_GRACE, fallback=False, session=_sk)
+    _ans = (r or {}).get("answer") or ""
+    calls = trajectory(_sk)
+    _names = [c.get("name") for c in calls if c.get("name")]
+    _searched = any("search" in str(n) or "fetch" in str(n) or "browser"
+                    in str(n) for n in _names)
+    add(8, bool(_ans.strip()) and _searched,
+        ("استدعى: " + ", ".join(_names[:8])) if _names
+        else ("أجاب بلا استدعاء أيّ أداة" if _ans.strip()
+              else "لم يُجب"),
+        "" if _searched else ((r or {}).get("note") or
+                              "الأدواتُ حاضرةٌ والنموذجُ لم يستدعِها"))
+    return rows
+
+
 def _cli():
     argv = sys.argv[1:]
     # التشخيصُ يعمل دائماً — وهو أنفعُ ما يكون حين لا يعمل شيءٌ آخر.
@@ -1579,6 +1804,55 @@ def _cli():
         sel = node_bin()
         print("  المختار   : " + (sel if sel else "لا شيء — "
                                   + why_unavailable().split(".")[0]))
+        return
+    if argv[:1] == ["--net-doctor"]:
+        _live = "live" in argv[1:]
+        _q = None
+        for a in argv[1:]:
+            if a != "live":
+                _q = a
+        print("  الاتصالُ بالإنترنت — المسارُ كلُّه، محطّةً محطّة"
+              + ("  (ومعه نوبةٌ حقيقيّة)" if _live else "") + "\n")
+        rows = net_doctor(live=_live, query=_q)
+        _first_bad = None
+        for r in rows:
+            mark = "✓" if r["ok"] else "✗"
+            print("  %s %d) %-18s %s" % (mark, r["n"], r["name"], r["say"]))
+            if r["why"]:
+                print("        └─ " + r["why"][:300])
+            if not r["ok"] and _first_bad is None:
+                _first_bad = r
+        print()
+        if _first_bad is None:
+            print("  كلُّ المحطّات سليمة.")
+            if not _live:
+                print("  والدليلُ القاطعُ نوبةٌ حقيقيّة:"
+                      "\n     python3 -m pipeline.weaver_core --net-doctor live")
+        else:
+            print("  ✗ العطبُ في المحطّة %d — %s"
+                  % (_first_bad["n"], _first_bad["name"]))
+            if _first_bad["why"]:
+                print("    " + _first_bad["why"][:300])
+        sys.exit(0 if _first_bad is None else 1)
+    if argv == ["--tools"]:
+        inv = tool_inventory()
+        if inv.get("error"):
+            print("  تعذّر: " + inv["error"], file=sys.stderr)
+            sys.exit(1)
+        print("  الوكيل : " + (inv.get("agentId") or "—")
+              + "   ·   ملفُّ الأدوات: " + (inv.get("profile") or "—"))
+        print("  النموذج: " + (model_id() or "— غير محدَّد"))
+        for g in inv.get("groups") or []:
+            print("\n  [%s] %s — %d" % (g.get("id"), g.get("label"),
+                                         g.get("count") or 0))
+            print("    " + ", ".join(g.get("tools") or []))
+        print()
+        for n in ("web_search", "web_fetch", "browser"):
+            print("  %-12s %s" % (n, "حاضرة ✓" if n in (inv.get("tools") or [])
+                                  else "غائبة ✗"))
+        if not inv.get("web_search"):
+            print("\n  وسببُ الغياب عند المحرّك: "
+                  + (inv.get("suppressReason") or "غيرُ معروف"))
         return
     if argv == ["--where"]:
         for k, v in state_paths().items():

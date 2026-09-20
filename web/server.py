@@ -1578,10 +1578,15 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
         # ويُعيد المحاولة، فـ١٢٠ ثانيةً تكفي نداءً واحداً ولا تكفي نوبةً
         # متعدّدةَ الأدوات على هاتف. وانتهاؤها لا يُضيع الطلب: يعود None
         # فيتولّى المسارُ المباشرُ ويُجيب.
+        # وكانت ٢٤٠ هنا — أقصرُ من مهلة المحرّك نفسِه (٦٠٠)، وأقصرُ من
+        # نوبتين من ثلاثٍ قاسهما المستخدمُ على هاتفه (٧ د، ٢ د، ٦ د).
+        # فتُقتل النوبةُ وهي تبحث، ويعود None، فيُجيب المسارُ المباشرُ بلا
+        # أدوات — وذلك هو «لا إنترنت» الذي رآه. القيمةُ الآن من المحرّك.
         try:
-            _t = int(_os.environ.get("WEAVER_ENGINE_TIMEOUT") or 240)
+            _t = int(_os.environ.get("WEAVER_ENGINE_TIMEOUT")
+                     or _wc.agent_deadline())
         except Exception:
-            _t = 240
+            _t = 600
         r = _wc.ask("\n\n".join(parts),
                     timeout=max(int(timeout or 120), _t), fallback=False,
                     session=session)
