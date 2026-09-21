@@ -1300,6 +1300,10 @@ def trajectory(session, agent="main", timeout=90):
 PROBE_SEARCH = os.path.join(_ROOT, "engines", "weaver-core", "probe_search.mjs")
 PROBE_TOOLS = os.path.join(_ROOT, "engines", "weaver-core", "probe_tools.mjs")
 SEED_WS = os.path.join(_ROOT, "engines", "weaver-core", "seed_workspace.mjs")
+PROBE_BOOT = os.path.join(_ROOT, "engines", "weaver-core",
+                          "probe_bootstrap.mjs")
+SOUL_SRC = os.path.join(_ROOT, "capabilities", "prompts", "soul",
+                        "SOUL.weaver.md")
 
 
 def run_tty(args, timeout=None):
@@ -1857,6 +1861,16 @@ def ensure_workspace(say=None):
         return True, "مبذورة"
     r = seed_workspace()
     _WS_SEEDED["done"] = bool(r.get("ok"))
+    # والدستورُ يُركَّب بعد البذر مباشرةً: ملفّاتُ التمهيد صارت موجودةً الآن،
+    # و`soul_apply` لا يدهس تحريرَك ولا يُركّب مرّتين.
+    if r.get("ok") and soul_on():
+        _ok2, _why2 = soul_apply()
+        if say:
+            try:
+                say(("… دستورُ الكتابة: " + str(_why2)) if _ok2
+                    else ("⚠ الدستور: " + str(_why2)[:120]))
+            except Exception:
+                pass
     if say:
         try:
             say("… بذرُ مساحة العمل: %d ملفّاً" % (r.get("created") or 0)
@@ -1865,6 +1879,165 @@ def ensure_workspace(say=None):
         except Exception:
             pass
     return bool(r.get("ok")), (r.get("error") or "%d ملفّاً" % (r.get("created") or 0))
+
+
+# ── دستورُ الكتابة: SOUL.md ──────────────────────────────────────────────
+#
+# أين يُوضَع نصٌّ يقرؤه النموذجُ في كلِّ نوبة؟ سؤالٌ لم أُجب عنه بظنّ، بل قِسته
+# بدوالّ المحرّك (`probe_bootstrap.mjs`)، والنتيجةُ على مجلّد العمل نفسِه:
+#
+#   AGENTS.md     6309 حرفاً  ≈ 1753 رمزاً
+#   BOOTSTRAP.md  4891       ≈ 1359
+#   SOUL.md       1561       ≈  434      ⟵ يصل كاملاً، غيرَ مقصوص
+#   IDENTITY.md   1398       ≈  388
+#   USER.md       1136       ≈  316
+#   ─────────────────────────────────────
+#   المجموع      15295       ≈ 4249 رمزاً  تُدفَع في **كلِّ** رسالة
+#
+# والآليّةُ من كود المحرّك:
+#   workspace-YW5Pl2cf.mjs:743  loadWorkspaceBootstrapFiles(dir)
+#   bootstrap-DYYMCrXY.mjs:236  buildBootstrapContextFiles(files, opts)
+#   :53  DEFAULT_BOOTSTRAP_MAX_CHARS       = 20000   لكلِّ ملفّ
+#   :54  DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60000   للمجموع
+#
+# فـ`SOUL.md` هو رفُّ الصوت والأسلوب عند أوبن كلاو، ويُحقَن كاملاً. وما فيه
+# افتراضياً قالبٌ عامٌّ ينصح بألّا يقول «Great question!» — لا علاقةَ له
+# بنظام بحثٍ عربيّ. فيُبدَّل محتواه، ولا يُضاف ملفٌّ جديد: الزيادةُ الصافية
+# ‎+1165 حرفاً ≈ ‎+380 رمزاً، لا 1265.
+#
+# ولا يُدهَس شيءٌ بحال: القديمُ يُحفَظ في `SOUL.md.openclaw` مرّةً واحدة،
+# و`--soul restore` يُرجعه، و`WEAVER_SOUL=off` تمنع التركيبَ التلقائيّ.
+# وإن حرّرتَ الملفَّ بنفسك فلن يُمَسّ — يُقال لك ولا يُكتَب فوقه.
+SOUL_NAME = "SOUL.md"
+SOUL_BACKUP = "SOUL.md.openclaw"
+_SOUL_MARK = "# SOUL.md — أسلوبُ الكتابة"
+
+
+def soul_path():
+    return os.path.join(workspace_dir(), SOUL_NAME)
+
+
+def soul_on():
+    """أمسموحٌ التركيبُ التلقائيّ؟ `WEAVER_SOUL=off` تمنعه."""
+    return (os.environ.get("WEAVER_SOUL", "on") or "on").strip().lower() \
+        not in ("0", "off", "false", "no")
+
+
+def _read(p):
+    try:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except Exception:
+        return ""
+
+
+def soul_state():
+    """مَن المُركَّبُ الآن؟ يعيد dict ولا يرفع استثناءً.
+
+    which: weaver (دستورُنا) · openclaw (قالبُ المحرّك) · custom (حرّرتَه
+    أنت) · missing (لا ملفّ)."""
+    cur = _read(soul_path())
+    src = _read(SOUL_SRC)
+    # القالبُ على القرص تُنزَع واجهتُه قبل الكتابة، تماماً كما يفعل المحرّك:
+    #   workspace-YW5Pl2cf.mjs:168  stripFrontMatter(content)
+    # فمقارنةُ المكتوبِ بالخامِ تفشل دائماً، فيُحسَب قالبُ المحرّك «تحريراً
+    # منك» ويُرفض التركيب. قِيس: قال «مُحرَّرٌ بيدك» وهو قالبُه بعينه.
+    tpl = ""
+    try:
+        _d = os.path.join(RUNTIME, "docs", "reference", "templates", SOUL_NAME)
+        tpl = _read(_d)
+        if tpl.lstrip().startswith("---"):
+            _t = tpl.lstrip()
+            _end = _t.find("\n---", 3)
+            if _end > 0:
+                tpl = _t[_end + 4:].lstrip()
+    except Exception:
+        pass
+    if not cur.strip():
+        which = "missing"
+    elif _SOUL_MARK in cur:
+        # دستورُنا — لكن هل أضفتَ إليه؟ قولُ «مُركَّبٌ سلفاً» لمن حرّره
+        # يُضلّل: يظنّ أنّ ترقيةً جرت ولم تجرِ.
+        which = "weaver" if cur.strip() == src.strip() else "weaver-edited"
+    elif tpl and cur.strip() == tpl.strip():
+        which = "openclaw"
+    else:
+        which = "custom"
+    return {"which": which, "path": soul_path(),
+            "chars": len(cur), "src_chars": len(src),
+            "backup": os.path.isfile(
+                os.path.join(workspace_dir(), SOUL_BACKUP)),
+            "src_ok": bool(src.strip())}
+
+
+def soul_apply(force=False):
+    """ركّب الدستور. يعيد (نجح، سبب). لا يدهس تحريرَك ولا يرفع استثناءً."""
+    st = soul_state()
+    if not st["src_ok"]:
+        return False, "الدستورُ مفقود: " + SOUL_SRC
+    if st["which"] == "weaver" and not force:
+        return True, "مُركَّبٌ سلفاً (%d حرفاً)" % st["chars"]
+    if st["which"] == "weaver-edited" and not force:
+        return False, ("الدستورُ مُركَّبٌ ومُضافٌ إليه بيدك (%d حرفاً مقابل %d) "
+                       "— لن يُدهَس. أضف --force للاستبدال"
+                       % (st["chars"], st["src_chars"]))
+    if st["which"] == "custom" and not force:
+        return False, ("SOUL.md مُحرَّرٌ بيدك — لن يُدهَس. "
+                       "أضف --force إن أردتَ استبداله")
+    try:
+        os.makedirs(workspace_dir(), exist_ok=True)
+        # نسخةٌ احتياطيّةٌ مرّةً واحدة: لا تُدهَس بنسخةٍ أحدث، فالأصلُ هو
+        # قالبُ المحرّك لا ما سبقه.
+        bak = os.path.join(workspace_dir(), SOUL_BACKUP)
+        cur = _read(soul_path())
+        if cur.strip() and not os.path.isfile(bak):
+            with open(bak, "w", encoding="utf-8") as fh:
+                fh.write(cur)
+        with open(soul_path(), "w", encoding="utf-8") as fh:
+            fh.write(_read(SOUL_SRC))
+        return True, "رُكِّب (%d حرفاً)" % len(_read(SOUL_SRC))
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:160])
+
+
+def soul_restore():
+    """أرجِع قالبَ المحرّك من النسخة الاحتياطيّة. يعيد (نجح، سبب)."""
+    bak = os.path.join(workspace_dir(), SOUL_BACKUP)
+    if not os.path.isfile(bak):
+        return False, "لا نسخةَ احتياطيّة: " + bak
+    try:
+        with open(soul_path(), "w", encoding="utf-8") as fh:
+            fh.write(_read(bak))
+        return True, "أُرجع قالبُ المحرّك"
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:160])
+
+
+def bootstrap_report(timeout=180):
+    """ماذا يدخل البرومبتَ من ملفّات التمهيد؟ — بدوالّ المحرّك. dict."""
+    _bad = {"ok": False, "workspace": "", "files": [], "totalChars": 0,
+            "totalTokens": 0, "warnings": [], "error": ""}
+    nb = node_bin()
+    if not nb:
+        _bad["error"] = why_unavailable()
+        return _bad
+    if not os.path.isfile(PROBE_BOOT):
+        _bad["error"] = "probe_bootstrap.mjs مفقود"
+        return _bad
+    try:
+        p = subprocess.run([nb, PROBE_BOOT], capture_output=True, text=True,
+                           timeout=timeout, cwd=_ROOT, env=engine_env())
+        out = (p.stdout or "").strip()
+        import json as _j
+        i, j = out.find("{"), out.rfind("}")
+        if i < 0 or j < i:
+            _bad["error"] = (_real_error(p.stderr) or out or "بلا خرج")[:250]
+            return _bad
+        d = _j.loads(out[i:j + 1])
+        return d if isinstance(d, dict) else _bad
+    except Exception as e:
+        _bad["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+        return _bad
 
 
 def tool_inventory():
@@ -2133,6 +2306,55 @@ def _cli():
             if _first_bad["why"]:
                 print("    " + _first_bad["why"][:300])
         sys.exit(0 if _first_bad is None else 1)
+    if argv[:1] == ["--soul"]:
+        sub = argv[1] if len(argv) > 1 else "show"
+        if sub == "apply":
+            ok2, why2 = soul_apply(force=("--force" in argv))
+            print(("  ✓ " if ok2 else "  ✗ ") + str(why2))
+            if ok2:
+                print("  المسار: " + soul_path())
+                print("\n  ولمعاينة ما يصل البرومبتَ فعلاً:"
+                      "\n     python3 -m pipeline.weaver_core --bootstrap")
+            sys.exit(0 if ok2 else 1)
+        if sub == "restore":
+            ok2, why2 = soul_restore()
+            print(("  ✓ " if ok2 else "  ✗ ") + str(why2))
+            sys.exit(0 if ok2 else 1)
+        st = soul_state()
+        _lbl = {"weaver": "دستورُ Weaver Write", "openclaw": "قالبُ المحرّك",
+                "weaver-edited": "دستورُنا + إضافاتُك",
+                "custom": "مُحرَّرٌ بيدك", "missing": "غيرُ موجود"}
+        print("  المُركَّب  : " + _lbl.get(st["which"], st["which"])
+              + "   (%d حرفاً)" % st["chars"])
+        print("  المسار   : " + st["path"])
+        print("  المصدر   : " + SOUL_SRC
+              + ("   (%d حرفاً)" % st["src_chars"] if st["src_ok"]
+                 else "   ⚠ مفقود"))
+        print("  احتياطيّة: " + ("موجودة" if st["backup"] else "لا"))
+        print("  تلقائيّاً : " + ("نعم" if soul_on()
+                                  else "لا (WEAVER_SOUL=off)"))
+        if st["which"] != "weaver":
+            print("\n  للتركيب:  python3 -m pipeline.weaver_core --soul apply")
+        return
+    if argv == ["--bootstrap"]:
+        r = bootstrap_report()
+        if r.get("error"):
+            print("  تعذّر: " + str(r["error"])[:250], file=sys.stderr)
+            sys.exit(1)
+        print("  ما يدخل البرومبتَ في **كلِّ** نوبة — بدوالّ المحرّك\n")
+        print("  المجلّد: " + str(r.get("workspace") or "—") + "\n")
+        for f in r.get("files") or []:
+            print("  %-14s %6d حرفاً  ≈%5d رمزاً   %s"
+                  % (f.get("name"), f.get("injected") or 0,
+                     f.get("tokens") or 0,
+                     "مقصوص ⚠" if f.get("truncated") else ""))
+        print("  " + "─" * 48)
+        print("  %-14s %6d        ≈%5d رمزاً"
+              % ("المجموع", r.get("totalChars") or 0,
+                 r.get("totalTokens") or 0))
+        for w in r.get("warnings") or []:
+            print("  ⚠ " + str(w)[:200])
+        return
     if argv[:1] == ["--seed-workspace"]:
         print("  بذرُ ملفّاتِ التمهيد بقوالب المحرّك نفسِه\n")
         r = seed_workspace()
