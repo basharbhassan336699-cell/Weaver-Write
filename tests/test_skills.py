@@ -130,6 +130,25 @@ else:
     os.environ["WEAVER_SKILLS"] = _old
 ok("وبلا البيئة: مُشتغل", wc.skills_on() is True)
 
+print("\n— القاموسُ: أيعمل بأداةِ exec الحقيقيّة؟ —")
+# «يعمل عندي» لا تكفي: المهارةُ تُملي أمراً والنموذجُ ينفّذه بـ`exec`، وبين
+# الاثنين أسئلةٌ لا تُجاب بالظنّ — أمسموحٌ مسارٌ خارج مساحة العمل؟ أيوجد
+# python3 في بيئة المحرّك؟ فيُنفَّذ الأمرُ نفسُه ويُقرأ جوابُه.
+ok("probe_exec.mjs موجود", os.path.isfile(wc.PROBE_EXEC))
+ok("ويبني الأداةَ من المحرّك لا يحاكيها",
+   "createOpenClawCodingTools" in open(wc.PROBE_EXEC, encoding="utf-8").read())
+ok("skills_test موجودة", callable(getattr(wc, "skills_test", None)))
+_t = wc.skills_test()
+if _t.get("error"):
+    print("    ⓘ يُتخطّى القياس: " + str(_t["error"])[:90])
+else:
+    ok("أداةُ exec متاحةٌ للنموذج", _t.get("found"))
+    ok("والأمرُ خرج بـ0", _t.get("exitCode") == 0, _t.get("exitCode"))
+    ok("ومسارٌ خارج مساحة العمل مسموح", _t.get("ok"), _t.get("text", "")[:80])
+    ok("والاستشهادُ سليمٌ بعد التنظيف", _t.get("intact") is True)
+    ok("والعباراتُ الموسومةُ بُدّلت فعلاً", _t.get("changed"),
+       _t.get("text", "")[:120])
+
 print("\n— القياسُ الحاسم: أرآها المحرّك؟ (بأمرِه skills --json) —")
 seen = wc.skills_seen()
 if seen:

@@ -1302,6 +1302,8 @@ PROBE_TOOLS = os.path.join(_ROOT, "engines", "weaver-core", "probe_tools.mjs")
 SEED_WS = os.path.join(_ROOT, "engines", "weaver-core", "seed_workspace.mjs")
 PROBE_BOOT = os.path.join(_ROOT, "engines", "weaver-core",
                           "probe_bootstrap.mjs")
+PROBE_EXEC = os.path.join(_ROOT, "engines", "weaver-core",
+                          "probe_exec.mjs")
 SOUL_SRC = os.path.join(_ROOT, "capabilities", "prompts", "soul",
                         "SOUL.weaver.md")
 SKILLS_SRC = os.path.join(_ROOT, "capabilities", "prompts", "skills")
@@ -2154,6 +2156,55 @@ def skills_seen(timeout=240):
         return []
 
 
+def skills_test(timeout=240):
+    """أيعمل القاموسُ فعلاً **بأداةِ المحرّك** لا بصدفتنا؟
+
+    الفرقُ ليس شكلياً: المهارةُ تُملي أمراً، والنموذجُ ينفّذه بـ`exec`.
+    وبين الاثنين أسئلةٌ لا تُجاب بالظنّ — أمسموحٌ مسارٌ خارج مساحة العمل؟
+    أيوجد `python3` في بيئة المحرّك؟ فيُنفَّذ الأمرُ كما هو ويُقرأ جوابُه.
+
+    يعيد dict: ok · exitCode · text · cwd · intact · changed · error."""
+    _bad = {"ok": False, "found": False, "exitCode": None, "cwd": "",
+            "text": "", "intact": None, "changed": False, "error": ""}
+    nb = node_bin()
+    if not nb:
+        _bad["error"] = why_unavailable()
+        return _bad
+    if not os.path.isfile(PROBE_EXEC):
+        _bad["error"] = "probe_exec.mjs مفقود"
+        return _bad
+    # نصُّ اختبارٍ فيه أربعُ عباراتٍ موسومةٍ واستشهادٌ واحد — فيُقاس
+    # الاستبدالُ وحمايةُ الاستشهاد معاً.
+    _rw = os.path.join(_ROOT, "capabilities", "skills", "arabic_rewriter",
+                       "scripts", "rewrite_ar.py")
+    _txt = ("يُعدّ التعليمُ ركيزةً أساسيّةً في المنظومة التنمويّة "
+            "(الفهري، 2020، ص. 45)، وهو أمرٌ بالغ الأهمية يستدعي جهداً.")
+    cmd = ("python3 %s --action humanize --general 0 --text %s"
+           % (_rw, "'" + _txt.replace("'", "'\\''") + "'"))
+    try:
+        p = subprocess.run([nb, PROBE_EXEC, cmd], capture_output=True,
+                           text=True, timeout=timeout, cwd=_ROOT,
+                           env=engine_env())
+        out = (p.stdout or "").strip()
+        import json as _j
+        i, j = out.find("{"), out.rfind("}")
+        if i < 0 or j < i:
+            _bad["error"] = (_real_error(p.stderr) or out or "بلا خرج")[:250]
+            return _bad
+        d = _j.loads(out[i:j + 1])
+        if not isinstance(d, dict):
+            return _bad
+        t = str(d.get("text") or "")
+        d["intact"] = ("intact: True" in t) if "intact:" in t else None
+        # أبُدّلت العباراتُ الموسومةُ فعلاً؟ قياسٌ لا ثقة.
+        d["changed"] = all(w not in t for w in
+                           ("يُعدّ", "المنظومة", "بالغ الأهمية", "يستدعي"))
+        return d
+    except Exception as e:
+        _bad["error"] = "%s: %s" % (type(e).__name__, str(e)[:160])
+        return _bad
+
+
 def bootstrap_report(timeout=180):
     """ماذا يدخل البرومبتَ من ملفّات التمهيد؟ — بدوالّ المحرّك. dict."""
     _bad = {"ok": False, "workspace": "", "files": [], "totalChars": 0,
@@ -2462,6 +2513,27 @@ def _cli():
             ok2, why2 = skills_remove()
             print(("  ✓ " if ok2 else "  ✗ ") + str(why2))
             sys.exit(0 if ok2 else 1)
+        if sub == "test":
+            print("  تشغيلُ القاموس بأداةِ `exec` الحقيقيّة للمحرّك\n")
+            r = skills_test()
+            if r.get("error"):
+                print("  ✗ " + str(r["error"])[:300], file=sys.stderr)
+                sys.exit(1)
+            print("  أداةُ exec متاحة : "
+                  + ("نعم" if r.get("found") else "لا ✗"))
+            print("  رمزُ الخروج      : " + str(r.get("exitCode")))
+            print("  مجلّدُ التنفيذ    : " + str(r.get("cwd") or "—"))
+            print("  الاستشهادُ سليم  : "
+                  + {True: "نعم", False: "لا ✗", None: "—"}[r.get("intact")])
+            print("  العباراتُ بُدّلت  : "
+                  + ("نعم" if r.get("changed") else "لا ✗"))
+            print("\n  الناتج:\n    " + str(r.get("text") or "—")[:600]
+                  .replace("\n", "\n    "))
+            _good = (r.get("ok") and r.get("intact") is not False
+                     and r.get("changed"))
+            print("\n  " + ("✓ القاموسُ يعمل من داخل المحرّك"
+                            if _good else "✗ لا يعمل كما ينبغي"))
+            sys.exit(0 if _good else 1)
         if sub == "seen":
             rows = skills_seen()
             if not rows:
