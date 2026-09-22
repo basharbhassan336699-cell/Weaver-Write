@@ -1304,6 +1304,7 @@ PROBE_BOOT = os.path.join(_ROOT, "engines", "weaver-core",
                           "probe_bootstrap.mjs")
 SOUL_SRC = os.path.join(_ROOT, "capabilities", "prompts", "soul",
                         "SOUL.weaver.md")
+SKILLS_SRC = os.path.join(_ROOT, "capabilities", "prompts", "skills")
 
 
 def run_tty(args, timeout=None):
@@ -1871,6 +1872,14 @@ def ensure_workspace(say=None):
                     else ("⚠ الدستور: " + str(_why2)[:120]))
             except Exception:
                 pass
+    if r.get("ok") and skills_on():
+        _ok3, _rows3 = skills_apply()
+        if say:
+            try:
+                say("… المهارات: %d/%d"
+                    % (sum(1 for _, o, _w in _rows3 if o), len(_rows3)))
+            except Exception:
+                pass
     if say:
         try:
             say("… بذرُ مساحة العمل: %d ملفّاً" % (r.get("created") or 0)
@@ -2011,6 +2020,138 @@ def soul_restore():
         return True, "أُرجع قالبُ المحرّك"
     except Exception as e:
         return False, "%s: %s" % (type(e).__name__, str(e)[:160])
+
+
+# ── المهاراتُ: ما بعد التوليد ────────────────────────────────────────────
+#
+# المبدأ الذي قسّمنا عليه: ما يمنع البصمةَ قبل ولادتها في `SOUL.md`؛ وما
+# يصلحها بعدها مهارةٌ **يستدعيها النموذجُ حين يقرّر**. لا ترتيبَ مُثبَّت.
+#
+# وموضعُها من وثيقة المحرّك — الأولويّةُ الأولى، تعلو على مهاراته المرفقة:
+#     docs/tools/skills.md:41   1 — highest   <workspace>/skills
+#
+# وكلفتُها في البرومبت الاسمُ والوصفُ فقط؛ الجسمُ يُقرأ بأداة `read` إن قرّر:
+#     docs/tools/skills.md:796  «~97 characters … ≈ 24 tokens per skill»
+#
+# والثلاثُ المُركَّبةُ هي الآمنة: قياسٌ (detect-ai)، وفقرةٌ واحدة
+# (fix-conclusion)، وسكربتٌ مُختبَرٌ بحارسِ استشهادات (humanize-ar).
+# و`rewrite-from-ideas` مؤجَّلةٌ عمداً: «انسَ الصياغةَ الأصليّة» يُزحزح
+# الاستشهادَ عن جملته، والعدُّ يقول «سليم» والمعنى مزوَّر.
+#
+# ولا يُدهَس تحريرُك: مهارةٌ غيّرتَها تُترك ويُقال لك.
+SKILLS_DIRNAME = "skills"
+_SKILLS_MARK = "{{WEAVER}}"
+
+
+def skills_dir():
+    return os.path.join(workspace_dir(), SKILLS_DIRNAME)
+
+
+def skills_on():
+    """أمسموحٌ التركيبُ التلقائيّ؟ `WEAVER_SKILLS=off` تمنعه."""
+    return (os.environ.get("WEAVER_SKILLS", "on") or "on").strip().lower() \
+        not in ("0", "off", "false", "no")
+
+
+def _skill_names():
+    try:
+        return sorted(d for d in os.listdir(SKILLS_SRC)
+                      if os.path.isfile(os.path.join(SKILLS_SRC, d,
+                                                     "SKILL.md")))
+    except Exception:
+        return []
+
+
+def _skill_body(name):
+    """نصُّ المهارة بعد حلِّ المسارات. `{{WEAVER}}` ⟶ جذرُ المشروع."""
+    t = _read(os.path.join(SKILLS_SRC, name, "SKILL.md"))
+    return t.replace(_SKILLS_MARK, _ROOT)
+
+
+def skills_state():
+    """حالُ كلِّ مهارة: missing · ours · edited. dict، ولا يرفع استثناءً."""
+    rows = []
+    for n in _skill_names():
+        dst = os.path.join(skills_dir(), n, "SKILL.md")
+        cur = _read(dst)
+        want = _skill_body(n)
+        if not cur.strip():
+            st = "missing"
+        elif cur.strip() == want.strip():
+            st = "ours"
+        else:
+            st = "edited"
+        rows.append({"name": n, "state": st, "path": dst,
+                     "chars": len(cur), "src_chars": len(want)})
+    return {"dir": skills_dir(), "skills": rows,
+            "src_ok": bool(rows)}
+
+
+def skills_apply(force=False):
+    """ركّب المهارات. يعيد (نجح، قائمةُ (اسم، نجح، سبب)). لا يدهس تحريرَك."""
+    st = skills_state()
+    if not st["src_ok"]:
+        return False, [("—", False, "لا مهاراتِ مصدرٍ في " + SKILLS_SRC)]
+    out, bad = [], 0
+    for row in st["skills"]:
+        n = row["name"]
+        if row["state"] == "ours" and not force:
+            out.append((n, True, "مُركَّبةٌ سلفاً"))
+            continue
+        if row["state"] == "edited" and not force:
+            out.append((n, False, "مُحرَّرةٌ بيدك — لن تُدهَس (--force)"))
+            bad += 1
+            continue
+        try:
+            os.makedirs(os.path.dirname(row["path"]), exist_ok=True)
+            with open(row["path"], "w", encoding="utf-8") as fh:
+                fh.write(_skill_body(n))
+            out.append((n, True, "رُكِّبت (%d حرفاً)" % row["src_chars"]))
+        except Exception as e:
+            out.append((n, False, "%s: %s" % (type(e).__name__, str(e)[:120])))
+            bad += 1
+    return bad == 0, out
+
+
+def skills_remove():
+    """احذف ما ركّبناه وحدَه — لا يُمَسّ ما ليس لنا. يعيد (نجح، سبب)."""
+    n_del = 0
+    try:
+        for row in skills_state()["skills"]:
+            if row["state"] in ("ours", "edited") and os.path.isfile(row["path"]):
+                import shutil
+                shutil.rmtree(os.path.dirname(row["path"]), ignore_errors=True)
+                n_del += 1
+        return True, "حُذفت %d مهارة" % n_del
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:160])
+
+
+def skills_seen(timeout=240):
+    """أرآها المحرّكُ فعلاً؟ — بأمرِه هو `skills --json`، لا بظنٍّ منّا.
+
+    الدرسُ من SOUL.md: كتابةُ ملفٍّ لا تعني أنّه وصل النموذج. يعيد
+    [{name, eligible, modelVisible, source}] أو []."""
+    try:
+        code, out, _ = run(["skills", "--json"], timeout=timeout)
+        if code != 0 or not out.strip():
+            return []
+        import json as _j
+        i, j = out.find("{"), out.rfind("}")
+        if i < 0:
+            i, j = out.find("["), out.rfind("]")
+        if i < 0 or j < i:
+            return []
+        d = _j.loads(out[i:j + 1])
+        rows = d if isinstance(d, list) else (d.get("skills") or [])
+        mine = set(_skill_names())
+        return [{"name": r.get("name"),
+                 "eligible": bool(r.get("eligible")),
+                 "modelVisible": bool(r.get("modelVisible")),
+                 "source": str(r.get("source") or "")}
+                for r in rows if isinstance(r, dict) and r.get("name") in mine]
+    except Exception:
+        return []
 
 
 def bootstrap_report(timeout=180):
@@ -2306,6 +2447,54 @@ def _cli():
             if _first_bad["why"]:
                 print("    " + _first_bad["why"][:300])
         sys.exit(0 if _first_bad is None else 1)
+    if argv[:1] == ["--skills"]:
+        sub = argv[1] if len(argv) > 1 else "show"
+        if sub == "apply":
+            ok2, rows = skills_apply(force=("--force" in argv))
+            for n, o, why in rows:
+                print(("  ✓ " if o else "  ✗ ") + "%-16s %s" % (n, why))
+            print("\n  المجلّد: " + skills_dir())
+            if ok2:
+                print("\n  وللتحقّق أنّ المحرّكَ رآها:"
+                      "\n     python3 -m pipeline.weaver_core --skills seen")
+            sys.exit(0 if ok2 else 1)
+        if sub == "remove":
+            ok2, why2 = skills_remove()
+            print(("  ✓ " if ok2 else "  ✗ ") + str(why2))
+            sys.exit(0 if ok2 else 1)
+        if sub == "seen":
+            rows = skills_seen()
+            if not rows:
+                print("  لم يُرجع المحرّكُ شيئاً — أمُركَّبةٌ؟ "
+                      "(--skills apply)", file=sys.stderr)
+                sys.exit(1)
+            print("  ما يراه المحرّكُ — بأمرِه `skills --json`\n")
+            _bad = 0
+            for r in rows:
+                _v = r["eligible"] and r["modelVisible"]
+                _bad += 0 if _v else 1
+                print("  %s %-16s صالحة: %-4s  يراها النموذج: %-4s  المصدر: %s"
+                      % ("✓" if _v else "✗", r["name"],
+                         "نعم" if r["eligible"] else "لا",
+                         "نعم" if r["modelVisible"] else "لا", r["source"]))
+            print()
+            print("  %d/%d وصلت النموذج" % (len(rows) - _bad, len(rows)))
+            sys.exit(1 if _bad else 0)
+        st = skills_state()
+        _lbl = {"ours": "مُركَّبة", "edited": "مُحرَّرةٌ بيدك",
+                "missing": "غيرُ مُركَّبة"}
+        print("  المجلّد : " + st["dir"])
+        print("  المصدر  : " + SKILLS_SRC)
+        print("  تلقائيّاً: " + ("نعم" if skills_on()
+                                 else "لا (WEAVER_SKILLS=off)"))
+        print()
+        for r in st["skills"]:
+            print("  %-16s %-14s %s"
+                  % (r["name"], _lbl.get(r["state"], r["state"]),
+                     ("%d حرفاً" % r["chars"]) if r["chars"] else ""))
+        if any(r["state"] == "missing" for r in st["skills"]):
+            print("\n  للتركيب: python3 -m pipeline.weaver_core --skills apply")
+        return
     if argv[:1] == ["--soul"]:
         sub = argv[1] if len(argv) > 1 else "show"
         if sub == "apply":
