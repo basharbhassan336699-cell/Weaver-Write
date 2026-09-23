@@ -2205,6 +2205,83 @@ def skills_test(timeout=240):
         return _bad
 
 
+# ── هل يُتَّبع الدستور؟ ──────────────────────────────────────────────────
+#
+# `--soul` يُثبت أنّه مُركَّب، و`--bootstrap` أنّه يصل البرومبت. ولا شيءَ كان
+# يُثبت أنّه **يُتَّبع** — والدليلُ الوحيد عينُ المستخدم، وهي التي كشفت فشلَ
+# الخاتمة ثمّ فشلَ الشرطة. فصار ما تفعله العينُ أمراً يُعاد بعد كلِّ تعديل.
+#
+# والفاحصُ يستخرج القائمةَ من الدستور نفسِه (`pipeline/soul_check.py`)، فلا
+# تنحرف نسخةٌ ثانيةٌ عن أصلها فتقيس دستوراً لم يعد موجوداً.
+_SOUL_PROBE = ("اكتب فقرتين عن أثر التقنية في التعليم، ثمّ خاتمةً لهما. "
+               "بالعربيّة الفصحى، وبلا عناوينَ ولا نقاط.")
+
+
+def soul_check(text):
+    """افحص نصّاً على الدستور — حتميّاً وبلا نداءِ نموذج. dict."""
+    try:
+        from pipeline.soul_check import check as _c
+        return _c(text)
+    except Exception as e:
+        return {"ok": False, "score": 0, "stats": {},
+                "violations": [{"rule": "تعذّر الفحص",
+                                "term": type(e).__name__,
+                                "where": str(e)[:120]}], "warnings": []}
+
+
+def soul_test(prompt=None, timeout=None):
+    """نوبةٌ حقيقيّةٌ ثمّ فحصٌ حتميٌّ لناتجها. dict، ولا يرفع استثناءً.
+
+    الكلفة: نداءُ نموذجٍ واحد. والفحصُ بعده صفرُ نداءات."""
+    r = ask(prompt or _SOUL_PROBE, timeout=timeout, fallback=False,
+            session="soultest-" + str(int(time.time())))
+    ans = (r or {}).get("answer") or ""
+    if not ans.strip():
+        return {"ok": False, "score": 0, "text": "", "stats": {},
+                "violations": [{"rule": "لم يُجب النموذج", "term": "",
+                                "where": (r or {}).get("note", "")[:160]}],
+                "warnings": []}
+    out = soul_check(ans)
+    out["text"] = ans
+    return out
+
+
+# ── وهل يستدعي النموذجُ المهارةَ حين يجب؟ ────────────────────────────────
+#
+# `--skills seen` يُثبت أنّه **يراها**، و`--skills test` أنّ السكربتَ **يعمل**.
+# وبينهما سؤالٌ ثالثٌ لا يُجيبه أيٌّ منهما: أيختارها؟ وهو أخطرُ ما في نظام
+# المهارات — وصفٌ غامضٌ يجعلها ميّتةً **بلا رسالةِ خطأ**.
+#
+# والدليلُ من مسار النوبة عند المحرّك (`sessions export-trajectory`): إن
+# قرأ `SKILL.md` أو نفّذ سكربتَها فقد اختارها.
+_SKILL_PROBE = ("هذا نصٌّ كتبه نموذجٌ آخر، نظّفه من بصمة الذكاء الاصطناعيّ:\n\n"
+                "«يُعدّ التعليمُ ركيزةً أساسيّةً في المنظومة التنمويّة، "
+                "وعلاوة على ذلك فهو أمرٌ بالغ الأهمية يستدعي تضافر الجهود.»")
+
+
+def skills_invoke_test(prompt=None, timeout=None):
+    """أيستدعي النموذجُ مهارةً حين يجب؟ — من مسار النوبة، لا من الجواب.
+
+    يعيد {ok, called:[], answer, trajectory:[], note}."""
+    sk = "skillinvoke-" + str(int(time.time()))
+    r = ask(prompt or _SKILL_PROBE, timeout=timeout, fallback=False,
+            session=sk)
+    ans = (r or {}).get("answer") or ""
+    calls = trajectory(sk) or []
+    names = set(_skill_names())
+    hit = []
+    for c in calls:
+        blob = "%s %s" % (c.get("name") or "", c.get("request") or "")
+        for n in names:
+            if n in str(blob) and n not in hit:
+                hit.append(n)
+        if "rewrite_ar" in str(blob) and "humanize-ar" not in hit:
+            hit.append("humanize-ar")
+    return {"ok": bool(hit), "called": hit, "answer": ans,
+            "trajectory": [c.get("name") for c in calls if c.get("name")],
+            "note": (r or {}).get("note", "")}
+
+
 def bootstrap_report(timeout=180):
     """ماذا يدخل البرومبتَ من ملفّات التمهيد؟ — بدوالّ المحرّك. dict."""
     _bad = {"ok": False, "workspace": "", "files": [], "totalChars": 0,
@@ -2438,6 +2515,25 @@ def net_doctor(live=False, query=None, out=None):
     return rows
 
 
+def _print_soul_report(r):
+    """تقريرُ فحصِ الدستور — مشترَكٌ بين `--soul check` و`--soul test`."""
+    st = r.get("stats") or {}
+    if st:
+        print("  %d كلمة · %d فقرة · %d جملة · فُحص %d مصطلحاً"
+              % (st.get("words", 0), st.get("paragraphs", 0),
+                 st.get("sentences", 0), st.get("banned_checked", 0)))
+    for v in r.get("violations") or []:
+        print("  ✗ %-34s «%s» %s"
+              % (v.get("rule", ""), v.get("term", ""), v.get("where", "")))
+    for w in r.get("warnings") or []:
+        print("  ⚠ %-34s %s %s"
+              % (w.get("rule", ""), w.get("term", ""), w.get("where", "")))
+    print()
+    print("  %s   ·   الدرجة %d/100"
+          % ("✓ مطابقٌ للدستور" if r.get("ok") else "✗ مخالف",
+             r.get("score", 0)))
+
+
 def _cli():
     argv = sys.argv[1:]
     # التشخيصُ يعمل دائماً — وهو أنفعُ ما يكون حين لا يعمل شيءٌ آخر.
@@ -2534,6 +2630,23 @@ def _cli():
             print("\n  " + ("✓ القاموسُ يعمل من داخل المحرّك"
                             if _good else "✗ لا يعمل كما ينبغي"))
             sys.exit(0 if _good else 1)
+        if sub == "invoke":
+            print("  أيستدعي النموذجُ مهارةً حين يجب؟"
+                  "   (نداءُ نموذجٍ واحد)\n")
+            _r = skills_invoke_test()
+            print("  استدعى      : "
+                  + (", ".join(_r["called"]) if _r["called"] else "لا شيء ✗"))
+            print("  مسارُ النوبة : "
+                  + (", ".join(_r["trajectory"][:10]) or "—"))
+            if _r.get("answer"):
+                print("\n  ── الجواب ──")
+                for _ln in str(_r["answer"])[:900].split("\n"):
+                    print("  " + _ln)
+            if _r.get("note"):
+                print("\n  ⓘ " + str(_r["note"])[:200])
+            print("\n  " + ("✓ اختارها بنفسه" if _r["ok"] else
+                             "✗ لم يستدعِ شيئاً — راجع وصفَ المهارة"))
+            sys.exit(0 if _r["ok"] else 1)
         if sub == "seen":
             rows = skills_seen()
             if not rows:
@@ -2581,6 +2694,34 @@ def _cli():
             ok2, why2 = soul_restore()
             print(("  ✓ " if ok2 else "  ✗ ") + str(why2))
             sys.exit(0 if ok2 else 1)
+        if sub == "check":
+            _src_t = ""
+            _f = next((a for a in argv[2:] if not a.startswith("-")), "")
+            if _f == "-" or not _f:
+                _src_t = sys.stdin.read() if not sys.stdin.isatty() else ""
+            elif os.path.isfile(_f):
+                _src_t = _read(_f)
+            else:
+                _src_t = _f
+            if not _src_t.strip():
+                print("  الاستعمال: --soul check <ملفّ|نصّ>   أو  ... | "
+                      "--soul check -", file=sys.stderr)
+                sys.exit(2)
+            _r = soul_check(_src_t)
+            _print_soul_report(_r)
+            sys.exit(0 if _r.get("ok") else 1)
+        if sub == "test":
+            print("  نوبةٌ حقيقيّةٌ ثمّ فحصٌ حتميٌّ لناتجها"
+                  "   (نداءُ نموذجٍ واحد)\n")
+            _q = next((a for a in argv[2:] if not a.startswith("-")), None)
+            _r = soul_test(_q)
+            if _r.get("text"):
+                print("  ── الناتج ──")
+                for _ln in str(_r["text"])[:1400].split("\n"):
+                    print("  " + _ln)
+                print()
+            _print_soul_report(_r)
+            sys.exit(0 if _r.get("ok") else 1)
         st = soul_state()
         _lbl = {"weaver": "دستورُ Weaver Write", "openclaw": "قالبُ المحرّك",
                 "weaver-edited": "دستورُنا + إضافاتُك",

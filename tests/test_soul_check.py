@@ -1,0 +1,124 @@
+# -*- coding: utf-8 -*-
+"""الفاحصُ الحتميُّ للدستور.
+
+`--soul` يُثبت أنّ الدستورَ مُركَّب، و`--bootstrap` أنّه يصل البرومبت. وهذا
+يُثبت الثالثةَ: **أيُتَّبع؟** — وهو ما كان يُقاس بعين المستخدم وحدَها.
+
+والقرارُ الحاكمُ في التصميم: القائمةُ **تُستخرَج من الدستور**، لا تُنسَخ.
+نسخةٌ ثانيةٌ تنحرف عن أصلها بعد تعديلين فتقيس دستوراً لم يعد موجوداً — وهو
+أسوأُ من لا فحص، لأنّه يطمئنك كذباً. وأكثرُ الفحوص هنا تحرس هذا.
+
+والنصّان المرجعيّان ليسا مُختلَقَين: هما ما أخرجه النموذجُ على جهاز
+المستخدم يومَي ٢٢ و٢٣ سبتمبر — الفاشلُ قبل إصلاح الثغرات، والناجحُ بعده.
+"""
+import os
+import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+
+from pipeline import soul_check as sc   # noqa: E402
+from pipeline import weaver_core as wc  # noqa: E402
+
+P = F = 0
+
+
+def ok(name, cond, extra=""):
+    global P, F
+    if cond:
+        P += 1
+        print(f"  ✓ {name}")
+    else:
+        F += 1
+        print(f"  ✗ {name}" + (f"   — {extra}" if extra else ""))
+
+
+# ما أخرجه النموذجُ فعلاً — قبل إصلاح الثغرات
+BAD = """خاتمة
+
+يتضح من خلال هذا البحث أن الزواج المبكر يحمل آثاراً متشعبة تمتد عبر الجوانب الاجتماعية والصحية.
+
+في الختام، لا يمكن النظر إليه كظاهرة هامشية، بل أزمة تتطلب استجابة متكاملة. إن الحد منها يستدعي تشريعات واضحة.
+
+الزواج المبكر ليس قدراً، وصحة الفتيات ومستقبل الأوطان رهنٌ بهذا التغيير."""
+
+# وما أخرجه بعدها
+GOOD = """خاتمة
+
+الزواج المبكر ليس مسألةً فرديةً تخص عائلة هنا أو هناك. بل ظاهرةٌ تمتد آثارها عبر ثلاثة أجيال.
+
+الدراسات التي رصدت هذه الآثار انتهت إلى نتائج متقاربة: التسرب المدرسي، والعنف الأسري. لكن الأرقام وحدها لا تفسر لماذا يستمر النمط رغم تكاليفه.
+
+ما لفت الانتباه حقاً هو فجوة السياسات. دولٌ عدةٌ سنّت قوانين، لكن التطبيق يظل رهناً بسلطة القاضي المحلي.
+
+يبقى سؤال لم تُحسم أبعاده: هل يكفي رفع السن قانونياً لكسر الحلقة؟ الإجابة مختلفة من قرية إلى أخرى، وهذا الاختلاف نفسه ما يجعل أي حلٍّ وحدويٍّ محلَّ شك."""
+
+print("\n— الاستخراجُ من الدستور، لا نسخةٌ ثانية —")
+en, ar = sc.banned_terms()
+ok("يستخرج إنجليزيّاً", len(en) >= 15, len(en))
+ok("ويستخرج عربيّاً", len(ar) >= 12, len(ar))
+ok("ولا يقرأ من قائمةٍ مكتوبةٍ في الفاحص",
+   "delve" not in open(sc.__file__, encoding="utf-8").read())
+# الدستورُ ملفوفٌ على أسطر، والعبارةُ قد تنقسم بينها — فيُسطَّح للمقارنة.
+# (وهذا الفحصُ نفسُه كشف أنّ الفاحصَ كان يفوته ما يكتبه النموذجُ على سطرين،
+#  فصار يُسطّح النصَّ المفحوصَ كذلك.)
+_soul = " ".join(open(sc.SOUL_SRC, encoding="utf-8").read().split())
+ok("وكلُّ مصطلحٍ مُستخرَجٍ موجودٌ في الدستور فعلاً",
+   all(w in _soul for w in en + ar),
+   [w for w in en + ar if w not in _soul][:4])
+ok("والفاحصُ يُسطّح النصَّ فلا تفلته عبارةٌ على سطرين",
+   any("it is important to note that" == v["term"] for v in
+       sc.check("This is important to test.\nIt is important to\nnote that x.")
+       ["violations"]))
+for w in ("delve", "in conclusion", "tapestry"):
+    ok(f"  ⟵ {w}", w in en)
+for w in ("في الختام", "يتضح من خلال", "يستدعي", "نخلص إلى"):
+    ok(f"  ⟵ {w}", w in ar)
+# وأنماطُ التحشيد مكتوبةٌ في الفاحص — فتُفحَص مطابقتُها للدستور كي لا تنحرف
+ok("وأنماطُ التحشيد مذكورةٌ في الدستور",
+   sum(1 for r in sc._RALLY if r in _soul) >= 3,
+   [r for r in sc._RALLY if r in _soul])
+
+print("\n— على نصَّي المستخدم الحقيقيَّين —")
+rb = sc.check(BAD)
+ok("الفاشلُ يُرفَض", rb["ok"] is False)
+_terms = [v["term"] for v in rb["violations"]]
+for w in ("في الختام", "يتضح من خلال", "يستدعي", "استجابة متكاملة"):
+    ok(f"  ⟵ يمسك «{w}»", w in _terms, _terms)
+ok("  ⟵ ويمسك خاتمةَ التحشيد",
+   any("تحشيد" in v["rule"] for v in rb["violations"]), rb["violations"])
+rg = sc.check(GOOD)
+ok("والناجحُ يُقبَل", rg["ok"] is True,
+   [v["term"] for v in rg["violations"]])
+ok("  ⟵ بدرجةٍ كاملة", rg["score"] == 100, rg["score"])
+
+print("\n— الحالاتُ الحدّيّة —")
+ok("الفارغُ يُرفَض ولا يرفع", sc.check("")["ok"] is False)
+ok("وNone كذلك", sc.check(None)["ok"] is False)
+ok("والشرطةُ الملتصقةُ تُمسَك",
+   any("ملتصقة" in v["rule"] for v in sc.check("الجواب—هنا واضح.")["violations"]))
+ok("والمنفصلةُ بمسافتين لا تُمسَك",
+   not any("ملتصقة" in v["rule"]
+           for v in sc.check("الجواب — هنا — واضح.")["violations"]))
+_same = "التعليم مهم جداً.\n\nالتعليم يحتاج جهداً."
+ok("وفقرتان بنفس المطلع تُمسَكان",
+   any("نفس المطلع" in v["rule"] for v in sc.check(_same)["violations"]))
+ok("ونصٌّ نظيفٌ يمرّ", sc.check("القمر بعيد. والسماء صافية اليوم.")["ok"])
+
+print("\n— الوصلُ بالطرفيّة —")
+_src = open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+            encoding="utf-8").read()
+for n in ("soul_check", "soul_test", "skills_invoke_test"):
+    ok(n + " موجودة", callable(getattr(wc, n, None)))
+ok("--soul check بلا نداءِ نموذج", '"check"' in _src)
+ok("--soul test بنوبةٍ واحدة", 'sub == "test"' in _src)
+ok("--skills invoke يقرأ مسارَ النوبة", 'sub == "invoke"' in _src)
+ok("ويعتمد على trajectory لا على الجواب",
+   "trajectory(sk)" in _src)
+_r = wc.soul_check(BAD)
+ok("soul_check عبر weaver_core تعمل", _r.get("ok") is False)
+
+print("\n" + "=" * 62)
+print(f" RESULT: {'PASS' if F == 0 else 'FAIL'}   ({P}/{P + F})")
+print("=" * 62)
+sys.exit(1 if F else 0)
