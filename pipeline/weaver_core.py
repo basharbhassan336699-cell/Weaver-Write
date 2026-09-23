@@ -2515,6 +2515,20 @@ def net_doctor(live=False, query=None, out=None):
     return rows
 
 
+def _unknown_sub(flag, sub, valid):
+    """أمرٌ فرعيٌّ مجهول: خطأٌ صريح، لا شاشةُ حالةٍ صامتة.
+
+    كان المجهولُ يسقط إلى `show` فيعرض الحالةَ ويخرج بـ0 — فبدا للمستخدم
+    أنّ `--soul test` اشتغل، والحقيقةُ أنّ نسختَه لم تكن تعرفه بعد (لم
+    يسحب الالتزامَ الذي أضافه). الصمتُ أخفى السببَ كلَّه."""
+    print("  ✗ أمرٌ فرعيٌّ غيرُ معروف: %s %s" % (flag, sub), file=sys.stderr)
+    print("    المعروف: " + " · ".join(valid), file=sys.stderr)
+    print("\n    إن كان أمراً جديداً فنسختُك أقدمُ منه — اسحب أوّلاً:"
+          "\n      git pull origin claude/extract-compressed-folders-51v4ib",
+          file=sys.stderr)
+    sys.exit(2)
+
+
 def _print_soul_report(r):
     """تقريرُ فحصِ الدستور — مشترَكٌ بين `--soul check` و`--soul test`."""
     st = r.get("stats") or {}
@@ -2596,6 +2610,9 @@ def _cli():
         sys.exit(0 if _first_bad is None else 1)
     if argv[:1] == ["--skills"]:
         sub = argv[1] if len(argv) > 1 else "show"
+        _valid = ("show", "apply", "remove", "seen", "test", "invoke")
+        if sub not in _valid and not sub.startswith("-"):
+            _unknown_sub("--skills", sub, _valid)
         if sub == "apply":
             ok2, rows = skills_apply(force=("--force" in argv))
             for n, o, why in rows:
@@ -2682,6 +2699,9 @@ def _cli():
         return
     if argv[:1] == ["--soul"]:
         sub = argv[1] if len(argv) > 1 else "show"
+        _valid = ("show", "apply", "restore", "check", "test")
+        if sub not in _valid and not sub.startswith("-"):
+            _unknown_sub("--soul", sub, _valid)
         if sub == "apply":
             ok2, why2 = soul_apply(force=("--force" in argv))
             print(("  ✓ " if ok2 else "  ✗ ") + str(why2))

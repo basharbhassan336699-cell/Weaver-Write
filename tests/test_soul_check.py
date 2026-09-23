@@ -118,6 +118,22 @@ ok("ويعتمد على trajectory لا على الجواب",
 _r = wc.soul_check(BAD)
 ok("soul_check عبر weaver_core تعمل", _r.get("ok") is False)
 
+print("\n— الأمرُ المجهولُ يصرخ، لا يصمت —")
+# المستخدمُ شغّل `--soul test` بنسخةٍ لا تعرفه، فسقط إلى `show` وعرض الحالةَ
+# وخرج بـ0 — بدا ناجحاً. الصمتُ أخفى أنّه لم يسحب الالتزامَ الذي أضافه.
+import subprocess as _sp
+for _flag in ("--soul", "--skills"):
+    _p = _sp.run([sys.executable, "-m", "pipeline.weaver_core", _flag, "xyz"],
+                 capture_output=True, text=True, timeout=90, cwd=_ROOT)
+    ok(f"{_flag} xyz ⟶ رمزُ خروجٍ غيرُ صفريّ", _p.returncode == 2,
+       _p.returncode)
+    ok(f"  ⟵ ويقول إنّه غيرُ معروف", "غيرُ معروف" in (_p.stderr or ""))
+    ok(f"  ⟵ ويقترح السحب", "git pull" in (_p.stderr or ""))
+_p = _sp.run([sys.executable, "-m", "pipeline.weaver_core", "--soul", "show"],
+             capture_output=True, text=True, timeout=90, cwd=_ROOT)
+ok("و«show» الصريحُ ما زال يعمل", _p.returncode == 0
+   and "المُركَّب" in (_p.stdout or ""))
+
 print("\n" + "=" * 62)
 print(f" RESULT: {'PASS' if F == 0 else 'FAIL'}   ({P}/{P + F})")
 print("=" * 62)
