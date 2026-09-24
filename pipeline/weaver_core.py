@@ -2591,12 +2591,39 @@ _SKILL_PROBE = ("هذا نصٌّ كتبه نموذجٌ آخر، نظّفه من 
                 "وعلاوة على ذلك فهو أمرٌ بالغ الأهمية يستدعي تضافر الجهود.»")
 
 
-def skills_invoke_test(prompt=None, timeout=None):
+# طلبٌ طبيعيٌّ لكلِّ مهارة — **لا يذكر اسمَها**، ولا يأمر النموذجَ بشيء.
+# النموذجُ يقرّر وحده؛ والاختبارُ يقرأ مسارَ النوبة من سجلّ المحرّك بعدها
+# (`trajectory`) ليقول: أفتح ملفَّ المهارة أم لا. كاميرا لا شرطيّ — ولا
+# يعمل إلا حين تكتب الأمرَ في الطرفيّة، فلا يمسّ محادثةً ولا جواباً.
+_FIX_FIRST = ("التقنيةُ غيّرت طريقةَ التعلّم في المدارس، وصار الطالبُ يصل إلى "
+              "المعلومة في ثوانٍ، لكنّ المعلّمَ ما زال يقرّر ما يستحقّ القراءة.")
+_SKILL_PROBES = {
+    "humanize-ar": _SKILL_PROBE,
+    "detect-ai": (
+        "وصلني هذا النصُّ من شخصٍ آخر. هل كتبه ذكاءٌ اصطناعيّ؟ "
+        "أريد تقييماً فقط:\n\n"
+        "«يُعدّ التعليمُ ركيزةً أساسيّةً في المنظومة التنمويّة، وعلاوة على "
+        "ذلك فهو أمرٌ بالغ الأهمية يستدعي تضافر الجهود. وفي الختام، يتضح أنّ "
+        "الاستثمارَ في التعليم هو السبيلُ الأمثلُ لبناء مستقبلٍ مشرق.»"),
+    "fix-conclusion": (
+        "أصلح خاتمةَ هذا المقال:\n\n«" + _FIX_FIRST + "\n\n"
+        "وفي الختام، يتضح أنّ التقنيةَ ركيزةُ المستقبل، ومن هنا فإنّ تضافرَ "
+        "الجهود أمرٌ لا غنى عنه لبناء تعليمٍ أفضل.»"),
+}
+
+
+def skills_invoke_test(prompt=None, timeout=None, target=None):
     """أيستدعي النموذجُ مهارةً حين يجب؟ — من مسار النوبة، لا من الجواب.
 
-    يعيد {ok, called:[], answer, trajectory:[], note}."""
+    `target`: مهارةٌ بعينها — فيُعطى النموذجُ طلباً طبيعياً يناسبها
+    (`_SKILL_PROBES`)، والنجاحُ أن يفتحها **هي**. وبلا `target`: كما كان
+    حرفاً (طلبُ humanize-ar، والنجاحُ أيُّ مهارة).
+
+    يعيد {ok, measured, target, called:[], answer, trajectory:[], note,
+    extra:{}}. و`extra` معلوماتٌ للعرض لا تدخل في الحكم."""
     sk = "skillinvoke-" + str(int(time.time()))
-    r = ask(prompt or _SKILL_PROBE, timeout=timeout, fallback=False,
+    prompt = prompt or _SKILL_PROBES.get(target or "") or _SKILL_PROBE
+    r = ask(prompt, timeout=timeout, fallback=False,
             session=sk)
     ans = (r or {}).get("answer") or ""
     calls = trajectory(sk) or []
@@ -2613,9 +2640,24 @@ def skills_invoke_test(prompt=None, timeout=None):
     # «لم يستدعِ شيئاً — راجع وصفَ المهارة» فيُوجَّه المستخدمُ إلى إصلاح وصفٍ
     # سليم، والسببُ الحقيقيُّ رصيدٌ نفد. التشخيصُ الخاطئ أسوأُ من لا تشخيص.
     _ran = bool(ans.strip()) or bool(calls)
-    return {"ok": bool(hit), "measured": _ran, "called": hit, "answer": ans,
+    extra = {}
+    if target == "detect-ai" and ans:
+        # المهارةُ تُخرج JSON بهذه الحقول، ولا تُعيد صياغةَ شيء.
+        extra["تقريرٌ بحقول المهارة"] = ("next_skills" in ans
+                                         or "recommendation" in ans)
+    if target == "fix-conclusion" and ans:
+        extra["الفقرةُ الأولى لم تُمَسّ"] = _FIX_FIRST in ans
+        import re as _re
+        _paras = [x for x in _re.split(r"\n\s*\n", ans.strip()) if x.strip()]
+        if _paras:
+            _sc = soul_check(_paras[-1])
+            extra["فاحصُ الدستور على آخر فقرة"] = (
+                "%s/100" % _sc.get("score") if isinstance(_sc, dict) else "—")
+    return {"ok": (target in hit) if target else bool(hit),
+            "measured": _ran, "target": target or "",
+            "called": hit, "answer": ans,
             "trajectory": [c.get("name") for c in calls if c.get("name")],
-            "note": (r or {}).get("note", "")}
+            "note": (r or {}).get("note", ""), "extra": extra}
 
 
 def bootstrap_report(timeout=180):
@@ -2984,9 +3026,16 @@ def _cli():
                             if _good else "✗ لا يعمل كما ينبغي"))
             sys.exit(0 if _good else 1)
         if sub == "invoke":
-            print("  أيستدعي النموذجُ مهارةً حين يجب؟"
-                  "   (نداءُ نموذجٍ واحد)\n")
-            _r = skills_invoke_test()
+            # `--skills invoke <مهارة>`: والاسمُ المجهولُ خطأٌ صريح — كان
+            # يُتجاهَل بصمت، فشُغّل اختبارُ humanize-ar مرّتين وبدا أنّه
+            # اختبارُ detect-ai وfix-conclusion.
+            _tgt = next((a for a in argv[2:] if not a.startswith("-")), None)
+            if _tgt and _tgt not in _SKILL_PROBES:
+                _unknown_sub("--skills invoke", _tgt, tuple(_SKILL_PROBES))
+            print("  أيستدعي النموذجُ " + (("«%s»" % _tgt) if _tgt
+                                         else "مهارةً")
+                  + " حين يجب؟   (نداءُ نموذجٍ واحد)\n")
+            _r = skills_invoke_test(target=_tgt)
             if _r.get("measured") is False:
                 print("  ⚠ لم يُقَس — النموذجُ لم يعمل، فلا دليلَ على المهارة.\n")
                 print("  السبب:")
@@ -3008,8 +3057,18 @@ def _cli():
                     print("  " + _ln)
             if _r.get("note"):
                 print("\n  ⓘ " + str(_r["note"]))
-            print("\n  " + ("✓ اختارها بنفسه" if _r["ok"] else
-                             "✗ لم يستدعِ شيئاً — راجع وصفَ المهارة"))
+            for _k, _v in (_r.get("extra") or {}).items():
+                print("  ⓘ %s: %s" % (_k, {True: "نعم", False: "لا"}.get(_v, _v)))
+            if _tgt:
+                print("\n  " + ("✓ اختار «%s» بنفسه" % _tgt if _r["ok"] else
+                                 "✗ لم يستدعِ «%s»" % _tgt
+                                 + (" (استدعى غيرَها)" if _r["called"]
+                                    else "")
+                                 + " — النموذجُ لا يثبت دائماً؛ أعِد مرّةً"
+                                   " قبل الحكم على وصفها"))
+            else:
+                print("\n  " + ("✓ اختارها بنفسه" if _r["ok"] else
+                                 "✗ لم يستدعِ شيئاً — راجع وصفَ المهارة"))
             sys.exit(0 if _r["ok"] else 1)
         if sub == "seen":
             rows = skills_seen()
