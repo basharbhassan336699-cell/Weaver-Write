@@ -1365,7 +1365,10 @@ _PREVIEWABLE = {"text/markdown", "text/plain", "text/csv", "application/json",
 # المحرّك الداخليّةُ لا تُمَسّ ولا تُنسخ.
 _WS_INTERNAL = {"AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md",
                 "SOUL.md.openclaw", "TOOLS.md", "USER.md", "HEARTBEAT.md",
-                "MEMORY.md", "DREAMS.md", "plagiarism-check.txt"}
+                "MEMORY.md", "DREAMS.md", "plagiarism-check.txt",
+                # مسوّداتُ حارس إعادة الصياغة (academic-humanize · voice-inject)
+                "ah-original.txt", "ah-rewritten.txt",
+                "vi-original.txt", "vi-rewritten.txt"}
 _WS_SKIP_DIRS = {"memory", "skills", "uploads-test", "node_modules"}
 _WS_EXTS = {".md", ".txt", ".csv", ".json", ".html", ".htm", ".pdf", ".docx",
             ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}

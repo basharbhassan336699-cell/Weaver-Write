@@ -37,7 +37,8 @@ def ok(name, cond, extra=""):
         print(f"  ✗ {name}" + (f"   — {extra}" if extra else ""))
 
 
-WANT = ("detect-ai", "fix-conclusion", "humanize-ar", "check-plagiarism")
+WANT = ("detect-ai", "fix-conclusion", "humanize-ar", "check-plagiarism",
+        "academic-humanize", "voice-inject")
 BODY = {}
 for n in WANT:
     p = os.path.join(wc.SKILLS_SRC, n, "SKILL.md")
@@ -105,6 +106,31 @@ ok("  ⟵ ولا يمسّ الاستشهادات لينجح",
 _pb = wc._skill_body("check-plagiarism")
 ok("  ⟵ ومسارُ السكربت يُحَلّ إلى ملفٍّ موجود",
    any(os.path.isfile(x) for x in re.findall(r"(/\S+plagiarism\.py)", _pb)))
+
+ok("academic-humanize: لا على نصٍّ كتبتَه أنت",
+   "نصٌّ كتبتَه أنت في هذه المحادثة" in BODY["academic-humanize"])
+ok("  ⟵ جملةً جملة، والاستشهادُ يبقى في جملته",
+   "جملةً جملة" in BODY["academic-humanize"]
+   and "لا تنقل فكرةً مُستشهَداً لها" in BODY["academic-humanize"])
+ok("  ⟵ حضورُ الباحث رأيٌ في التفسير لا واقعةٌ ولا تجربة",
+   "لا واقعةٌ جديدة، ولا تجربةٌ شخصيّة" in BODY["academic-humanize"])
+ok("  ⟵ والحارسُ الحتميُّ إلزاميّ، وfalse ⟵ الأصل",
+   "integrity_check.py" in BODY["academic-humanize"]
+   and "فسلّم **الأصلَ**" in BODY["academic-humanize"])
+ok("voice-inject: لا للبحث الأكاديميّ",
+   "بحثٌ أكاديميّ أو رسالةٌ جامعيّة" in BODY["voice-inject"])
+ok("  ⟵ لا اختراعَ رأيٍ ولا تجربةٍ ولا واقعة",
+   "لا تخترع رأياً، ولا تجربةً، ولا واقعة" in BODY["voice-inject"])
+ok("  ⟵ الموقفُ من المستخدم، وإلّا يسأله",
+   "فاسأله سؤالاً واحداً" in BODY["voice-inject"])
+ok("  ⟵ بين قوسين لا بشَرطة (SOUL)", "لا بشَرطة" in BODY["voice-inject"])
+ok("  ⟵ والحارسُ الحتميُّ إلزاميّ",
+   "integrity_check.py" in BODY["voice-inject"])
+for _n in ("academic-humanize", "voice-inject"):
+    _pb = wc._skill_body(_n)
+    ok(f"  {_n}: مسارُ الحارس يُحَلّ إلى ملفٍّ موجود",
+       any(os.path.isfile(x) for x in
+           re.findall(r"(/\S+integrity_check\.py)", _pb)))
 
 print("\n— السلسلة: detect-ai تُشغّل البقيّة، لا سكربت —")
 ok("تُخرج next_skills", "next_skills" in BODY["detect-ai"])
