@@ -2629,6 +2629,20 @@
             </div>
             <label class="switch"><input type="checkbox" id="capEgress" checked onchange="saveField('weaver_cap_egress', this.checked?'1':'0')"><span class="switch-slider"></span></label>
           </div>
+
+          <h2 class="settings-section-title sub">Writing / الكتابة</h2>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Reduce repetition / تقليل التكرار</div>
+              <div class="settings-row-desc">يطلب من النموذج ألّا يكرّر الكلمات والعبارات. مطفأ افتراضياً — شغّله ثمّ قارن النتيجة. <span id="penaltyMsg"></span></div>
+            </div>
+            <select id="penaltyLevel" class="settings-select" style="width:auto;margin-inline-end:10px" onchange="wvSavePenalty()">
+              <option value="0.2">خفيف</option>
+              <option value="0.3" selected>متوسط</option>
+              <option value="0.5">قوي</option>
+            </select>
+            <label class="switch"><input type="checkbox" id="penaltyToggle" onchange="wvSavePenalty()"><span class="switch-slider"></span></label>
+          </div>
         </div>
 
         <!-- PLUGINS -->
@@ -4928,6 +4942,35 @@
       wvSetMsg('Found '+r.models.length+' models (newest first).', 'ok');
     }catch(e){ wvSetMsg('Discovery failed: '+e.message, 'err'); }
   }
+  // زرُّ «تقليل التكرار»: يقرأ ويكتب WEAVER_FREQUENCY_PENALTY عبر /api/penalty.
+  async function wvLoadPenalty(){
+    try{
+      var r=await (await fetch('/api/penalty')).json();
+      var v=parseFloat(r.frequency)||0;
+      var tg=document.getElementById('penaltyToggle'), lv=document.getElementById('penaltyLevel');
+      if(!tg||!lv) return;
+      tg.checked = v>0;
+      if(v>0){
+        var best=lv.options[0].value;
+        for(var i=0;i<lv.options.length;i++){
+          if(Math.abs(parseFloat(lv.options[i].value)-v) < Math.abs(parseFloat(best)-v)) best=lv.options[i].value;
+        }
+        lv.value=best;
+      }
+    }catch(e){}
+  }
+  async function wvSavePenalty(){
+    var tg=document.getElementById('penaltyToggle'), lv=document.getElementById('penaltyLevel');
+    var msg=document.getElementById('penaltyMsg');
+    var v = tg.checked ? parseFloat(lv.value) : 0;
+    try{
+      var r=await (await fetch('/api/penalty',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({frequency:v})})).json();
+      if(msg) msg.textContent = r.ok ? (v>0 ? ' ✓ شُغّل' : ' ✓ أُطفئ') : ' ✗';
+    }catch(e){ if(msg) msg.textContent=' ✗ '+e.message; }
+  }
+  try{ document.addEventListener('DOMContentLoaded', wvLoadPenalty); if(document.readyState!=='loading') wvLoadPenalty(); }catch(e){}
+
   async function wvSaveKey(){
     var sel=document.getElementById('kProvider');
     var provider = sel.value==='__custom__' ? '' : sel.value;

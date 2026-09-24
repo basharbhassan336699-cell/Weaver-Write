@@ -2111,6 +2111,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._oauth_page("Connected ✓  You can close this tab and "
                              "return to Weaver Write.", True)
             return
+        if path == "/api/penalty":
+            # زرُّ «تقليل التكرار» في الإعدادات — يقرأ القيمةَ من config/.env.
+            keysync.reload_env()
+            self._json({"frequency": _penalty_payload().get(
+                "frequency_penalty", 0)})
+            return
         if path == "/api/settings":
             s = keysync.get_settings()
             s_masked = dict(s)
@@ -2274,6 +2280,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         body = self._body()
+
+        if path == "/api/penalty":
+            # تشغيلٌ/إطفاء: قيمةٌ في (0، 2] تُكتب، وغيرُها ⟵ 0 (مطفأة). والصفرُ
+            # يُكتب صراحةً لا يُحذف السطر — فيعلو ما بقي في بيئة الخادم.
+            try:
+                v = float(body.get("frequency") or 0)
+            except (TypeError, ValueError):
+                v = 0.0
+            if not (0 < v <= 2):
+                v = 0.0
+            keysync.save_env({"WEAVER_FREQUENCY_PENALTY": ("%g" % v)})
+            self._json({"ok": True, "frequency": v})
+            return
 
         if path == "/api/settings":
             # save key/provider/model -> writes .env -> terminal sees it too
