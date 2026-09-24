@@ -2251,6 +2251,23 @@ def ensure_workspace(say=None):
 SOUL_NAME = "SOUL.md"
 SOUL_BACKUP = "SOUL.md.openclaw"
 _SOUL_MARK = "# SOUL.md — أسلوبُ الكتابة"
+# نسخُنا السابقةُ من الدستور كما شُحنت (sha256 أوّلُ ١٦ حرفاً بعد strip) —
+# من سجلّ git لـcapabilities/prompts/soul/SOUL.weaver.md.
+#
+# بلا هذا تبدو كلُّ ترقيةٍ للدستور «تحريراً منك»: المُركَّبُ على جهازك نسخةٌ
+# أقدم، فلا يطابق المصدرَ الجديد، فيُحسَب «weaver-edited» ويُرفض التركيب إلا
+# بـ--force — و--force يدهس أيضاً تحريراً حقيقياً لو وُجد. فالنسخةُ المطابقةُ
+# لإحدى هذه حرفاً ترقّى بلا --force؛ وما سواها يبقى محميّاً كما كان.
+_SOUL_PAST = frozenset((
+    "d44a1c2b95460bfe",   # 56cfd7b  2026-09-21
+    "f1d886175e9212a2",   # e872d67  2026-09-22
+    "68b9d255a9243545",   # 1c38256  2026-09-22  (قبل القسم ٩)
+))
+
+
+def _soul_hash(text):
+    import hashlib
+    return hashlib.sha256(str(text or "").strip().encode("utf-8")).hexdigest()[:16]
 
 
 def soul_path():
@@ -2298,7 +2315,9 @@ def soul_state():
     elif _SOUL_MARK in cur:
         # دستورُنا — لكن هل أضفتَ إليه؟ قولُ «مُركَّبٌ سلفاً» لمن حرّره
         # يُضلّل: يظنّ أنّ ترقيةً جرت ولم تجرِ.
-        which = "weaver" if cur.strip() == src.strip() else "weaver-edited"
+        which = ("weaver" if cur.strip() == src.strip()
+                 else "weaver-old" if _soul_hash(cur) in _SOUL_PAST
+                 else "weaver-edited")
     elif tpl and cur.strip() == tpl.strip():
         which = "openclaw"
     else:
@@ -3219,6 +3238,7 @@ def _cli():
         st = soul_state()
         _lbl = {"weaver": "دستورُ Weaver Write", "openclaw": "قالبُ المحرّك",
                 "weaver-edited": "دستورُنا + إضافاتُك",
+                "weaver-old": "دستورُنا — نسخةٌ أقدم (تُرقّى بلا --force)",
                 "custom": "مُحرَّرٌ بيدك", "missing": "غيرُ موجود"}
         print("  المُركَّب  : " + _lbl.get(st["which"], st["which"])
               + "   (%d حرفاً)" % st["chars"])

@@ -42,8 +42,54 @@ FLAT = " ".join(TXT.split())
 
 print("\n— الملفّ —")
 ok("الدستورُ موجود", bool(TXT.strip()), SRC)
-ok("حجمُه تحت الحدّ (٣٥٠٠ حرف)", len(TXT) <= 3500, len(TXT))
+# كان الحدُّ ٣٥٠٠ والدستورُ ٣٤٧٧. والقسمُ ٩ (فحصُ النقل قبل تسليمِ مستندٍ من
+# مصادر) أضاف ٢٦١ حرفاً ≈ ٧٠ رمزاً في كلِّ رسالة — بموافقة المستخدم، وبلا
+# حذفِ قاعدةٍ قائمة. فالحدُّ ٣٨٠٠: يبقى حارساً على النموّ لا عائقاً له.
+ok("حجمُه تحت الحدّ (٣٨٠٠ حرف)", len(TXT) <= 3800, len(TXT))
 ok("وليس فارغاً من المضمون", len(TXT) > 1500, len(TXT))
+
+print("\n— القسم ٩: فحصُ النقل قبل تسليمِ مستندٍ من مصادر —")
+_s9 = " ".join(TXT.split("## ٩)")[1].split()) if "## ٩)" in TXT else ""
+ok("القسمُ ٩ موجود", bool(_s9))
+ok("  ⟵ للمستند من صفحاتٍ فُتحت وحدَه (لا للمحادثة)",
+   "صفحاتٍ فتحتَها" in _s9)
+ok("  ⟵ يسمّي مهارةً موجودةً فعلاً", "check-plagiarism" in _s9
+   and "check-plagiarism" in wc._skill_names())
+ok("  ⟵ «مرّةً واحدة» للفحص ولإعادته — لا دوران",
+   _s9.count("مرّةً واحدة") >= 2, _s9.count("مرّةً واحدة"))
+ok("  ⟵ ويُبقي الاستشهاد", "إبقاء استشهاده" in _s9)
+ok("  ⟵ ويُخبر المستخدم", "أخبر المستخدمَ" in _s9)
+ok("  ⟵ وهو آخرُ قسم (لم يُمَسّ ما قبله)", TXT.rstrip().endswith("في سطر."))
+
+print("\n— الترقية: نسخُنا السابقةُ تُرقّى، وتحريرُك محميّ —")
+import tempfile as _tf
+_old_ws = wc.workspace_dir
+_prev = TXT.split("\n## ٩)")[0]
+ok("النسخةُ السابقةُ معروفة (بصمتُها في _SOUL_PAST)",
+   wc._soul_hash(_prev) in wc._SOUL_PAST, wc._soul_hash(_prev))
+ok("والحاليّةُ ليست منها (وإلّا حُسبت قديمة)",
+   wc._soul_hash(TXT) not in wc._SOUL_PAST)
+try:
+    _d = _tf.mkdtemp()
+    wc.workspace_dir = lambda: _d
+    open(wc.soul_path(), "w", encoding="utf-8").write(_prev)
+    ok("المُركَّبُ نسخةٌ سابقة ⟵ weaver-old",
+       wc.soul_state()["which"] == "weaver-old", wc.soul_state()["which"])
+    _ok, _why = wc.soul_apply()
+    ok("  ⟵ تُرقّى بلا --force", _ok and wc.soul_state()["which"] == "weaver",
+       _why)
+    open(wc.soul_path(), "w", encoding="utf-8").write(
+        _prev + "\n\nقاعدتي: لا أحبّ الجملَ الطويلة.\n")
+    ok("نسخةٌ سابقة + سطرٌ منك ⟵ weaver-edited",
+       wc.soul_state()["which"] == "weaver-edited")
+    _ok, _why = wc.soul_apply()
+    ok("  ⟵ لا تُدهَس بلا --force", _ok is False
+       and "قاعدتي" in open(wc.soul_path(), encoding="utf-8").read(), _why)
+    open(wc.soul_path(), "w", encoding="utf-8").write("ملفّي أنا.\n")
+    ok("ملفٌّ ليس منّا ⟵ custom ومحميّ", wc.soul_state()["which"] == "custom"
+       and wc.soul_apply()[0] is False)
+finally:
+    wc.workspace_dir = _old_ws
 
 print("\n— التغطية: مدموجةٌ من SYS-01 + HUMAN-04 + PIPE-02 —")
 for w in ("delve", "tapestry", "groundbreaking", "robust", "pivotal",
@@ -127,7 +173,8 @@ print("\n— الحالةُ الحيّة —")
 st = wc.soul_state()
 ok("soul_state لا ترفع استثناءً", isinstance(st, dict))
 ok("وتعرف المُركَّب", st.get("which") in
-   ("weaver", "weaver-edited", "openclaw", "custom", "missing"),
+   ("weaver", "weaver-old", "weaver-edited", "openclaw", "custom",
+    "missing"),
    st.get("which"))
 _old = os.environ.get("WEAVER_SOUL")
 os.environ["WEAVER_SOUL"] = "off"
