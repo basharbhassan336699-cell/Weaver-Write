@@ -116,6 +116,15 @@ def main(argv):
         print("    EACCES على /tmp. أرسل هذا الخرج ليُعالَج.")
         return 1
     print(f"  تمّت ({done} مُعدَّل، {ok - done} كان مرقوعاً)")
+    # نصوصُ المساعدة: openclaw ⟶ weaver core — تجميليٌّ، فلا يُفشل الإصلاح.
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import help_rebrand
+        print("  نصوصُ المساعدة: openclaw ⟶ weaver core")
+        help_rebrand.apply(root, check=check)
+    except Exception as e:
+        print(f"    ⚠ نصوصُ المساعدة لم تُبدَّل ({type(e).__name__}) — "
+              "تجميليٌّ، والمحرّكُ يعمل")
     return 0
 
 
