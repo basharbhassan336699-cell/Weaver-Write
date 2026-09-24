@@ -37,7 +37,7 @@ def ok(name, cond, extra=""):
         print(f"  ✗ {name}" + (f"   — {extra}" if extra else ""))
 
 
-WANT = ("detect-ai", "fix-conclusion", "humanize-ar")
+WANT = ("detect-ai", "fix-conclusion", "humanize-ar", "check-plagiarism")
 BODY = {}
 for n in WANT:
     p = os.path.join(wc.SKILLS_SRC, n, "SKILL.md")
@@ -52,7 +52,7 @@ def front(t, key):
 print("\n— الملفّات —")
 for n in WANT:
     ok(f"{n} موجودة", bool(BODY[n].strip()))
-ok("ولا رابعةَ غيرَها (الخطرةُ مؤجّلة)",
+ok("ولا غيرَها (الخطرةُ مؤجّلة)",
    set(wc._skill_names()) == set(WANT), wc._skill_names())
 ok("ولا rewrite-from-ideas", "rewrite-from-ideas" not in wc._skill_names())
 
@@ -91,6 +91,21 @@ ok("  ⟵ ويرفض التسليمَ عند intact: False",
 ok("  ⟵ وعند فقدِ أكثرَ من الثلث",
    "أقصرَ بأكثر من الثلث" in BODY["humanize-ar"])
 
+ok("check-plagiarism: قياسٌ لا يغيّر حرفاً",
+   "لا تغيّر حرفاً في النصّ" in BODY["check-plagiarism"])
+ok("  ⟵ ولا على نصٍّ بلا مصادر",
+   "نصٌّ بلا مصادر" in BODY["check-plagiarism"])
+ok("  ⟵ ولا يدّعي «خالٍ من السرقة» مطلقاً",
+   "لا تقل «خالٍ من السرقة»" in BODY["check-plagiarism"])
+ok("  ⟵ ولم يُقَس ⟵ يُبلغ ولا يدّعي السلامة",
+   "UNMEASURED" in BODY["check-plagiarism"]
+   and "لا تدّعِ أنّ النصَّ سليم" in BODY["check-plagiarism"])
+ok("  ⟵ ولا يمسّ الاستشهادات لينجح",
+   "لا تُعدّل الاستشهاداتِ" in BODY["check-plagiarism"])
+_pb = wc._skill_body("check-plagiarism")
+ok("  ⟵ ومسارُ السكربت يُحَلّ إلى ملفٍّ موجود",
+   any(os.path.isfile(x) for x in re.findall(r"(/\S+plagiarism\.py)", _pb)))
+
 print("\n— السلسلة: detect-ai تُشغّل البقيّة، لا سكربت —")
 ok("تُخرج next_skills", "next_skills" in BODY["detect-ai"])
 ok("  ⟵ وتسمّي fix-conclusion", "fix-conclusion" in BODY["detect-ai"])
@@ -120,7 +135,7 @@ ok("وتُركَّب بعد البذر مع الدستور", "skills_apply()" in
 print("\n— الحالةُ الحيّة —")
 st = wc.skills_state()
 ok("skills_state لا ترفع استثناءً", isinstance(st, dict))
-ok("وتعرف الثلاث", len(st.get("skills") or []) == 3)
+ok("وتعرفها كلَّها", len(st.get("skills") or []) == len(WANT))
 _old = os.environ.get("WEAVER_SKILLS")
 os.environ["WEAVER_SKILLS"] = "off"
 ok("WEAVER_SKILLS=off تُطفئ التلقائيّ", wc.skills_on() is False)
@@ -158,7 +173,10 @@ if seen:
     ok("والمصدرُ مساحةُ العمل (الأولويّةُ الأولى)",
        all("workspace" in (r["source"] or "") for r in seen),
        [r["source"] for r in seen])
-    ok("والثلاثُ كلُّها", len(seen) == 3, len(seen))
+    # ما رُكِّب يراه النموذجُ كلَّه. والجديدةُ تُركَّب بـ`--skills apply`.
+    _inst = [r["name"] for r in wc.skills_state()["skills"]
+             if r["state"] != "missing"]
+    ok("وكلُّ مُركَّبةٍ يراها", len(seen) >= len(_inst), (len(seen), _inst))
 else:
     print("    ⓘ لا محرّكَ صالحٌ هنا أو غيرُ مُركَّبة — يُتخطّى القياس")
 
