@@ -3375,6 +3375,7 @@
         const el = makeAiMsg(m.content, m.tools);
         box.appendChild(el);
         if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
+        if (m.files && m.files.length) m.files.forEach(function (f) { addFileCard(el, f); });
         if (m.toolsPending && typeof wvLoadTurnTools === 'function') {
           wvLoadTurnTools(id, m, function () { wvRenderTools(el.querySelector('.tool-steps'), m.tools); });
         }
@@ -4248,6 +4249,7 @@
       let assistantFile = '';  // produced file name (for the artifacts card)
       let gotReply = false;
       let engineTurn = false;  // نوبةُ محرّك ⟵ بطاقاتُ أدواتها تُطلب بعد المجرى
+      const extraFiles = [];   // ملفّاتٌ إضافيّةٌ من النوبة — تُحفَظ مع الرسالة
       let streamBuf = '';      // live-streamed text buffer (before final reply)
       let streaming = false;
       let streamRAF = 0;       // pending animation frame for live markdown render
@@ -4275,6 +4277,8 @@
         if (ev.t === 'step') { stepsAdd(ev.label); }
         else if (ev.t === 'tool') { stepsTool(ev.tool); if (ev.tool && ev.tool.kind === 'engine' && ev.tool.status !== 'err') engineTurn = true; }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
+        // ملفٌّ إضافيٌّ كتبه الوكيلُ في النوبة نفسِها (الأوّلُ يأتي مع الجواب)
+        else if (ev.t === 'file') { if (ev.path) { addFileCard(aiMsg, ev.path); extraFiles.push(wvBasename(ev.path)); } }
         // LIVE STREAM: show the reply as it is written (like OpenClaw).
         else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
         else if (ev.t === 'delta') { if (streaming) { streamBuf += (ev.detail || ''); if (!streamRAF) streamRAF = requestAnimationFrame(renderStreamLive); } }
@@ -4324,6 +4328,7 @@
       aiMsg.dataset.raw = finalText;  // Copy button uses the raw markdown
       const amsg = { role: 'assistant', content: finalText };
       if (assistantFile) amsg.file = assistantFile;  // persist the artifact
+      if (extraFiles.length) amsg.files = extraFiles.slice();
       // وبطاقاتُ الأدوات تُحفَظ مع الرسالة — وإلّا ضاعت عند تبديل المحادثة.
       // والحمولةُ الضخمةُ تُقصَّ كي لا يتضخّم ملفُّ المحادثة بلا حدّ.
       if (toolCalls.length) {

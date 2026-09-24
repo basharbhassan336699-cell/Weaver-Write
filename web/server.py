@@ -1353,6 +1353,101 @@ _PREVIEWABLE = {"text/markdown", "text/plain", "text/csv", "application/json",
                 "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
 
 
+# ── ملفّاتٌ كتبها الوكيلُ في مساحة عمله ⟵ مجلّدُ «Weaver Write» ──────────────
+#
+# المحرّكُ يكتب في مساحة عمله (~/.weaver-write/state/workspace) — مخفيّةٌ داخل
+# Termux: لا يراها تطبيقُ الملفّات، ولا تعرفها الواجهة (جوابُه نصٌّ بلا مسار،
+# و/api/output لا يعرض إلا ما في _output_dir() — قيدُ أمانٍ مقصود). فقِيس:
+# مستندٌ من ٧٣٨٥ بايتاً كُتب، وظهر اسمُه نصّاً في الجواب ولم يصل المستخدم.
+#
+# فتُقارَن مساحةُ العمل قبل النوبة وبعدها، ويُنسخ الجديدُ (نسخاً لا نقلاً) إلى
+# _output_dir()، وتُرسَل بطاقتُه مع الجواب كما في المسار القديم. وملفّاتُ
+# المحرّك الداخليّةُ لا تُمَسّ ولا تُنسخ.
+_WS_INTERNAL = {"AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md",
+                "SOUL.md.openclaw", "TOOLS.md", "USER.md", "HEARTBEAT.md",
+                "MEMORY.md", "DREAMS.md", "plagiarism-check.txt"}
+_WS_SKIP_DIRS = {"memory", "skills", "uploads-test", "node_modules"}
+_WS_EXTS = {".md", ".txt", ".csv", ".json", ".html", ".htm", ".pdf", ".docx",
+            ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
+
+
+def _ws_dir():
+    try:
+        from pipeline import weaver_core as _wc
+        return _wc.workspace_dir()
+    except Exception:
+        return ""
+
+
+def _ws_snapshot(max_depth=3):
+    """{مسارٌ نسبيّ: (mtime، حجم)} لما يصلح تسليمُه في مساحة العمل. لا يرفع."""
+    root = _ws_dir()
+    out = {}
+    if not root or not os.path.isdir(root):
+        return out
+    try:
+        for cur, dirs, files in os.walk(root):
+            rel_dir = os.path.relpath(cur, root)
+            depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
+            dirs[:] = [d for d in dirs if not d.startswith(".")
+                       and d not in _WS_SKIP_DIRS and depth < max_depth]
+            for fn in files:
+                if fn.startswith(".") or (depth == 0 and fn in _WS_INTERNAL):
+                    continue
+                if os.path.splitext(fn)[1].lower() not in _WS_EXTS:
+                    continue
+                full = os.path.join(cur, fn)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                if st.st_size <= 0 or st.st_size > 50 * 1024 * 1024:
+                    continue
+                out[os.path.relpath(full, root)] = (st.st_mtime, st.st_size)
+    except Exception:
+        return out
+    return out
+
+
+def _ws_new_files(before):
+    """ما جدّ أو تغيّر منذ اللقطة — الأحدثُ أوّلاً. لا يرفع."""
+    if before is None:
+        return []
+    after = _ws_snapshot()
+    new = [rel for rel, v in after.items() if before.get(rel) != v]
+    new.sort(key=lambda rel: -after[rel][0])
+    return new
+
+
+def _ws_deliver(rel):
+    """انسخ ملفّاً من مساحة العمل إلى _output_dir(). يعيد المسارَ الجديد أو "".
+
+    نسخٌ لا نقل: الأصلُ يبقى للوكيل. واسمٌ مأخوذٌ بملفٍّ مختلف ⟵ «-2»، «-3»…
+    ولا يُدهَس ملفٌّ للمستخدم."""
+    try:
+        import shutil
+        import filecmp
+        src = os.path.join(_ws_dir(), rel)
+        if not os.path.isfile(src):
+            return ""
+        out_dir = _output_dir()
+        base, ext = os.path.splitext(os.path.basename(src))
+        dst = os.path.join(out_dir, base + ext)
+        n = 2
+        while os.path.exists(dst):
+            try:
+                if filecmp.cmp(src, dst, shallow=False):
+                    return dst                      # نسخةٌ مطابقةٌ سلفاً
+            except Exception:
+                pass
+            dst = os.path.join(out_dir, "%s-%d%s" % (base, n, ext))
+            n += 1
+        shutil.copy2(src, dst)
+        return dst
+    except Exception:
+        return ""
+
+
 def _safe_output_file(path_or_name: str):
     """Resolve a requested file to an absolute path INSIDE the output dir.
     Accepts a bare filename or an absolute path; returns None if it escapes the
@@ -2459,6 +2554,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ("قراءة الملفات" if isar else "Reading files") if attach_text
                     else ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
+                # لقطةُ مساحة عمل المحرّك قبل النوبة — ليُعرَف ما كتبه فيها.
+                _ws_before = _ws_snapshot() if _eng_on else None
                 r = _chat(msg, body.get("history"),
                           effort=body.get("effort", "medium"), context=ctx,
                           memory=mem_ctx, attachments=attach_text,
@@ -2492,7 +2589,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     reply = r.get("reply") or ""
                     if reply.strip():
                         reply += _sources_md(srcs, isar)
-                    sse({"t": "reply", "reply": reply})
+                    # ما كتبه الوكيلُ في مساحة عمله ⟵ نسخةٌ في «Weaver Write»
+                    # وبطاقةٌ مع الجواب (معاينةٌ وتحميل)، كالمسار القديم.
+                    _files = []
+                    if r.get("engine") == "weaver-core":
+                        for _rel in _ws_new_files(_ws_before)[:5]:
+                            _dst = _ws_deliver(_rel)
+                            if _dst:
+                                _files.append(_dst)
+                    _ev = {"t": "reply", "reply": reply}
+                    if _files:
+                        _ev["output_path"] = _files[0]
+                    sse(_ev)
+                    for _extra in _files[1:]:
+                        sse({"t": "file", "path": _extra})
                     _tc = _engine_tool_card(r, isar)
                     if _tc:
                         # البطاقةُ الثابتةُ مع الجواب فوراً. وبطاقاتُ الأدوات

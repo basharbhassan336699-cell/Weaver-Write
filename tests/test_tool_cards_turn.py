@@ -114,8 +114,8 @@ finally:
 
 print("\n— ① الضياع: البطاقاتُ مستقلّةٌ عن مجرى الجواب —")
 _srv = open(os.path.join(_ROOT, "web", "server.py"), encoding="utf-8").read()
-_i = _srv.index('sse({"t": "reply", "reply": reply})')
-_blk = _srv[_i:_i + 1500]
+_i = _srv.index('_ev = {"t": "reply", "reply": reply}')
+_blk = _srv[_i:_i + 2500]
 ok("المجرى لا ينتظر التصدير بعد الجواب",
    "_engine_trajectory_cards" not in _blk)
 ok("  ⟵ والبطاقةُ الثابتةُ تُرسَل فوراً", 'sse({"t": "tool", "tool": _tc})' in _blk)
