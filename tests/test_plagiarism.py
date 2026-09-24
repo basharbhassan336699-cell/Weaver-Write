@@ -137,6 +137,39 @@ ok("  ⟵ بلا السكربت ولا القوائم", "var s" not in t and "ا
 t, err = PL.fetch("http://127.0.0.1:9/none", timeout=3)
 ok("رابطٌ لا يفتح ⟵ خطأٌ مُسمّى لا استثناء", t == "" and err, err)
 
+print("\n— الروابطُ العربيّة (قِيس على هاتف المستخدم: UnicodeEncodeError) —")
+ok("مسارٌ عربيّ ⟵ يُرمَّز",
+   PL.to_uri("https://www.new-educ.com/تحديات-التعليم")
+   == "https://www.new-educ.com/%D8%AA%D8%AD%D8%AF%D9%8A%D8%A7%D8%AA-"
+      "%D8%A7%D9%84%D8%AA%D8%B9%D9%84%D9%8A%D9%85")
+_lat = "https://link.springer.com/book/10.1007/978-3-031-33568-6?a=1&b=2"
+ok("رابطٌ لاتينيّ ⟵ كما هو حرفاً", PL.to_uri(_lat) == _lat)
+ok("ما رُمِّز سلفاً ⟵ لا يُرمَّز مرّتين",
+   PL.to_uri("https://x.org/%D8%AA%D8%B9/عربي").startswith(
+       "https://x.org/%D8%AA%D8%B9/%D8%B9"))
+ok("استعلامٌ عربيّ ⟵ يُرمَّز ويبقى & و=",
+   PL.to_uri("https://x.org/s?q=تعليم&n=1")
+   == "https://x.org/s?q=%D8%AA%D8%B9%D9%84%D9%8A%D9%85&n=1")
+ok("نطاقٌ عربيّ ⟵ IDNA", PL.to_uri("https://موقع.مصر/")
+   .startswith("https://xn--"))
+ok("والمنفذُ يبقى", PL.to_uri("http://127.0.0.1:8080/ملف")
+   .startswith("http://127.0.0.1:8080/%D9%85"))
+ok("مدخلٌ غريب ⟵ لا استثناء", PL.to_uri(None) == "")
+with open(os.path.join(_tmp, "تحديات-التعليم.html"), "w",
+          encoding="utf-8") as fh:
+    fh.write("<html><body><article><p>" + SRC + "</p></article></body></html>")
+t, err = PL.fetch("http://127.0.0.1:%d/تحديات-التعليم.html"
+                  % _srv.server_port)
+ok("صفحةٌ برابطٍ عربيٍّ تُقرأ فعلاً عبر HTTP", err is None
+   and "ساهم في رفع" in t, err)
+
+print("\n— الحكمُ يقول كم مصدراً فُحص —")
+r = PL.measure(RUN, [{"name": "a", "text": SRC}, {"name": "b", "text": ""}])
+ok("مصدران وقُرئ واحد ⟵ sources_read=1 من 2",
+   r["sources_read"] == 1 and r["sources_total"] == 2, r)
+r = PL.measure(RUN, [{"name": "a", "text": SRC}])
+ok("كلُّها قُرئت ⟵ 1 من 1", r["sources_read"] == r["sources_total"] == 1)
+
 print("\n— الطرفيّة —")
 _S = os.path.join(_ROOT, "pipeline", "plagiarism.py")
 
@@ -159,6 +192,12 @@ ok("سليم ⟵ رمز 0 و«لا نقلَ حرفيّ»", p.returncode == 0
 p = _run("--text", RUN, "--url", "http://127.0.0.1:9/none")
 ok("لم يُقَس ⟵ رمز 3 و«لم يُقَس»", p.returncode == 3
    and "لم يُقَس" in p.stdout, p.returncode)
+p = _run("--text", "كتابةٌ أصليّة لا صلة لها بأيّ مصدر.", "--source-text", SRC,
+         "--url", "http://127.0.0.1:9/none")
+ok("سليمٌ ومصدرٌ تعذّر ⟵ «فُحص 1 من 2» في آخر التقرير", p.returncode == 0
+   and "فُحص 1 من 2" in p.stdout.strip().splitlines()[-1], p.stdout[-160:])
+p = _run("--text", "كتابةٌ أصليّة.", "--source-text", SRC)
+ok("كلُّها قُرئت ⟵ لا سطرَ تحذير", "فُحص" not in p.stdout)
 p = _run("--text", RUN)
 ok("بلا مصدر ⟵ رمز 2", p.returncode == 2)
 _f = os.path.join(_tmp, "d.txt")

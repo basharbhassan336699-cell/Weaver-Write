@@ -132,11 +132,43 @@ def html_to_text(html):
         return ""
 
 
+def to_uri(url):
+    """رابطٌ بحروفٍ عربيّة ⟵ الصيغةُ التي تقبلها الشبكة — كما يفعل المتصفّح.
+
+    قِيس على هاتف المستخدم: `new-educ.com/تحديات-التعليم-الإلكتروني` فشل بـ
+    «UnicodeEncodeError: 'ascii' codec can't encode characters» — فمكتبةُ
+    Python لا ترمّز غيرَ اللاتينيّ في المسار، فتُخطّى المصدرُ العربيُّ كلُّه.
+    فالمسارُ والاستعلامُ يُرمَّزان بالنسبة المئويّة (ما رُمِّز سلفاً يبقى كما
+    هو)، والنطاقُ العربيُّ بـIDNA. والرابطُ اللاتينيُّ يعود كما هو حرفاً."""
+    try:
+        u = str(url or "").strip()
+        if all(ord(c) < 128 for c in u):
+            return u
+        from urllib.parse import urlsplit, urlunsplit, quote
+        p = urlsplit(u)
+        host = p.hostname or ""
+        try:
+            host = host.encode("idna").decode("ascii")
+        except Exception:
+            pass
+        net = host
+        if p.port:
+            net += ":%d" % p.port
+        if p.username:
+            net = quote(p.username, safe="") + (
+                (":" + quote(p.password, safe="")) if p.password else "") + "@" + net
+        path = quote(p.path, safe="/%:@!$&'()*+,;=~-._")
+        query = quote(p.query, safe="=&%:@!$'()*+,;/?~-._")
+        return urlunsplit((p.scheme, net, path, query, ""))
+    except Exception:
+        return str(url or "")
+
+
 def fetch(url, timeout=20):
     """(نصّ، خطأ) — الصفحةُ كما يقرؤها النظام. لا يرفع استثناءً."""
     try:
         import urllib.request
-        req = urllib.request.Request(url, headers={
+        req = urllib.request.Request(to_uri(url), headers={
             "User-Agent": "Mozilla/5.0 (Weaver Write; plagiarism check)",
             "Accept": "text/html,text/plain,*/*"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -218,6 +250,7 @@ def measure(draft, sources, min_words=MIN_WORDS):
     checked = n - n_quoted
     copied = sum(covered)
     measured = any(u["words"] >= k for u in used)
+    n_read = sum(1 for u in used if u["words"] >= k)
     return {
         "verdict": ("UNMEASURED" if not measured
                     else "COPIED" if spans else "CLEAN"),
@@ -229,6 +262,9 @@ def measure(draft, sources, min_words=MIN_WORDS):
         "longest_run": spans[0]["words"] if spans else 0,
         "spans": spans,
         "sources": used,
+        # «سليم» يُبنى على ما قُرئ وحدَه — فيُقال كم قُرئ من كم.
+        "sources_read": n_read,
+        "sources_total": len(used),
     }
 
 
@@ -257,6 +293,11 @@ def _report(r):
     L.append("  ✓ لا نقلَ حرفيّ" if r["verdict"] == "CLEAN"
              else "  ✗ فيه نقلٌ حرفيّ — أعِد صياغةَ المقاطع أعلاه بكلماتك، "
                   "أو ضعها بين «» مع مصدرها")
+    _rd, _tot = r.get("sources_read", 0), r.get("sources_total", 0)
+    if _tot and _rd < _tot:
+        # الحكمُ على ما قُرئ وحدَه — ولا يُترك ذلك في سطرٍ فوقه يُغفَل عنه.
+        L.append("  ⚠ فُحص %d من %d مصادر — تعذّر %d (انظر ✗ أعلاه)، "
+                 "فالحكمُ لا يشملها" % (_rd, _tot, _tot - _rd))
     return "\n".join(L)
 
 
