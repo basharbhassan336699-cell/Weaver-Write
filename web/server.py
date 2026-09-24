@@ -931,6 +931,55 @@ def _penalty_payload(s=None):
     return out
 
 
+# منصّاتٌ تجمع مئاتِ النماذج من شركاتٍ كثيرة: «الأحدثُ» فيها قد يكون نموذجاً
+# مغموراً لا الأفضل ⟵ يبقى افتراضيُّها كما كان.
+_AGGREGATORS = ("openrouter", "together", "fireworks", "nvidia", "groq",
+                "cerebras")
+
+
+def _newest_model_for(key, provider="", base_url=""):
+    """أحدثُ نموذجِ محادثةٍ لمنصّة المفتاح — أو "" (فيبقى السلوكُ القديم)."""
+    try:
+        entry = None
+        det = keysync.detect_provider(key)
+        if det and not base_url:
+            entry = providers.get_provider(det[2])
+        if entry is None and provider:
+            entry = providers.get_provider(provider)
+        base = (base_url or (entry or {}).get("base_url") or "").strip()
+        if not base:
+            return ""
+        _nm = ((entry or {}).get("name") or "").lower()
+        if _nm in _AGGREGATORS or any(a in base.lower() for a in _AGGREGATORS):
+            return ""
+        default = (entry or {}).get("model", "")
+        got = providers.newest_chat_model(
+            base, key, (entry or {}).get("auth", "bearer"), default=default)
+        # الافتراضيُّ نفسُه (فشلٌ أو بلا تواريخ) ⟵ "" فيقرّر set_api_key كما كان.
+        return "" if (not got or got == default) else got
+    except Exception:
+        return ""
+
+
+# نصٌّ داخليٌّ من المنصّة تسرّب إلى الجواب — ملاحظاتُ مصنِّف الأمان في
+# DeepSeek، مقيسٌ على جهاز المستخدم في المسار المباشر:
+#   «Hello! How can<ds_safety>[用户未成年]否 … </ds_safety>Safe»
+# فيُحذف الوسمُ بما فيه، وحكمُه الملتصقُ به (Safe/Unsafe) إن كان آخرَ النصّ.
+# وسمُ ds_safety وحده — لا يُمَسّ غيرُه من الوسوم (قد يطلبها المستخدم).
+_LEAK_RX = re.compile(
+    r"<ds_safety>.*?</ds_safety>(?:\s*(?:Safe|Unsafe)\s*$)?"
+    r"|<ds_safety>.*\Z", re.S)
+
+
+def _strip_leaked(text):
+    try:
+        if not text or "<ds_safety>" not in text:
+            return text
+        return _LEAK_RX.sub("", text).rstrip()
+    except Exception:
+        return text
+
+
 def _semantic_expand(query, timeout=20):
     """Ask the configured model for related keywords / synonyms / concepts in BOTH
     Arabic and English, so recall can match by MEANING even when the wording is
@@ -1945,6 +1994,11 @@ def _chat_direct(message: str, history=None, timeout: int = 120,
                 return c
         return ""
 
+    _extract_raw = _extract_reply
+
+    def _extract_reply(data):
+        return _strip_leaked(_extract_raw(data))
+
     def _cut_at_ceiling(data):
         """أتوقّف النموذجُ لأنّه بلغ السقف، لا لأنّه أنهى كلامَه؟"""
         try:
@@ -2299,10 +2353,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             key = (body.get("api_key") or body.get("WEAVER_API_KEY") or "").strip()
             updates = {}
             if key and "…" not in key:  # ignore the masked value echoed back
+                _model = (body.get("model") or "").strip()
+                if not _model:
+                    # حُفظ بلا اختيار نموذج ⟵ أحدثُ نموذجٍ على المنصّة لا
+                    # الافتراضيُّ القديم. وأيُّ فشلٍ ⟵ السلوكُ كما كان.
+                    _model = _newest_model_for(
+                        key, body.get("provider", ""),
+                        body.get("base_url", ""))
                 applied = keysync.set_api_key(
                     key, provider=body.get("provider", ""),
                     base_url=body.get("base_url", ""),
-                    model=body.get("model", ""))
+                    model=_model)
                 updates.update(applied)
             else:
                 # allow changing model/provider without re-entering the key

@@ -387,6 +387,62 @@ def list_models_for(base_url: str, key: str, auth: str = "bearer",
     return [], (last_err or "no models endpoint responded")
 
 
+# ── أحدثُ نموذجِ محادثة — بدل الافتراضيّ القديم ──────────────────────────
+#
+# من يحفظ مفتاحَه بلا «اكتشاف النماذج» كان يُعطى اسماً مكتوباً هنا منذ زمن
+# (gpt-4o · grok-2-latest · gemini-2.0-flash …). فتُسأل المنصّةُ عن نماذجها
+# ويؤخذ أحدثُها **حين تعلن تواريخَها**. وقائمةُ /models فيها غيرُ المحادثة
+# (تضمين، صوت، صور…) فتُستبعد بنوعها. وإن لم تُعلن التواريخ أو فشل الاتّصال
+# ⟵ الافتراضيُّ كما كان حرفاً.
+_NOT_CHAT = ("embed", "tts", "whisper", "dall-e", "dalle", "image", "audio",
+             "moderation", "realtime", "transcribe", "speech", "rerank",
+             "babbage", "davinci", "computer-use", "guard")
+_UNSTABLE = ("preview", "experimental", "-exp")
+
+
+def _is_chat_id(mid: str) -> bool:
+    m = (mid or "").lower()
+    return bool(m) and not any(w in m for w in _NOT_CHAT)
+
+
+def newest_chat_model(base_url: str, key: str, auth: str = "bearer",
+                      default: str = "", http_get: HttpGet = None,
+                      timeout: int = 6) -> str:
+    """أحدثُ نموذجِ محادثةٍ على المنصّة، أو `default`. لا يرفع استثناءً."""
+    try:
+        http_get = http_get or _default_http_get
+        headers = headers_for({"auth": auth}, key)
+        for url in models_urls(base_url or ""):
+            data, err = http_get(url, headers, timeout)
+            if err or data is None:
+                continue
+            items = (data.get("data", data.get("models"))
+                     if isinstance(data, dict) else data)
+            if not isinstance(items, list) or not items:
+                continue
+            rows = []
+            for m in items:
+                mid = ((m.get("id") or m.get("name")) if isinstance(m, dict)
+                       else (m if isinstance(m, str) else None))
+                if mid and _is_chat_id(str(mid)):
+                    rows.append((str(mid), _created_ts(m)))
+            if not rows:
+                continue
+            ids = [r[0] for r in rows]
+            dated = [r for r in rows if r[1] is not None]
+            if len(dated) * 2 < len(rows):
+                # بلا تواريخ لا يُعرف الأحدث ⟵ الافتراضيُّ إن كان متاحاً.
+                return default if (default and default in ids) else (
+                    default or ids[0])
+            dated.sort(key=lambda r: -r[1])
+            stable = [r for r in dated
+                      if not any(u in r[0].lower() for u in _UNSTABLE)]
+            return (stable or dated)[0][0]
+        return default
+    except Exception:
+        return default
+
+
 def connect_custom_provider(base_url: str, key: str, name: str = "custom",
                             auth: str = "bearer", model: str = "",
                             http_get: HttpGet = None, persist: bool = True):
