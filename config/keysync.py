@@ -150,6 +150,28 @@ def detect_provider(key: str):
     return None
 
 
+def _other_known_platform(provider: str, base_url: str, detected_name: str) -> bool:
+    """أهذا الاختيارُ منصّةً معروفةً غيرَ التي تدلّ عليها بادئةُ المفتاح،
+    برابطها الافتراضيّ نفسِه (لا برابطٍ كتبه المستخدم)؟"""
+    try:
+        from urllib.parse import urlparse
+        try:
+            from config import providers as _pv
+        except Exception:
+            import providers as _pv  # fallback if run in-dir
+        name = (provider or "").strip().lower()
+        if not name or name == (detected_name or "").strip().lower():
+            return False
+        entry = _pv.get_provider(name)
+        if not entry:
+            return False
+        chosen = (urlparse((base_url or "").strip()).hostname or "").lower()
+        own = (urlparse(entry.get("base_url", "")).hostname or "").lower()
+        return not chosen or chosen == own
+    except Exception:
+        return False
+
+
 def set_api_key(key: str, provider: str = "", base_url: str = "",
                 model: str = "") -> dict:
     """
@@ -160,6 +182,12 @@ def set_api_key(key: str, provider: str = "", base_url: str = "",
     detected = detect_provider(key)
     if detected:
         d_url, d_model, d_name = detected
+        if _other_known_platform(provider, base_url, d_name):
+            # بادئةُ المفتاح تحدّد منصّتَه بلا لبس (`sk-or-` لا يعمل إلا على
+            # OpenRouter)، والقائمةُ كانت على منصّةٍ **أخرى معروفة** برابطها
+            # الافتراضيّ — فالحفظُ كما هو يُنتج إعداداً لا يعمل أبداً. فتُتبَع
+            # البادئة. ورابطٌ كتبتَه بنفسك (وسيطٌ مثلاً) لا يُمَسّ.
+            provider, base_url = "", ""
         updates["WEAVER_BASE_URL"] = base_url or d_url
         updates["WEAVER_MODEL"] = model or d_model
         updates["WEAVER_PROVIDER"] = provider or d_name

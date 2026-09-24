@@ -163,6 +163,11 @@ def provider_id():
 def model_id():
     """النموذجُ بصيغة `<مزوّد>/<نموذج>` كما يطلبها المحرّك، أو ""."""
     try:
+        # أيُّ منصّةٍ لا مزوّدَ لها مدمجاً في المحرّك ⟶ مزوّدُنا المخصَّص.
+        # (`engine_route` وتعليلُها أسفل، عند `model_ref`.)
+        _r = engine_route()
+        if _r.get("mode") in ("custom", "bundled"):
+            return _r.get("ref", "")
         m = _setting("WEAVER_MODEL")
         if not m:
             return ""
@@ -193,6 +198,17 @@ def credentials():
     """{اسمُ المتغيّر: المفتاح} كما يفهمها المحرّك — أو {}."""
     try:
         key = _setting("WEAVER_API_KEY")
+        # منصّةٌ مخصَّصة: مفتاحُها باسمنا، ويُشار إليه من إعداد المحرّك بـ
+        # `${WEAVER_PLATFORM_API_KEY}` — لا باسم مزوّدٍ لم يُركَّب.
+        _r = engine_route() if key else {}
+        if _r.get("mode") == "custom":
+            return {CUSTOM_KEY_ENV: key}
+        # مزوّدٌ مدمج: باسمِ المزوّد الذي يملك رابطَك (رابطُ Gemini المتوافقُ
+        # `…/v1beta/openai` كان يُنسَب إلى openai لأنّ الكلمةَ في مساره).
+        if _r.get("mode") == "bundled":
+            _n = key_env_name(_r.get("provider"))
+            if _n:
+                return {_n: key}
         name = key_env_name()
         if not (key and name):
             return {}
@@ -669,6 +685,15 @@ def gateway_start(wait=None, say=None):
                             pass
             except Exception:
                 pass
+        # منصّةٌ تغيّرت منذ آخر كتابة ⟶ تُكتب **قبل** الإقلاع: المزوّدُ
+        # المخصَّصُ لا تراه بوّابةٌ حيّة («Restart the gateway to apply»)،
+        # فلو كُتب بعدها لفشلت أوّلُ نوبة. وإن لم تتغيّر: قراءةُ ملفّ.
+        try:
+            if _applied_fingerprint() != _model_fingerprint():
+                _say("… كتابةُ منصّتِك في المحرّك قبل الإقلاع")
+                configure_model()
+        except Exception:
+            pass
         try:
             os.makedirs(STATE, exist_ok=True)
             _log = open(GATEWAY_LOG, "ab", buffering=0)
@@ -1109,6 +1134,9 @@ def ask(text, timeout=None, cwd=None, fallback=True, session=None):
         # على `link()` فلم يُنادَ النموذجُ أصلاً (التعليلُ عند `seed_workspace`).
         # وكلفتُها حين لا تلزم: فحصُ وجودِ ملفٍّ واحد.
         ensure_workspace()
+        # منصّتُك كما هي الآن في config/.env — تُكتب في المحرّك إن تغيّرت
+        # (مفتاحٌ جديد، منصّةٌ أخرى، نموذجٌ آخر). وإن لم تتغيّر: قراءةُ ملفّ.
+        model_sync()
         # المهلةُ من المحرّك لا من عندنا — `agent_deadline()` وتعليلُها فوق.
         # وساعةُ الحائط عندنا أوسعُ من مهلته بفسحةٍ، وإلّا قتلناه قبل أن
         # يبلغ مهلتَه هو.
@@ -1487,10 +1515,289 @@ def model_ref():
     docs/providers/openrouter.md: «Model refs follow the pattern
     `openrouter/<provider>/<model>`». فنموذجُك `deepseek/deepseek-v4-flash`
     على OpenRouter يصير `openrouter/deepseek/deepseek-v4-flash`."""
+    _r = engine_route()
+    if _r.get("mode") in ("custom", "bundled"):
+        return _r.get("ref", "")
     prov, m = provider_id(), _setting("WEAVER_MODEL")
     if not (prov and m):
         return ""
     return m if m.startswith(prov + "/") else prov + "/" + m
+
+
+# ── أيُّ منصّةٍ وأيُّ نموذج: كما يفعلها المحرّكُ نفسُه ─────────────────────
+#
+# العطبُ الذي رآه المستخدمُ بعد تغيير مفتاحه:
+#
+#     Unknown model: deepseek/deepseek-v4-pro
+#
+# والمحرّكُ يكتبها `Unknown model: ${provider}/${modelId}`
+# (embedded-agent-CE9KzQvy.mjs:5479) — أي أنّه طُلب منه مزوّدٌ اسمُه
+# `deepseek`، وليس في المحرّك مزوّدٌ بهذا الاسم. المزوّداتُ المدمجةُ فيه هي ما
+# في `dist/extensions/*/openclaw.plugin.json` تحت `providers` — عشرون: منها
+# openrouter وopenai وanthropic وgoogle وxai. أمّا deepseek وgroq وmistral
+# وغيرُها فـ«مزوّداتٌ خارجيّة» تحتاج تركيبَ حزمة
+# (official-external-provider-catalog: `@openclaw/deepseek-provider`).
+# وكانت خريطتُنا `_PROVIDER_ENV` تعِد بأربعةَ عشرَ، نصفُها غيرُ مركَّب.
+#
+# والمحرّكُ نفسُه يحلّها بلا إضافة: **المزوّدُ المخصَّص**.
+# docs/gateway/config-tools/custom-providers.md:
+#
+#     models.providers.<id> = { baseUrl, apiKey, api: "openai-completions",
+#                               models: [{ id }] }
+#
+# وهو ما يكتبه معالجُه لمن اختار «Custom Provider»
+# (onboard-custom-config-CeY5_6A1.mjs  applyCustomApiConfig) — فنكتب مثله:
+#
+#   ١) منصّةٌ لها مزوّدٌ مدمج، ورابطُك رابطُها  ⟶ كما كان حرفاً (لا يتغيّر
+#      شيءٌ ممّا يعمل؛ وOpenRouter منها، وله معالجاتٌ خاصّةٌ لـDeepSeek V4).
+#   ٢) أيُّ منصّةٍ أخرى برابطٍ ومفتاح         ⟶ مزوّدٌ مخصَّصٌ اسمُه `weaver`
+#      يحمل رابطَك ونموذجَك، والمفتاحُ `${WEAVER_PLATFORM_API_KEY}` من
+#      `env.vars` — فلا يُكتب في موضعين.
+#
+# مقيسٌ على خادمٍ وهميٍّ متوافقٍ مع OpenAI، عبر المحرّك نفسِه:
+#   قبل:  «Unknown model: deepseek/deepseek-v4-pro»  (نفسُ ما رآه المستخدم)
+#   بعد:  وصل الطلبُ إلى الرابط بـ`Bearer …ABCD` و١٤ أداة، وجاء الجواب.
+#   ونموذجٌ غيرُ مُدرَجٍ في `models` (`weaver/any-model-x`) قُبِل أيضاً —
+#   فتغييرُ النموذج من الواجهة لا يحتاج إعادةَ ضبط.
+CUSTOM_PROVIDER = "weaver"
+CUSTOM_KEY_ENV = "WEAVER_PLATFORM_API_KEY"
+_BUNDLED = {"map": None}
+_MODEL_APPLIED = os.path.join(STATE, "model.applied.json")
+
+
+def _host(url):
+    """اسمُ المضيف من رابط، بأحرفٍ صغيرة — أو ""."""
+    try:
+        from urllib.parse import urlparse
+        return (urlparse(str(url or "").strip()).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def bundled_providers(refresh=False):
+    """{مزوّد: {hosts, suffixes}} — المزوّداتُ المدمجةُ في المحرّك فعلاً.
+
+    تُقرأ من بيانات الإضافات نفسِها (`openclaw.plugin.json`)، لا من قائمةٍ
+    عندنا: `providers` والمضيفاتُ من `providerEndpoints` ومن روابطِ
+    `modelCatalog`. قراءةُ ملفّات، بلا node. لا يرفع استثناءً."""
+    if _BUNDLED["map"] is not None and not refresh:
+        return _BUNDLED["map"]
+    out = {}
+    import json as _j
+    base = os.path.join(RUNTIME, "dist", "extensions")
+    try:
+        names = sorted(os.listdir(base))
+    except Exception:
+        names = []
+    for d in names:
+        try:
+            with open(os.path.join(base, d, "openclaw.plugin.json"),
+                      encoding="utf-8") as fh:
+                man = _j.load(fh)
+        except Exception:
+            continue
+        pids = [str(p).lower() for p in (man.get("providers") or []) if p]
+        if not pids:
+            continue
+        hosts, suffixes = set(), []
+        for ep in man.get("providerEndpoints") or []:
+            for h in ep.get("hosts") or []:
+                hosts.add(str(h).lower())
+            for s in ep.get("hostSuffixes") or []:
+                suffixes.append(str(s).lower())
+            for u in ep.get("baseUrls") or []:
+                if _host(u):
+                    hosts.add(_host(u))
+        cat = ((man.get("modelCatalog") or {}).get("providers") or {})
+        for _k, v in cat.items():
+            if isinstance(v, dict) and _host(v.get("baseUrl")):
+                hosts.add(_host(v.get("baseUrl")))
+        for p in pids:
+            e = out.setdefault(p, {"hosts": set(), "suffixes": []})
+            e["hosts"] |= hosts
+            e["suffixes"] += suffixes
+    _BUNDLED["map"] = out
+    return out
+
+
+def _bundled_owns(pid, host):
+    """أهذا المضيفُ لهذا المزوّد المدمج؟ (بلا مضيفٍ = نعم: رابطُه الافتراضيّ)"""
+    if not host:
+        return True
+    e = bundled_providers().get(pid) or {}
+    if host in e.get("hosts", ()):
+        return True
+    if any(host == s.lstrip(".") or host.endswith(s if s.startswith(".")
+                                                  else "." + s)
+           for s in e.get("suffixes", ())):
+        return True
+    # مزوّدٌ أعلن مضيفاتِه ⟶ هي وحدها له. فـ`openai.proxy.example` ليس
+    # openai. والاسمُ داخل المضيف دليلٌ فقط لمن لم يُعلن شيئاً.
+    if e.get("hosts") or e.get("suffixes"):
+        return False
+    return pid in host
+
+
+def _custom_api(base):
+    """محوِّلُ الطلب لمنصّةٍ مخصَّصة — كما يختاره معالجُ المحرّك.
+
+    `openai-completions` لكلِّ متوافقٍ مع OpenAI (وهو افتراضُ المحرّك لمزوّدٍ
+    مخصَّصٍ بلا `api`)، و`anthropic-messages` لرابطٍ متوافقٍ مع أنثروبيك.
+    و`WEAVER_ENGINE_API` تفرض غيرَه لمن احتاج."""
+    forced = (os.environ.get("WEAVER_ENGINE_API", "") or "").strip()
+    if forced:
+        return forced
+    b = str(base or "").lower().rstrip("/")
+    if "anthropic" in _host(b) or b.endswith("/anthropic") \
+            or "/anthropic/" in b:
+        return "anthropic-messages"
+    return "openai-completions"
+
+
+def engine_route():
+    """كيف يصل المحرّكُ إلى منصّتك. لا يرفع استثناءً، ولا يُقلع node.
+
+    يعيد {mode, provider, model, ref, base_url, api, why}:
+      mode = "bundled"  مزوّدٌ مدمجٌ في المحرّك يملك رابطَك
+             "custom"   أيُّ منصّةٍ أخرى: تُسجَّل مزوّداً مخصَّصاً `weaver`
+             ""         لا نموذجَ، أو لا مزوّدَ ولا رابط
+
+    و`WEAVER_ENGINE_ROUTE=custom|bundled` تفرض أحدَهما."""
+    try:
+        m = _setting("WEAVER_MODEL")
+        base = _setting("WEAVER_BASE_URL").rstrip("/")
+        host = _host(base)
+        raw = _setting("WEAVER_PROVIDER").lower()
+        bmap = bundled_providers()
+        cand = raw if raw in bmap else ""
+        if not cand and host:
+            cand = next((p for p in sorted(bmap)
+                         if _bundled_owns(p, host)), "")
+        if not cand:
+            _p = provider_id()
+            cand = _p if _p in bmap else ""
+        forced = (os.environ.get("WEAVER_ENGINE_ROUTE", "") or "").strip()
+        if not m:
+            return {"mode": "", "why": "لا WEAVER_MODEL في config/.env"}
+        if forced != "custom" and cand and (
+                forced == "bundled" or _bundled_owns(cand, host)):
+            return {"mode": "bundled", "provider": cand, "model": m,
+                    "ref": m if m.startswith(cand + "/") else cand + "/" + m,
+                    "base_url": base, "api": "",
+                    "why": "مزوّدٌ مدمجٌ في المحرّك"}
+        if base:
+            mm = m[len(CUSTOM_PROVIDER) + 1:] \
+                if m.startswith(CUSTOM_PROVIDER + "/") else m
+            return {"mode": "custom", "provider": CUSTOM_PROVIDER,
+                    "model": mm, "ref": CUSTOM_PROVIDER + "/" + mm,
+                    "base_url": base, "api": _custom_api(base),
+                    "why": ("المنصّةُ «%s» بلا مزوّدٍ مدمج ⟶ مزوّدٌ مخصَّص"
+                            % (raw or host or "?"))}
+        return {"mode": "", "why": "لا مزوّدَ يعرفه المحرّك ولا WEAVER_BASE_URL"}
+    except Exception as e:
+        return {"mode": "", "why": "%s: %s" % (type(e).__name__, str(e)[:120])}
+
+
+def custom_provider_tree(route=None, key_present=True):
+    """شجرةُ `models.providers.weaver` — بشكل ما يكتبه معالجُ المحرّك.
+
+    applyCustomApiConfig: `{baseUrl, api, apiKey, models:[{id, name, …}]}`.
+    والمفتاحُ إشارةٌ `${WEAVER_PLATFORM_API_KEY}` تُحَلّ من `env.vars`.
+    ولغير OpenAI يُرسَل `max_tokens` لا `max_completion_tokens` (مقيس: المحرّكُ
+    يرسل الثاني افتراضاً)، لأنّ الأوّلَ ما تفهمه المنصّاتُ المتوافقةُ كلُّها."""
+    r = route or engine_route()
+    if r.get("mode") != "custom":
+        return {}
+    mid = r["model"]
+    model = {"id": mid, "name": mid + " (Weaver Write)",
+             "input": ["text"], "reasoning": False,
+             "cost": {"input": 0, "output": 0, "cacheRead": 0,
+                      "cacheWrite": 0},
+             "contextWindow": 128000}
+    try:
+        mx = int(_setting("WEAVER_MAX_TOKENS") or 0)
+        if mx > 0:
+            model["maxTokens"] = mx
+    except Exception:
+        pass
+    if r.get("api") == "openai-completions":
+        model["compat"] = {"maxTokensField": "max_tokens"}
+    prov = {"baseUrl": r["base_url"], "api": r["api"], "models": [model]}
+    if key_present:
+        prov["apiKey"] = "${" + CUSTOM_KEY_ENV + "}"
+    return {"models": {"mode": "merge",
+                       "providers": {CUSTOM_PROVIDER: prov}}}
+
+
+def _model_fingerprint():
+    """بصمةُ ما كُتب في المحرّك: (ما يستلزم إعادةَ إقلاع البوّابة، والنموذج).
+
+    المفتاحُ لا يُحفظ — بصمتُه فقط (sha256)."""
+    import hashlib
+    r = engine_route()
+    key = _setting("WEAVER_API_KEY")
+    boot = "|".join([r.get("mode", ""), r.get("provider", ""),
+                     r.get("base_url", ""), r.get("api", ""),
+                     hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+                     if key else ""])
+    return {"boot": boot, "model": r.get("ref", "")}
+
+
+def _applied_fingerprint():
+    try:
+        import json as _j
+        with open(_MODEL_APPLIED, encoding="utf-8") as fh:
+            d = _j.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_fingerprint(fp):
+    try:
+        import json as _j
+        os.makedirs(STATE, exist_ok=True)
+        with open(_MODEL_APPLIED, "w", encoding="utf-8") as fh:
+            _j.dump(fp, fh)
+    except Exception:
+        pass
+
+
+def model_sync(say=None):
+    """اجعل المحرّكَ على منصّتك الحاليّة — قبل كلِّ نوبة، بلا كلفةٍ إن لم تتغيّر.
+
+    غيّرتَ المفتاحَ أو المنصّةَ أو النموذجَ من الواجهة ⟶ تُكتب في المحرّك
+    كتابةً واحدة. وإن تغيّر ما تحمله البوّابةُ منذ إقلاعها (المفتاحُ في
+    بيئتها، والمزوّدُ المخصَّص — «Restart the gateway to apply») أُطفئت،
+    فيُقلعها النداءُ التالي على الإعداد الجديد.
+
+    يعيد (تغيّر؟، سبب). لا يرفع استثناءً."""
+    try:
+        if not available():
+            return False, "المحرّك غير مركَّب"
+        fp = _model_fingerprint()
+        old = _applied_fingerprint()
+        if old == fp:
+            return False, "لم يتغيّر شيء"
+        if not fp["model"]:
+            return False, engine_route().get("why", "")
+        if say:
+            try:
+                say("… منصّتُك تغيّرت — كتابتُها في المحرّك")
+            except Exception:
+                pass
+        rows = configure_model()
+        if not all(ok for _n, ok, _w in rows):
+            # لا يُبتلَع: فشلُ الكتابة يعني أنّ المحرّكَ ما زال على منصّتك
+            # القديمة — فيُسجَّل ليظهر في `--last`.
+            _why = next((str(w) for _n, ok, w in rows if not ok), "")
+            _record_run(["model-sync"], 1, "", _why)
+            return False, _why
+        if old.get("boot") != fp["boot"] and gateway_health():
+            gateway_stop()
+        return True, "كُتبت: " + fp["model"]
+    except Exception as e:
+        return False, "%s: %s" % (type(e).__name__, str(e)[:160])
 
 
 # ── كتابةُ الإعداد: كتابةٌ واحدةٌ لا عشر ──────────────────────────────────
@@ -1509,16 +1816,24 @@ def model_ref():
 # مقيس: أربعةُ مفاتيحَ في نداءٍ واحدٍ ٥٫٤ ث، مقابل أربع عمليّاتٍ منفصلة.
 # وجوابُه: «Applied 4 config update(s). Change will apply without
 # restarting the gateway.»
-def config_patch(tree, timeout=180):
-    """اكتب شجرةَ إعدادٍ كاملةً في نداءٍ واحد. يعيد (نجح، سبب)."""
+def config_patch(tree, timeout=180, replace_paths=()):
+    """اكتب شجرةَ إعدادٍ كاملةً في نداءٍ واحد. يعيد (نجح، سبب).
+
+    `replace_paths`: مساراتٌ تُستبدَل كاملةً بدل الدمج. فالمحرّكُ يرفض
+    استبدالَ مصفوفةٍ تُسقط عناصرَ قائمة («Refusing to replace
+    models.providers.weaver.models; it would remove existing entries») إلا
+    بـ`--replace-path` — وهو خيارُه الموثَّق في `config patch --help`."""
     if not tree:
         return True, "لا شيءَ يُكتب"
     nb = node_bin()
     if not (available() and nb):
         return False, why_unavailable()
     import json as _j
+    _rp = []
+    for _p in replace_paths or ():
+        _rp += ["--replace-path", str(_p)]
     try:
-        p = subprocess.run([nb, ENTRY, "config", "patch", "--stdin"],
+        p = subprocess.run([nb, ENTRY, "config", "patch", "--stdin"] + _rp,
                            input=_j.dumps(tree, ensure_ascii=False),
                            capture_output=True, text=True, timeout=timeout,
                            cwd=_ROOT, env=engine_env())
@@ -1625,12 +1940,26 @@ def configure_model():
     # البوّابةُ وكلُّ نوبةٍ بلا أن نحقنه في بيئةِ كلِّ نداء.
     tree = {"agents": {"defaults": {"model": {"primary": ref}}}}
     names = ["agents.defaults.model.primary = " + ref]
+    _route = engine_route()
+    if _route.get("mode") == "custom":
+        # أيُّ منصّة: مزوّدٌ مخصَّصٌ في الكتابة نفسِها — فيتحقّق المحرّكُ من
+        # `primary` وهو يرى مزوّدَه (مقيس: «Applied 6 config update(s)»).
+        _merge(tree, custom_provider_tree(_route, key_present=bool(creds)))
+        names.append("models.providers.%s = %s  (%s)" % (
+            CUSTOM_PROVIDER, _route.get("base_url", ""), _route.get("api", "")))
     for env_name, key in (creds or {}).items():
         _merge(tree, _nest("env.vars." + env_name, key))
         names.append("env.vars." + env_name + " = ***" + key[-4:])
-    okp, why = config_patch(tree)
+    # مزوّدُنا يُستبدَل كاملاً: منصّةٌ جديدةٌ لا تَرِث رابطَ السابقة ولا نماذجَها.
+    _rep = (["models.providers." + CUSTOM_PROVIDER]
+            if _route.get("mode") == "custom" else [])
+    # ولا يُمرَّر إلا حين يلزم: فالمدمجُ يُنادى كما كان حرفاً.
+    okp, why = (config_patch(tree, replace_paths=_rep) if _rep
+                else config_patch(tree))
     for n in names:
         rows.append((n, okp, "" if okp else why))
+    if okp:
+        _save_fingerprint(_model_fingerprint())
     return rows
 
 
@@ -2868,6 +3197,13 @@ def _cli():
         sys.exit(1 if _bad else 0)
     if argv == ["--provider"]:
         _p, _m, _c = provider_id(), model_id(), credentials()
+        _rt = engine_route()
+        print("  الطريق   : " + {
+            "bundled": "مزوّدٌ مدمجٌ في المحرّك (" + _rt.get("provider", "")
+                       + ")",
+            "custom": "مزوّدٌ مخصَّص «" + CUSTOM_PROVIDER + "» ⟵ "
+                      + _rt.get("base_url", "") + "  [" + _rt.get("api", "")
+                      + "]"}.get(_rt.get("mode"), "— " + _rt.get("why", "")))
         print(f"  المزوّد   : {_p or '— غير معروف'}")
         print(f"  النموذج   : {_m or '— غير محدَّد (سيسقط المحرّكُ لافتراضيّه)'}")
         print("  المفتاح   : " + (", ".join(
@@ -2992,6 +3328,11 @@ def _cli():
         return
     if argv == ["--model"]:
         print("  في نظامك : " + (model_ref() or "لا شيء (config/.env)"))
+        _rt = engine_route()
+        if _rt.get("mode"):
+            print("  الطريق   : " + _rt.get("why", "")
+                  + ("  ⟵ " + _rt["base_url"] if _rt.get("mode") == "custom"
+                     else ""))
         code, out, _ = run(["config", "get", "agents.defaults.model"],
                            timeout=60)
         print("  في المحرّك: "
