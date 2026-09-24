@@ -2533,6 +2533,26 @@ def _skill_names():
         return []
 
 
+# نسخُ مهاراتنا كما شُحنت (sha256 أوّلُ ١٦ حرفاً، بصيغة المصدر بعد strip) —
+# من سجلّ git. الدرسُ نفسُه من الدستور (_SOUL_PAST): بلاها يبدو كلُّ تحديثٍ
+# لمهارةٍ «تحريراً منك» فيُرفض إلا بـ--force، و--force يدهس تحريراً حقيقياً.
+# فالمُركَّبُ المطابقُ لإحداها حرفاً ⟵ "old" ⟵ يُرقّى بلا --force؛ وما سواها
+# محميٌّ كما كان. **وعند تعديل أيّ SKILL.md تُضاف بصمةُ نسخته الجديدة هنا.**
+_SKILLS_PAST = {
+    "check-plagiarism": frozenset(("4ce91b08b67c8ea2",)),   # 56c2e5f
+    "detect-ai": frozenset(("62628fc00224381a",)),          # d9040e8
+    "fix-conclusion": frozenset(("7e5bd97411738de0",)),     # d9040e8
+    "humanize-ar": frozenset(("6c8ccf15bb195da7",)),        # d9040e8
+}
+
+
+def _skill_src_hash(installed):
+    """بصمةُ نسخةٍ مُركَّبةٍ بصيغة المصدر: المسارُ المحلول يعود `{{WEAVER}}`."""
+    import hashlib
+    t = str(installed or "").replace(_ROOT, _SKILLS_MARK).strip()
+    return hashlib.sha256(t.encode("utf-8")).hexdigest()[:16]
+
+
 def _skill_body(name):
     """نصُّ المهارة بعد حلِّ المسارات. `{{WEAVER}}` ⟶ جذرُ المشروع."""
     t = _read(os.path.join(SKILLS_SRC, name, "SKILL.md"))
@@ -2540,7 +2560,9 @@ def _skill_body(name):
 
 
 def skills_state():
-    """حالُ كلِّ مهارة: missing · ours · edited. dict، ولا يرفع استثناءً."""
+    """حالُ كلِّ مهارة: missing · ours · old · edited. dict، ولا يرفع استثناءً.
+
+    old = نسخةٌ سابقةٌ منّا كما شُحنت (_SKILLS_PAST) ⟵ تُرقّى بلا --force."""
     rows = []
     for n in _skill_names():
         dst = os.path.join(skills_dir(), n, "SKILL.md")
@@ -2550,6 +2572,8 @@ def skills_state():
             st = "missing"
         elif cur.strip() == want.strip():
             st = "ours"
+        elif _skill_src_hash(cur) in _SKILLS_PAST.get(n, ()):
+            st = "old"
         else:
             st = "edited"
         rows.append({"name": n, "state": st, "path": dst,
@@ -2589,7 +2613,8 @@ def skills_remove():
     n_del = 0
     try:
         for row in skills_state()["skills"]:
-            if row["state"] in ("ours", "edited") and os.path.isfile(row["path"]):
+            if row["state"] in ("ours", "old", "edited") \
+                    and os.path.isfile(row["path"]):
                 import shutil
                 shutil.rmtree(os.path.dirname(row["path"]), ignore_errors=True)
                 n_del += 1
@@ -3288,6 +3313,7 @@ def _cli():
             sys.exit(1 if _bad else 0)
         st = skills_state()
         _lbl = {"ours": "مُركَّبة", "edited": "مُحرَّرةٌ بيدك",
+                "old": "نسخةٌ أقدم (تُرقّى بلا --force)",
                 "missing": "غيرُ مُركَّبة"}
         print("  المجلّد : " + st["dir"])
         print("  المصدر  : " + SKILLS_SRC)
@@ -3298,7 +3324,7 @@ def _cli():
             print("  %-16s %-14s %s"
                   % (r["name"], _lbl.get(r["state"], r["state"]),
                      ("%d حرفاً" % r["chars"]) if r["chars"] else ""))
-        if any(r["state"] == "missing" for r in st["skills"]):
+        if any(r["state"] in ("missing", "old") for r in st["skills"]):
             print("\n  للتركيب: python3 -m pipeline.weaver_core --skills apply")
         return
     if argv[:1] == ["--soul"]:

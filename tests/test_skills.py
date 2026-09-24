@@ -127,10 +127,46 @@ _src = open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
             encoding="utf-8").read()
 ok("تحريرُك يُرفَض بلا --force", '"edited"' in _src and "لن تُدهَس" in _src)
 ok("والحذفُ لا يمسُّ ما ليس لنا",
-   'if row["state"] in ("ours", "edited")' in _src)
+   'if row["state"] in ("ours", "old", "edited")' in _src)
 ok("والتلقائيُّ يُطفأ بالبيئة", "WEAVER_SKILLS" in _src)
 ok("وواجهةُ الطرفيّة --skills", '"--skills"' in _src)
 ok("وتُركَّب بعد البذر مع الدستور", "skills_apply()" in _src)
+
+print("\n— الترقية: نسخُنا السابقةُ تُرقّى، وتحريرُك محميّ —")
+import hashlib as _hl
+for n in WANT:
+    _h = _hl.sha256(BODY[n].strip().encode("utf-8")).hexdigest()[:16]
+    # عدّلتَ SKILL.md؟ أضف بصمتَه إلى _SKILLS_PAST — وإلّا بدت نسختُه
+    # المُركَّبةُ بعد التعديل التالي «مُحرَّرةً بيدك».
+    ok(f"{n}: نسختُه الحاليّةُ في _SKILLS_PAST", _h in wc._SKILLS_PAST.get(n, ()),
+       _h)
+import tempfile as _tf
+_real_sd, _real_body = wc.skills_dir, wc._skill_body
+try:
+    _d = _tf.mkdtemp()
+    wc.skills_dir = lambda: _d
+    _n = "humanize-ar"
+    _prev = _real_body(_n)                         # ما رُكِّب سابقاً (بمساره المحلول)
+    os.makedirs(os.path.join(_d, _n))
+    open(os.path.join(_d, _n, "SKILL.md"), "w", encoding="utf-8").write(_prev)
+    wc._skill_body = lambda n: _real_body(n) + ("\nسطرٌ جديدٌ في المصدر.\n"
+                                                if n == _n else "")
+    _row = [r for r in wc.skills_state()["skills"] if r["name"] == _n][0]
+    ok("المُركَّبُ نسخةٌ سابقة (والمصدرُ تغيّر) ⟵ old", _row["state"] == "old",
+       _row["state"])
+    _ok, _rows = wc.skills_apply()
+    ok("  ⟵ تُرقّى بلا --force",
+       "سطرٌ جديدٌ في المصدر" in open(os.path.join(_d, _n, "SKILL.md"),
+                                      encoding="utf-8").read(), _rows)
+    open(os.path.join(_d, _n, "SKILL.md"), "w", encoding="utf-8").write(
+        _prev + "\nقاعدتي أنا.\n")
+    _row = [r for r in wc.skills_state()["skills"] if r["name"] == _n][0]
+    ok("نسخةٌ سابقة + سطرٌ منك ⟵ edited", _row["state"] == "edited")
+    wc.skills_apply()
+    ok("  ⟵ لا تُدهَس بلا --force", "قاعدتي أنا" in open(
+        os.path.join(_d, _n, "SKILL.md"), encoding="utf-8").read())
+finally:
+    wc.skills_dir, wc._skill_body = _real_sd, _real_body
 
 print("\n— الحالةُ الحيّة —")
 st = wc.skills_state()
