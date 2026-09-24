@@ -2566,12 +2566,15 @@ def soul_test(prompt=None, timeout=None):
             session="soultest-" + str(int(time.time())))
     ans = (r or {}).get("answer") or ""
     if not ans.strip():
-        return {"ok": False, "score": 0, "text": "", "stats": {},
-                "violations": [{"rule": "لم يُجب النموذج", "term": "",
-                                "where": (r or {}).get("note", "")[:160]}],
-                "warnings": []}
+        # لم يُقَس شيءٌ فلا حكم. وكان يُعيد «مخالف 0/100» — حكماً على نصٍّ لم
+        # يُكتب. قِيس على جهاز المستخدم: رصيدُ المزوّد نفد، فقالت الأداةُ إنّ
+        # النموذجَ خالف الدستور. والصحيح: «لم يُقَس» مع السبب كاملاً.
+        return {"ok": False, "measured": False, "score": None, "text": "",
+                "stats": {}, "violations": [], "warnings": [],
+                "reason": (r or {}).get("note", "") or "النموذجُ لم يُجب"}
     out = soul_check(ans)
     out["text"] = ans
+    out["measured"] = True
     return out
 
 
@@ -2606,7 +2609,11 @@ def skills_invoke_test(prompt=None, timeout=None):
                 hit.append(n)
         if "rewrite_ar" in str(blob) and "humanize-ar" not in hit:
             hit.append("humanize-ar")
-    return {"ok": bool(hit), "called": hit, "answer": ans,
+    # لا جوابَ ولا مسار ⟶ النموذجُ لم يعمل، فلا دليلَ على شيء. وكان يُقال
+    # «لم يستدعِ شيئاً — راجع وصفَ المهارة» فيُوجَّه المستخدمُ إلى إصلاح وصفٍ
+    # سليم، والسببُ الحقيقيُّ رصيدٌ نفد. التشخيصُ الخاطئ أسوأُ من لا تشخيص.
+    _ran = bool(ans.strip()) or bool(calls)
+    return {"ok": bool(hit), "measured": _ran, "called": hit, "answer": ans,
             "trajectory": [c.get("name") for c in calls if c.get("name")],
             "note": (r or {}).get("note", "")}
 
@@ -2980,6 +2987,17 @@ def _cli():
             print("  أيستدعي النموذجُ مهارةً حين يجب؟"
                   "   (نداءُ نموذجٍ واحد)\n")
             _r = skills_invoke_test()
+            if _r.get("measured") is False:
+                print("  ⚠ لم يُقَس — النموذجُ لم يعمل، فلا دليلَ على المهارة.\n")
+                print("  السبب:")
+                for _ln in str(_r.get("note") or "النموذجُ لم يُجب").split("\n"):
+                    print("    " + _ln)
+                _why = str(_r.get("note") or "").lower()
+                if "billing" in _why or "credit" in _why or "balance" in _why:
+                    print("\n  ⟵ رصيدُ المزوّد نفد. اشحنه ثمّ أعِد:"
+                          "\n     https://openrouter.ai/credits")
+                print("\n  (وصفُ المهارة ليس السبب — لم يُختبَر أصلاً)")
+                sys.exit(3)
             print("  استدعى      : "
                   + (", ".join(_r["called"]) if _r["called"] else "لا شيء ✗"))
             print("  مسارُ النوبة : "
@@ -2989,7 +3007,7 @@ def _cli():
                 for _ln in str(_r["answer"])[:900].split("\n"):
                     print("  " + _ln)
             if _r.get("note"):
-                print("\n  ⓘ " + str(_r["note"])[:200])
+                print("\n  ⓘ " + str(_r["note"]))
             print("\n  " + ("✓ اختارها بنفسه" if _r["ok"] else
                              "✗ لم يستدعِ شيئاً — راجع وصفَ المهارة"))
             sys.exit(0 if _r["ok"] else 1)
@@ -3064,6 +3082,16 @@ def _cli():
                   "   (نداءُ نموذجٍ واحد)\n")
             _q = next((a for a in argv[2:] if not a.startswith("-")), None)
             _r = soul_test(_q)
+            if _r.get("measured") is False:
+                print("  ⚠ لم يُقَس — النموذجُ لم يُجب، فلا حكمَ على شيء.\n")
+                print("  السبب:")
+                for _ln in str(_r.get("reason") or "").split("\n"):
+                    print("    " + _ln)
+                _why = str(_r.get("reason") or "").lower()
+                if "billing" in _why or "credit" in _why or "balance" in _why:
+                    print("\n  ⟵ رصيدُ المزوّد نفد. اشحنه ثمّ أعِد:"
+                          "\n     https://openrouter.ai/credits")
+                sys.exit(3)
             if _r.get("text"):
                 print("  ── الناتج ──")
                 for _ln in str(_r["text"])[:1400].split("\n"):

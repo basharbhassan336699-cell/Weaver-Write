@@ -118,6 +118,64 @@ ok("ويعتمد على trajectory لا على الجواب",
 _r = wc.soul_check(BAD)
 ok("soul_check عبر weaver_core تعمل", _r.get("ok") is False)
 
+print("\n— النموذجُ لم يُجب ⟵ «لم يُقَس»، لا حكمٌ كاذب —")
+# قيس على جهاز المستخدم: رصيدُ المزوّد نفد، فقال `--soul test` «مخالف 0/100»
+# وقال `--skills invoke` «راجع وصفَ المهارة» — حكمان على نصٍّ لم يُكتب.
+import io as _io
+import contextlib as _cl
+_NOTE = ("المحرّك لم يُجب [رمز 1]: 402 This request requires more credits. "
+         "billing — السطرُ الكامل بلا قصّ " + "x" * 300)
+_real = {n: getattr(wc, n) for n in ("ask", "trajectory")}
+wc.ask = lambda *a, **k: {"answer": "", "engine": "python", "note": _NOTE}
+wc.trajectory = lambda *a, **k: []
+try:
+    _t = wc.soul_test()
+    ok("soul_test: measured=False", _t.get("measured") is False, str(_t)[:120])
+    ok("  ⟵ بلا درجة (لا 0/100)", _t.get("score") is None)
+    ok("  ⟵ وبلا مخالفاتٍ مُختلَقة", _t.get("violations") == [])
+    ok("  ⟵ والسببُ كاملاً", _t.get("reason") == _NOTE)
+    _s = wc.skills_invoke_test()
+    ok("skills_invoke_test: measured=False", _s.get("measured") is False)
+    ok("  ⟵ والسببُ كاملاً", _s.get("note") == _NOTE)
+
+    def _run_cli(*args):
+        _old = sys.argv
+        sys.argv = ["weaver_core"] + list(args)
+        buf, code = _io.StringIO(), 0
+        try:
+            with _cl.redirect_stdout(buf):
+                wc._cli()
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+        finally:
+            sys.argv = _old
+        return code, buf.getvalue()
+    for _args, _bad in ((("--soul", "test"), "0/100"),
+                        (("--skills", "invoke"), "راجع وصفَ المهارة")):
+        _c, _o = _run_cli(*_args)
+        _n = " ".join(_args)
+        ok(f"{_n}: «لم يُقَس»", "لم يُقَس" in _o, _o[:160])
+        ok(f"  ⟵ رمزُ خروج 3 (لا 0 ولا 1)", _c == 3, str(_c))
+        ok(f"  ⟵ لا حكمَ كاذب «{_bad}»", _bad not in _o)
+        ok(f"  ⟵ السببُ بلا قصّ", _NOTE in _o)
+        ok(f"  ⟵ ويدلّ على الرصيد", "openrouter.ai/credits" in _o)
+
+    # والنجاحُ لم يتغيّر
+    wc.ask = lambda *a, **k: {"answer": "القمر بعيد. والسماء صافية اليوم.",
+                              "engine": "weaver-core", "note": ""}
+    _t = wc.soul_test()
+    ok("جوابٌ حقيقيٌّ ⟵ measured=True ويُحكَم عليه كما كان",
+       _t.get("measured") is True and _t.get("ok") is True
+       and _t.get("score") == 100, str(_t)[:120])
+    wc.trajectory = lambda *a, **k: [{"name": "exec",
+                                      "request": "python3 rewrite_ar.py"}]
+    _s = wc.skills_invoke_test()
+    ok("مسارٌ فيه rewrite_ar ⟵ humanize-ar كما كان",
+       _s.get("measured") is True and _s.get("called") == ["humanize-ar"])
+finally:
+    for _n, _f in _real.items():
+        setattr(wc, _n, _f)
+
 print("\n— الأمرُ المجهولُ يصرخ، لا يصمت —")
 # المستخدمُ شغّل `--soul test` بنسخةٍ لا تعرفه، فسقط إلى `show` وعرض الحالةَ
 # وخرج بـ0 — بدا ناجحاً. الصمتُ أخفى أنّه لم يسحب الالتزامَ الذي أضافه.
