@@ -237,6 +237,63 @@ try:
 finally:
     for _n, _f in _real.items():
         setattr(wc, _n, _f)
+print("\n— check-plagiarism: حالةٌ واقعيّة لا سطران ظاهران —")
+# سطران يقارنهما النموذجُ بعينه فلا يحتاج أداة (قِيس على هاتف المستخدم).
+# فمقالٌ ومصدران ملفّاتٍ في مساحة العمل، وفي المقال مقطعان منقولان.
+_pdir = os.path.join(wc.PROBES_DIR, "plagiarism")
+ok("ملفّاتُ الحالة موجودة", all(os.path.isfile(os.path.join(_pdir, f))
+                               for f in ("article.txt", "source1.txt",
+                                         "source2.txt")))
+_tpl = wc._SKILL_PROBES["check-plagiarism"]
+ok("الطلبُ يشير إلى الملفّات لا يعرضها", "{dir}" in _tpl
+   and "article.txt" in _tpl and len(_tpl) < 400, len(_tpl))
+ok("ولا يذكر «plagiarism» ولا اسمَ مهارة",
+   "plagiarism" not in _tpl.lower())
+from pipeline import plagiarism as _pl
+_rd = lambda f: open(os.path.join(_pdir, f), encoding="utf-8").read()
+_tr = _pl.measure(_rd("article.txt"), [
+    {"name": "source1.txt", "text": _rd("source1.txt")},
+    {"name": "source2.txt", "text": _rd("source2.txt")}])
+ok("الحقيقة: مقطعان منقولان", len(_tr["spans"]) == 2, _tr["spans"])
+ok("  ⟵ أطولُهما ٣٥ كلمةً من source2", _tr["longest_run"] == 35
+   and _tr["spans"][0]["source"] == "source2.txt")
+ok("  ⟵ والاقتباسُ بين «» مُستثنى", _tr["quoted_words"] > 0)
+_seen2, _real = [], {n: getattr(wc, n) for n in ("ask", "trajectory")}
+_dirs = []
+
+
+def _ask2(p, **k):
+    _seen2.append(p)
+    _d = p.split("\n")[1].strip()
+    _dirs.append(_d)
+    ok("  ⟵ الملفّاتُ في مساحة العمل ساعةَ النوبة",
+       os.path.isfile(os.path.join(_d, "article.txt")), _d)
+    return {"answer": "نعم، مقطعان.", "engine": "weaver-core", "note": ""}
+
+
+wc.ask = _ask2
+wc.trajectory = lambda *a, **k: [
+    {"name": "exec", "request": "python3 /x/pipeline/plagiarism.py --file "
+                                "article.txt --source-file source1.txt"}]
+try:
+    _r = wc.skills_invoke_test(target="check-plagiarism")
+    ok("السكربتُ نفسُه في المسار ⟵ استُدعيت", _r["ok"]
+       and _r["called"] == ["check-plagiarism"], _r["called"])
+    ok("  ⟵ والمسارُ في الطلب محايد", "uploads-test" in _dirs[-1]
+       and "plagiar" not in _dirs[-1])
+    ok("  ⟵ والحقيقةُ بالسكربت معروضةٌ للمقارنة",
+       "35 كلمة" in _r["extra"].get("الحقيقةُ بالسكربت", ""),
+       _r["extra"])
+    ok("  ⟵ والملفّاتُ حُذفت بعد النوبة", not os.path.exists(_dirs[-1]))
+    wc.trajectory = lambda *a, **k: [
+        {"name": "read", "request": _dirs[-1] + "/source1.txt"}]
+    _r = wc.skills_invoke_test(target="check-plagiarism")
+    ok("قرأ الملفّاتِ وقارن بعينه ⟵ لم يستدعِها (لا ادّعاء)",
+       _r["ok"] is False and _r["called"] == [])
+finally:
+    for _n, _f in _real.items():
+        setattr(wc, _n, _f)
+
 import subprocess as _sp
 _p = _sp.run([sys.executable, "-m", "pipeline.weaver_core", "--skills",
               "invoke", "xyz"], capture_output=True, text=True, timeout=90,

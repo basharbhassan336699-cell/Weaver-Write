@@ -2609,16 +2609,47 @@ _SKILL_PROBES = {
         "أصلح خاتمةَ هذا المقال:\n\n«" + _FIX_FIRST + "\n\n"
         "وفي الختام، يتضح أنّ التقنيةَ ركيزةُ المستقبل، ومن هنا فإنّ تضافرَ "
         "الجهود أمرٌ لا غنى عنه لبناء تعليمٍ أفضل.»"),
+    # حالةٌ واقعيّة لا سطران ظاهران: سطران يقارنهما النموذجُ بعينه (قِيس على
+    # هاتف المستخدم: أجاب صحيحاً بلا أداة، لكن «أكثر من عشر كلمات» والحقيقةُ
+    # ١٦). فمقالٌ من ٢٦٣ كلمةً ومصدران من ~٢٠٠ كلمة، ملفّاتٌ كأنّها رُفعت،
+    # وفي المقال مقطعان منقولان واقتباسٌ مشروع. `{dir}` يُملأ عند التشغيل.
     "check-plagiarism": (
-        # بلا «» حول النصَّين: ما بين علامات الاقتباس يُستثنى من القياس.
-        "كتبتُ فقرةً اعتماداً على مصدر. هل نقلتُ منه حرفياً؟\n\n"
-        "المصدر:\nوتشير الدراسات الحديثة إلى أنّ التعليم الإلكترونيّ ساهم "
-        "في رفع نسبة الالتحاق بالجامعات بنحو ثلاثين بالمئة خلال العقد "
-        "الأخير في الدول النامية، وهو ما غيّر خريطة التعليم العالي.\n\n"
-        "فقرتي:\nتغيّرت الجامعاتُ كثيراً. فالتعليم الإلكترونيّ ساهم في رفع "
-        "نسبة الالتحاق بالجامعات بنحو ثلاثين بالمئة خلال العقد الأخير في "
-        "الدول النامية، ولهذا أثرٌ لا يخفى."),
+        "رفعتُ لك مقالاً كتبتُه ومصدرَين اعتمدتُ عليهما، في المجلّد:\n"
+        "{dir}\n\n"
+        "  article.txt   مقالي\n"
+        "  source1.txt   المصدر الأوّل\n"
+        "  source2.txt   المصدر الثاني\n\n"
+        "هل نقلتُ منهما حرفياً؟ وكم بالضبط؟"),
 }
+# ملفّاتُ الحالة الواقعيّة — تُنسخ إلى مساحة العمل قبل النوبة وتُحذف بعدها.
+PROBES_DIR = os.path.join(_ROOT, "engines", "weaver-core", "probes")
+_PROBE_FILES = {"check-plagiarism": "plagiarism"}
+
+
+def _probe_setup(target):
+    """(مجلّد، مسحٌ) لمهارةٍ تحتاج ملفّات — أو (None، None). لا يرفع استثناءً.
+
+    والمسحُ يعيد الحقيقةَ بالسكربت نفسِه، ليُقارَن بها جوابُ النموذج."""
+    name = _PROBE_FILES.get(target or "")
+    if not name:
+        return None, None
+    try:
+        import shutil
+        src = os.path.join(PROBES_DIR, name)
+        # اسمٌ محايد: المسارُ يظهر في الطلب، فلا يُلمِّح إلى المهارة.
+        dst = os.path.join(workspace_dir(), "uploads-test")
+        shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(src, dst)
+        truth = None
+        if target == "check-plagiarism":
+            from pipeline import plagiarism as _pl
+            _rd = lambda f: open(os.path.join(dst, f), encoding="utf-8").read()
+            truth = _pl.measure(_rd("article.txt"), [
+                {"name": "source1.txt", "text": _rd("source1.txt")},
+                {"name": "source2.txt", "text": _rd("source2.txt")}])
+        return dst, truth
+    except Exception:
+        return None, None
 
 
 def skills_invoke_test(prompt=None, timeout=None, target=None):
@@ -2631,7 +2662,10 @@ def skills_invoke_test(prompt=None, timeout=None, target=None):
     يعيد {ok, measured, target, called:[], answer, trajectory:[], note,
     extra:{}}. و`extra` معلوماتٌ للعرض لا تدخل في الحكم."""
     sk = "skillinvoke-" + str(int(time.time()))
+    _pdir, _truth = (None, None) if prompt else _probe_setup(target)
     prompt = prompt or _SKILL_PROBES.get(target or "") or _SKILL_PROBE
+    if "{dir}" in prompt:
+        prompt = prompt.replace("{dir}", _pdir or "(تعذّر تجهيزُ الملفّات)")
     r = ask(prompt, timeout=timeout, fallback=False,
             session=sk)
     ans = (r or {}).get("answer") or ""
@@ -2645,6 +2679,9 @@ def skills_invoke_test(prompt=None, timeout=None, target=None):
                 hit.append(n)
         if "rewrite_ar" in str(blob) and "humanize-ar" not in hit:
             hit.append("humanize-ar")
+        # السكربتُ بلا فتحِ ملفّ المهارة — استعمالُها نفسُه.
+        if "plagiarism.py" in str(blob) and "check-plagiarism" not in hit:
+            hit.append("check-plagiarism")
     # لا جوابَ ولا مسار ⟶ النموذجُ لم يعمل، فلا دليلَ على شيء. وكان يُقال
     # «لم يستدعِ شيئاً — راجع وصفَ المهارة» فيُوجَّه المستخدمُ إلى إصلاح وصفٍ
     # سليم، والسببُ الحقيقيُّ رصيدٌ نفد. التشخيصُ الخاطئ أسوأُ من لا تشخيص.
@@ -2654,6 +2691,18 @@ def skills_invoke_test(prompt=None, timeout=None, target=None):
         # المهارةُ تُخرج JSON بهذه الحقول، ولا تُعيد صياغةَ شيء.
         extra["تقريرٌ بحقول المهارة"] = ("next_skills" in ans
                                          or "recommendation" in ans)
+    if _truth:
+        # الحقيقةُ بالسكربت على الملفّات نفسِها — ليُقارَن بها جوابُه بعينك.
+        extra["الحقيقةُ بالسكربت"] = (
+            "المقاطعُ المنقولة: %d · أطولُها %d كلمة · %.1f٪ من المقال"
+            % (len(_truth.get("spans") or []), _truth.get("longest_run", 0),
+               _truth.get("copied_percent", 0.0)))
+    if _pdir:
+        try:
+            import shutil
+            shutil.rmtree(_pdir, ignore_errors=True)
+        except Exception:
+            pass
     if target == "fix-conclusion" and ans:
         extra["الفقرةُ الأولى لم تُمَسّ"] = _FIX_FIRST in ans
         import re as _re
