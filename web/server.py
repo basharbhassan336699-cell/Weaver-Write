@@ -910,6 +910,27 @@ def _dsk_thinking(base, provider, model=""):
                              else "disabled"}}
 
 
+def _penalty_payload(s=None):
+    """{"frequency_penalty": v, "presence_penalty": v} لما ضُبط فقط — {} افتراضياً.
+
+    اختياريّة ومطفأة: لا تُرسَل إلا إن ضُبط WEAVER_FREQUENCY_PENALTY أو
+    WEAVER_PRESENCE_PENALTY (البيئة أولاً ثمّ الإعدادات) برقمٍ غيرِ صفرٍ في
+    [-2، 2]. فالحمولةُ بدونها كما كانت حرفاً."""
+    out = {}
+    for env, name in (("WEAVER_FREQUENCY_PENALTY", "frequency_penalty"),
+                      ("WEAVER_PRESENCE_PENALTY", "presence_penalty")):
+        try:
+            raw = os.environ.get(env)
+            if (raw is None or not str(raw).strip()) and s:
+                raw = s.get(env)
+            v = float(str(raw).strip())
+            if v == v and v != 0 and -2.0 <= v <= 2.0:
+                out[name] = v
+        except Exception:
+            pass
+    return out
+
+
 def _semantic_expand(query, timeout=20):
     """Ask the configured model for related keywords / synonyms / concepts in BOTH
     Arabic and English, so recall can match by MEANING even when the wording is
@@ -1895,6 +1916,7 @@ def _chat_direct(message: str, history=None, timeout: int = 120,
     _pl = {"model": model, "messages": msgs,
            "max_tokens": max_tokens, "temperature": temperature}
     _pl.update(_dsk_thinking(base, s.get("WEAVER_PROVIDER", ""), model))
+    _pl.update(_penalty_payload(s))
     payload = json.dumps(_pl).encode("utf-8")
     headers = {"Content-Type": "application/json",
                "Authorization": f"Bearer {key}",

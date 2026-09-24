@@ -100,6 +100,102 @@ def _opening(par):
     return first, pres
 
 
+# ── التكرار: العبارةُ لا الحرف ────────────────────────────────────────────
+#
+# `frequency_penalty` يعاقب كلَّ كلمةٍ تكرّرت — و«في» و«من» و«الـ» تتكرّر في
+# العربيّة طبيعياً — فيُفسد اللغةَ ليُصلح ما لا يُرى. والتكرارُ الذي يفضح
+# النصَّ الآليَّ عباراتٌ لا حروف: «في هذا السياق» ثلاثاً، وجملٌ تبدأ بـ«ويُعدّ
+# هذا»… فيُقاس ذاك بعينه، ويُدَلّ على موضعه، فيُصلَح هو وحدَه.
+_MARKS = re.compile("[\u0610-\u061a\u064b-\u065f\u0670\u0640]")
+_FOLD = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"})
+_WORD = re.compile(r"[\w\u0610-\u061a\u064b-\u065f\u0670\u0640]+")
+_STOP = set("""
+في من الى على عن ان اذا التي الذي الذين ما لا لم لن هذا هذه ذلك تلك هناك كان
+كانت يكون تكون مع او ثم قد لقد كما بين هو هي هم هن نحن انا انت كل بعض غير عند
+حتى منذ لدى لكن بل اي اما اذ حيث كيف متى هل ليس فقد وقد ولا فلا ومن وفي وعلى
+وان وما ولم وهو وهي وهذا وهذه وذلك وكان وكانت ثم بعد قبل فوق تحت خلال ضمن مثل
+the a an of to in on for and or but is are was were be been it this that
+these those with as by at from not no so if then than into about which who
+""".split())
+
+
+def _norm_word(w):
+    return _MARKS.sub("", w).translate(_FOLD).lower()
+
+
+def _content(w):
+    """كلمةُ مضمون؟ (لا حرفَ جرٍّ ولا عطف، ولا أقصرَ من ثلاثة أحرف)"""
+    if len(w) < 3 or w in _STOP:
+        return False
+    if w[0] in "وف" and w[1:] in _STOP:
+        return False
+    return not w.isdigit()
+
+
+def repetition(text, min_words=150):
+    """العباراتُ المكرّرة ومطالعُ الجمل المكرّرة، وأكثرُ الكلمات تكراراً.
+
+    يعيد {phrases:[(عبارة، عدد)], starters:[(مطلع، عدد)], top_words:[…]}.
+    لا يرفع استثناءً. والنصُّ القصيرُ (< min_words) لا يُحكم عليه بالعبارات."""
+    out = {"phrases": [], "starters": [], "top_words": []}
+    try:
+        toks = [(m.group(0), _norm_word(m.group(0)))
+                for m in _WORD.finditer(str(text or ""))]
+        toks = [(o, w) for o, w in toks if w]
+        words = [w for _o, w in toks]
+        from collections import Counter, defaultdict
+        # ① ثلاثيّاتٌ فيها كلمتا مضمونٍ على الأقلّ تكرّرت ٣ مرّاتٍ فأكثر، ثمّ
+        #    تُضَمّ المتجاورةُ في أوّل ظهورها مقطعاً واحداً — فجملةٌ مكرّرةٌ
+        #    تُعَدّ مرّةً لا خمسَ نوافذَ متراكبة. وتُعرض بحروف النصّ لا المُطبَّعة.
+        if len(words) >= min_words:
+            pos = defaultdict(list)
+            for i in range(len(words) - 2):
+                pos[tuple(words[i:i + 3])].append(i)
+            cover = {}
+            for g, p in pos.items():
+                if len(p) >= 3 and sum(1 for w in g if _content(w)) >= 2:
+                    for j in range(p[0], p[0] + 3):
+                        cover[j] = min(cover.get(j, len(p)), len(p)) \
+                            if j in cover else len(p)
+            spans, cur = [], []
+            for j in sorted(cover):
+                if cur and j == cur[-1] + 1:
+                    cur.append(j)
+                else:
+                    if cur:
+                        spans.append(cur)
+                    cur = [j]
+            if cur:
+                spans.append(cur)
+            found = []
+            for sp in spans:
+                # الوسيط لا الأدنى: ثلاثيّاتُ الحدِّ بين نسختين متتاليتين أقلُّ
+                # تكراراً من داخل الجملة، فالأدنى يُنقص العدَّ الحقيقيّ.
+                import statistics as _stt
+                k = _stt.median_low([cover[j] for j in sp])
+                ph = " ".join(toks[j][0] for j in sp[:12])
+                found.append((ph + (" …" if len(sp) > 12 else ""), k))
+            found.sort(key=lambda x: (-x[1], -len(x[0])))
+            out["phrases"] = found[:5]
+        # ② مطالعُ الجمل: أوّلُ كلمتين، تكرّرتا ٣ مرّاتٍ فأكثر.
+        sents = [s for s in re.split(r"[.؟!?\n]+", str(text or ""))
+                 if len(s.split()) >= 3]
+        st, first = Counter(), {}
+        for s_ in sents:
+            key = " ".join(_norm_word(w) for w in s_.split()[:2])
+            st[key] += 1
+            first.setdefault(key, " ".join(s_.split()[:2]))
+        out["starters"] = [(first[k], v) for k, v in st.most_common(3)
+                           if v >= 3]
+        # ③ أكثرُ كلمات المضمون تكراراً — معلومةٌ لا حكم (كلمةُ الموضوع
+        #    تتكرّر بحقّ: «التعليم» في مقالٍ عن التعليم).
+        cw = Counter(w for w in words if _content(w))
+        out["top_words"] = cw.most_common(3)
+    except Exception:
+        pass
+    return out
+
+
 def check(text, soul_text=None):
     """افحص نصّاً. يعيد dict ولا يرفع استثناءً.
 
@@ -177,9 +273,19 @@ def check(text, soul_text=None):
                         break
                 else:
                     run = 1
+        # ⑥ التكرار — تحذيرٌ يدلّ على العبارة بعينها، لا مخالفةٌ تنقص الدرجة
+        rep = repetition(t)
+        for ph, k in rep["phrases"]:
+            out["warnings"].append(
+                {"rule": "عبارةٌ مكرّرة", "term": ph, "where": "%d مرّات" % k})
+        for sp, k in rep["starters"]:
+            out["warnings"].append(
+                {"rule": "جملٌ تبدأ بالمطلع نفسِه", "term": sp,
+                 "where": "%d جمل" % k})
         out["stats"] = {"words": len(t.split()), "paragraphs": len(pars),
                         "sentences": len(sents),
-                        "banned_checked": len(en) + len(ar)}
+                        "banned_checked": len(en) + len(ar),
+                        "repetition": rep}
         n = len(out["violations"])
         out["ok"] = n == 0
         out["score"] = max(0, 100 - n * 10)

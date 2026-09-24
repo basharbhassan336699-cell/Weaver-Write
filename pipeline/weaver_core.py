@@ -1850,6 +1850,45 @@ def custom_provider_tree(route=None, key_present=True):
                        "providers": {CUSTOM_PROVIDER: prov}}}
 
 
+# ── عقوبةُ التكرار: اختياريّةٌ، مطفأةٌ افتراضياً ─────────────────────────────
+#
+# `frequency_penalty` / `presence_penalty` تُخفّضان احتمالَ الكلمات التي
+# تكرّرت. لا تُرسَل إلا إن ضبطها المستخدمُ صراحةً (config/.env):
+#     WEAVER_FREQUENCY_PENALTY=0.3      WEAVER_PRESENCE_PENALTY=0.2
+# فيُقاس الفرقُ قبلُ وبعد (`--soul check`) بدل أن يُفترض. وللمحرّك مفتاحُه
+# لكلّ نموذج: agents.defaults.models["<مزوّد/نموذج>"].params.frequencyPenalty
+# (extra-params: resolveAliasedParamValueFromKeys) — يُطبَّق بلا إعادةِ إقلاع.
+_PENALTY_KEYS = (("WEAVER_FREQUENCY_PENALTY", "frequencyPenalty"),
+                 ("WEAVER_PRESENCE_PENALTY", "presencePenalty"))
+
+
+def _penalty_value(raw):
+    """رقمٌ في [-2، 2] غيرُ صفر، وإلّا None."""
+    try:
+        v = float(str(raw).strip())
+    except Exception:
+        return None
+    if v != v or v == 0 or not -2.0 <= v <= 2.0:
+        return None
+    return v
+
+
+def penalty_params():
+    """{"frequencyPenalty": v, "presencePenalty": v} لما ضُبط فقط — {} افتراضياً."""
+    out = {}
+    for env, name in _PENALTY_KEYS:
+        try:
+            raw = os.environ.get(env)
+            if raw is None or not str(raw).strip():
+                raw = _setting(env)
+            v = _penalty_value(raw)
+            if v is not None:
+                out[name] = v
+        except Exception:
+            pass
+    return out
+
+
 def _model_fingerprint():
     """بصمةُ ما كُتب في المحرّك: (ما يستلزم إعادةَ إقلاع البوّابة، والنموذج).
 
@@ -1861,7 +1900,13 @@ def _model_fingerprint():
                      r.get("base_url", ""), r.get("api", ""),
                      hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
                      if key else ""])
-    return {"boot": boot, "model": r.get("ref", "")}
+    fp = {"boot": boot, "model": r.get("ref", "")}
+    # خارجَ boot: تغييرُها يُعيد الكتابةَ بلا إعادةِ إقلاع. ولا مفتاحَ حين
+    # لا عقوبة — فبصمةُ من لم يضبطها كما كانت حرفاً، ولا كتابةَ زائدة.
+    pen = penalty_params()
+    if pen:
+        fp["penalty"] = pen
+    return fp
 
 
 def _applied_fingerprint():
@@ -2071,6 +2116,21 @@ def configure_model():
     for env_name, key in (creds or {}).items():
         _merge(tree, _nest("env.vars." + env_name, key))
         names.append("env.vars." + env_name + " = ***" + key[-4:])
+    # عقوبةُ التكرار لهذا النموذج — إن ضُبطت. وإن أُزيلت بعد أن كُتبت تُحذف
+    # (null يحذف المسار)، فلا تبقى في المحرّك قيمةٌ لم يعد المستخدمُ يريدها.
+    _pen = penalty_params()
+    _old_pen = (_applied_fingerprint().get("penalty") or {})
+    _pen_tree = {}
+    for _env, _name in _PENALTY_KEYS:
+        if _name in _pen:
+            _pen_tree[_name] = _pen[_name]
+            names.append("params.%s = %s" % (_name, _pen[_name]))
+        elif _name in _old_pen:
+            _pen_tree[_name] = None
+            names.append("params.%s = (حُذفت)" % _name)
+    if _pen_tree:
+        _merge(tree, {"agents": {"defaults": {"models": {
+            ref: {"params": _pen_tree}}}}})
     # مزوّدُنا يُستبدَل كاملاً: منصّةٌ جديدةٌ لا تَرِث رابطَ السابقة ولا نماذجَها.
     _rep = (["models.providers." + CUSTOM_PROVIDER]
             if _route.get("mode") == "custom" else [])
