@@ -62,16 +62,116 @@ _DEFAULT: List[dict] = [
 ]
 
 
+# ── منصّاتُ أوبن كلاو ─────────────────────────────────────────────────────
+#
+# من المحرّك نفسِه لا من الذاكرة: مزوّداتُه المدمجة
+# (dist/extensions/*/openclaw.plugin.json) والخارجيّةُ الرسميّة
+# (official-external-provider-catalog)، وكلُّ رابطٍ منقولٌ من صفحة توثيقه
+# (docs/providers/<name>.md) — «Base URL» المتوافقُ مع OpenAI حرفاً.
+#
+# والنموذجُ الافتراضيُّ حيث تنصّ الصفحةُ على «Default model» لنموذج محادثة،
+# وإلّا فارغٌ: يُختار من «استكشاف النماذج» (الأحدثُ أوّلاً).
+#
+# ولا بادئاتِ مفاتيح: لم يوثّقها المحرّكُ لهذه المنصّات، وبادئةٌ مخمَّنةٌ
+# توجّه مفتاحاً إلى غير منصّته. وتعمل كلُّها عبر المحرّك بمزوّده المخصَّص
+# (أو المدمج حيث وُجد) — pipeline/weaver_core.py  engine_route().
+#
+# ولم يُضَف ما لا يصلح لمفتاحٍ ورابطٍ ثابت: Bedrock وVertex (اعتمادُ سحابة)،
+# وCloudflare AI Gateway (رابطٌ بحسابك)، وSynthetic (أنثروبيك فقط)، وOpenCode
+# Zen (واجهاتٌ مختلفةٌ لكلّ نموذج)، وGitHub Copilot وMiniMax Portal (OAuth)،
+# ومنصّاتُ الصوت والصورة والفيديو والتضمين (ComfyUI، PixVerse، Vydra، Voyage،
+# fal)، وخططُ الاشتراك المستقلّة (Token Plan / Coding Plan) عدا Kimi Coding.
+_OPENCLAW: List[dict] = [
+    # مدمجةٌ في المحرّك
+    {"name": "huggingface", "base_url": "https://router.huggingface.co/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "minimax", "base_url": "https://api.minimax.io/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "opencode-go", "base_url": "https://opencode.ai/zen/go/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "lmstudio", "base_url": "http://localhost:1234/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "vllm", "base_url": "http://127.0.0.1:8000/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "sglang", "base_url": "http://127.0.0.1:30000/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "litellm", "base_url": "http://localhost:4000",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    # خارجيّةٌ رسميّة (تعمل هنا بلا تركيب إضافتها)
+    {"name": "arcee", "base_url": "https://api.arcee.ai/api/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "baseten", "base_url": "https://inference.baseten.co/v1",
+     "model": "thinkingmachines/inkling", "prefixes": [], "auth": "bearer"},
+    {"name": "chutes", "base_url": "https://llm.chutes.ai/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "cohere", "base_url": "https://api.cohere.ai/compatibility/v1",
+     "model": "command-a-plus-05-2026", "prefixes": [], "auth": "bearer"},
+    {"name": "deepinfra", "base_url": "https://api.deepinfra.com/v1/openai",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "featherless", "base_url": "https://api.featherless.ai/v1",
+     "model": "Qwen/Qwen3-32B", "prefixes": [], "auth": "bearer"},
+    {"name": "gmi", "base_url": "https://api.gmi-serving.com/v1",
+     "model": "openai/gpt-5.6-sol", "prefixes": [], "auth": "bearer"},
+    {"name": "kilocode", "base_url": "https://api.kilo.ai/api/gateway",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "kimi-coding", "base_url": "https://api.kimi.com/coding/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "longcat", "base_url": "https://api.longcat.chat/openai",
+     "model": "LongCat-2.0", "prefixes": [], "auth": "bearer"},
+    {"name": "meta", "base_url": "https://api.meta.ai/v1",
+     "model": "muse-spark-1.3", "prefixes": [], "auth": "bearer"},
+    {"name": "moonshot", "base_url": "https://api.moonshot.ai/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "moonshot-cn", "base_url": "https://api.moonshot.cn/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "novita", "base_url": "https://api.novita.ai/openai/v1",
+     "model": "deepseek/deepseek-v4-pro", "prefixes": [], "auth": "bearer"},
+    {"name": "qianfan", "base_url": "https://qianfan.baidubce.com/v2",
+     "model": "deepseek-v4-pro", "prefixes": [], "auth": "bearer"},
+    {"name": "qwen", "base_url":
+     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "qwen-cn", "base_url":
+     "https://dashscope.aliyuncs.com/compatible-mode/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "stepfun", "base_url": "https://api.stepfun.ai/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "stepfun-cn", "base_url": "https://api.stepfun.com/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "tencent-tokenhub", "base_url": "https://tokenhub.tencentmaas.com/v1",
+     "model": "hy4-preview", "prefixes": [], "auth": "bearer"},
+    {"name": "venice", "base_url": "https://api.venice.ai/api/v1",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "volcengine", "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+     "model": "", "prefixes": [], "auth": "bearer"},
+    {"name": "xiaomi", "base_url": "https://api.xiaomimimo.com/v1",
+     "model": "mimo-v2.5", "prefixes": [], "auth": "bearer"},
+    {"name": "zai", "base_url": "https://api.z.ai/api/paas/v4",
+     "model": "glm-5.2", "prefixes": [], "auth": "bearer"},
+    {"name": "zai-cn", "base_url": "https://open.bigmodel.cn/api/paas/v4",
+     "model": "glm-5.2", "prefixes": [], "auth": "bearer"},
+]
+
+
 def load_registry() -> List[dict]:
     """السجل الفعّال: الافتراضي مدموجاً مع config/providers.json (يُحدِّث/يضيف)."""
     reg = {p["name"]: dict(p) for p in _DEFAULT}
+    for p in _OPENCLAW:                      # إضافةٌ فقط: لا يُمَسّ ما سبق
+        reg.setdefault(p["name"], dict(p))
     if _USER_REGISTRY.exists():
         try:
             data = json.loads(_USER_REGISTRY.read_text(encoding="utf-8"))
             for p in data.get("providers", data if isinstance(data, list) else []):
                 if isinstance(p, dict) and p.get("name") and p.get("base_url"):
-                    reg[p["name"]] = {**reg.get(p["name"], {}),
-                                      "prefixes": [], "auth": "bearer", "model": "", **p}
+                    base = reg.get(p["name"], {})
+                    merged = {**base, "prefixes": [], "auth": "bearer",
+                              "model": "", **p}
+                    # `add_provider` يكتب `prefixes: []` لكلّ ما يحفظه، فكان وصلُ
+                    # OpenRouter من الطرفيّة يمحو `sk-or-` من السجلّ — فلا تُكشف
+                    # مفاتيحُه بعدها. قائمةٌ فارغةٌ لا تمحو بادئةً موثّقة.
+                    if not merged.get("prefixes") and base.get("prefixes"):
+                        merged["prefixes"] = list(base["prefixes"])
+                    reg[p["name"]] = merged
         except Exception:
             pass
     return list(reg.values())
@@ -145,17 +245,49 @@ def models_urls(base_url: str) -> List[str]:
     return urls
 
 
+def _created_ts(m) -> Optional[float]:
+    """تاريخُ إصدار النموذج كما تُعلنه المنصّة — أو None.
+
+    OpenAI وOpenRouter وGroq وغيرُها: `created` (ثوانٍ منذ ١٩٧٠).
+    أنثروبيك: `created_at` بصيغة ISO."""
+    if not isinstance(m, dict):
+        return None
+    c = m.get("created")
+    if isinstance(c, (int, float)) and not isinstance(c, bool) and c > 0:
+        return float(c / 1000.0 if c > 1e12 else c)   # ميلي‌ثانية ⟶ ثانية
+    ca = m.get("created_at") or m.get("createdAt")
+    if isinstance(ca, str) and ca:
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(ca.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return None
+    return None
+
+
 def _models_from_response(data) -> list:
+    """معرّفاتُ النماذج — **الأحدثُ أوّلاً**، بلا تكرار.
+
+    كانت تُرتَّب أبجدياً (`sorted(set(...))`) ثمّ تعرض الواجهةُ أوّلَ ١٠٠:
+    فعلى منصّةٍ فيها مئاتُ النماذج (OpenRouter) لا يظهر إلا ما يبدأ اسمُه
+    بأوائل الحروف — وأكثرُه قديم — ويُقصّ الأحدثُ لأنّ اسمَ مطوّره متأخّرٌ
+    في الأبجديّة. فالآن: تاريخُ الإصدار إن أعلنته المنصّةُ لأكثر نماذجها،
+    وإلّا ترتيبُ المنصّة نفسِها كما أرسلته."""
     items = (data.get("data", data.get("models")) if isinstance(data, dict) else data)
     if not isinstance(items, list):
         return []
-    out = []
+    rows, seen = [], set()
     for m in items:
         mid = ((m.get("id") or m.get("name")) if isinstance(m, dict)
                else (m if isinstance(m, str) else None))
-        if mid:
-            out.append(str(mid))
-    return out
+        if mid and str(mid) not in seen:
+            seen.add(str(mid))
+            rows.append((str(mid), _created_ts(m)))
+    dated = sum(1 for _mid, ts in rows if ts is not None)
+    if rows and dated * 2 >= len(rows):
+        # ترتيبٌ ثابت: المتساوي يبقى بترتيب المنصّة، وغيرُ المؤرَّخ آخراً.
+        rows.sort(key=lambda r: -(r[1] if r[1] is not None else float("-inf")))
+    return [mid for mid, _ts in rows]
 
 
 HttpGet = Callable[[str, dict, int], Tuple[object, Optional[str]]]
@@ -182,7 +314,7 @@ def resolve_platform(key: str, http_get: HttpGet, current_base: str = "",
                 models = _models_from_response(data)
                 if models:
                     e = dict(entry)
-                    e["models"] = sorted(set(models))
+                    e["models"] = models       # الأحدثُ أوّلاً، لا أبجدياً
                     e["source"] = url
                     return e
         return None
@@ -251,7 +383,7 @@ def list_models_for(base_url: str, key: str, auth: str = "bearer",
             continue
         models = _models_from_response(data)
         if models:
-            return sorted(set(models)), None
+            return models, None          # الأحدثُ أوّلاً، لا أبجدياً
     return [], (last_err or "no models endpoint responded")
 
 

@@ -4500,7 +4500,8 @@
         <button class="wv-btn" id="kDiscover" onclick="wvDiscover()">🔍 Discover models / استكشاف النماذج</button>
       </div>
       <div class="wv-field" id="kModelWrap" style="display:none">
-        <label>Model / النموذج</label>
+        <label>Model / النموذج <span id="kModelCount" style="opacity:.7;font-weight:normal"></span></label>
+        <input id="kModelFilter" type="text" placeholder="Search models / ابحث عن نموذج (e.g. deepseek, gpt-5, claude)" autocomplete="off" spellcheck="false" oninput="wvFilterModels()" style="margin-bottom:6px">
         <select id="kModel"></select>
       </div>
       <div class="wv-msg" id="kMsg"></div>
@@ -4817,6 +4818,16 @@
     if(sel.value==='__custom__'){ url.value=''; url.readOnly=false; url.placeholder='https://api.example.com/v1'; }
     else{ var p=WV_REG.find(function(x){return x.name===sel.value;}); url.value=p?p.base_url:''; url.readOnly=false; }
   }
+  var WV_MODELS = [];
+  function wvFilterModels(){
+    var q=(document.getElementById('kModelFilter').value||'').trim().toLowerCase();
+    var ms=document.getElementById('kModel'); var keep=ms.value; ms.innerHTML='';
+    var shown=WV_MODELS.filter(function(m){ return !q || m.toLowerCase().indexOf(q)>=0; });
+    shown.forEach(function(m){ var o=document.createElement('option'); o.value=m; o.textContent=m; ms.appendChild(o); });
+    if(keep && shown.indexOf(keep)>=0) ms.value=keep;
+    var c=document.getElementById('kModelCount');
+    if(c) c.textContent = WV_MODELS.length ? ('('+shown.length+' / '+WV_MODELS.length+')') : '';
+  }
   async function wvDiscover(){
     var url=document.getElementById('kUrl').value.trim();
     var key=document.getElementById('kKey').value.trim();
@@ -4831,10 +4842,13 @@
         body:JSON.stringify({base_url:url,key:key,auth:auth})})).json();
       if(r.error || !(r.models&&r.models.length)){ wvSetMsg('No models found ('+(r.error||'empty')+'). You can still type one when saving.', 'err');
         document.getElementById('kModelWrap').style.display='none'; return; }
-      var ms=document.getElementById('kModel'); ms.innerHTML='';
-      r.models.slice(0,100).forEach(function(m){ var o=document.createElement('option'); o.value=m; o.textContent=m; ms.appendChild(o); });
+      // كلُّ النماذج، الأحدثُ أوّلاً (يرتّبها الخادم). كان يُعرض أوّلُ ١٠٠ من
+      // قائمةٍ أبجديّة فيُقصّ الأحدث. والبحثُ يصفّيها بلا حدّ.
+      WV_MODELS = r.models.slice();
+      document.getElementById('kModelFilter').value='';
+      wvFilterModels();
       document.getElementById('kModelWrap').style.display='';
-      wvSetMsg('Found '+r.models.length+' models.', 'ok');
+      wvSetMsg('Found '+r.models.length+' models (newest first).', 'ok');
     }catch(e){ wvSetMsg('Discovery failed: '+e.message, 'err'); }
   }
   async function wvSaveKey(){
