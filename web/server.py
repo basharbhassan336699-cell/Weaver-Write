@@ -1453,8 +1453,30 @@ def _engine_trajectory_cards(session, isar=True, limit=24):
         calls = _wc.trajectory(session) or []
     except Exception:
         return []
+    return _cards_from_calls(calls, limit)
+
+
+def _engine_turn_cards(session, since_ms=None, isar=True, limit=24):
+    """بطاقاتُ **نوبةٍ واحدة** — لطلب /api/chat/tools. dict، ولا يرفع.
+
+    كانت تُجهَّز داخل مجرى الجواب بعده: ٣١ ثانيةً على هاتف المستخدم (مقيس)،
+    والمجرى مفتوحٌ ينتظرها — فإن انقطع (شاشةٌ أُطفئت، صفحةٌ أُغلقت) ضاعت
+    البطاقاتُ كلُّها وبقي «التفكير» وحدَه. وكانت تُخرج المحادثةَ كلَّها، فتُعرض
+    لرسالةٍ أدواتُ رسالةٍ قبلها. فصارت طلباً مستقلاً لنوبةٍ بعينها."""
+    try:
+        from pipeline import weaver_core as _wc
+        r = _wc.trajectory_turn(session, since_ms=since_ms)
+    except Exception as e:
+        return {"ok": False, "tools": [], "error": str(e)[:200]}
+    return {"ok": bool(r.get("ok")),
+            "tools": _cards_from_calls(r.get("calls") or [], limit),
+            "error": r.get("error") or ""}
+
+
+def _cards_from_calls(calls, limit=24):
+    """بطاقةٌ لكلِّ صفٍّ من مسار النوبة. لا يرفع استثناءً."""
     out = []
-    for c in calls[:limit]:
+    for c in (calls or [])[:limit]:
         nm = str(c.get("name") or "")
         req, res = c.get("request"), c.get("response")
 
@@ -2046,6 +2068,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api/chats":
             self._json({"chats": _chats_index()})
             return
+        if path == "/api/chat/tools":
+            # بطاقاتُ أدوات نوبةٍ واحدة — مستقلّةٌ عن مجرى الجواب.
+            _q = parse_qs(urlparse(self.path).query)
+            _cid = (_q.get("chatId", [""])[0] or "").strip()
+            try:
+                _since = float(_q.get("since", ["0"])[0] or 0) or None
+            except Exception:
+                _since = None
+            if not _cid:
+                self._json({"ok": False, "tools": [], "error": "missing chatId"})
+                return
+            self._json(_engine_turn_cards(_cid, since_ms=_since,
+                                          isar=_q.get("lang", ["ar"])[0] != "en"))
+            return
         if path == "/api/chats/one":
             cid = parse_qs(urlparse(self.path).query).get("id", [""])[0]
             d = _chat_read(cid)
@@ -2459,13 +2495,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     sse({"t": "reply", "reply": reply})
                     _tc = _engine_tool_card(r, isar)
                     if _tc:
-                        # بطاقةٌ لكلِّ أداةٍ استدعاها الوكيلُ فعلاً — من مسار
-                        # النوبة عند المحرّك، لا من مُغلَّف الجواب (وهو لا
-                        # يحملها). وهي سببُ أنّ المستخدمَ لم يكن يرى إلّا
-                        # «التفكير» بينما الوكيلُ يبحث ويقرأ.
-                        for _t in _engine_trajectory_cards(
-                                body.get("chatId"), isar):
-                            sse({"t": "tool", "tool": _t})
+                        # البطاقةُ الثابتةُ مع الجواب فوراً. وبطاقاتُ الأدوات
+                        # لا تُنتظَر هنا: تصديرُ مسار النوبة ٣١ ثانيةً على
+                        # هاتف المستخدم (مقيس)، والمجرى مفتوحٌ ينتظره — فإن
+                        # انقطع ضاعت كلُّها وبقي «التفكير» وحدَه (رآه). فالصفحةُ
+                        # تطلبها بعد انتهاء المجرى من /api/chat/tools، وتُعيد
+                        # الطلبَ إن انقطع، وتحفظها مع المحادثة حين تصل.
                         sse({"t": "tool", "tool": _tc})
                     else:
                         _fc = _engine_fail_card(_engine_fail(), isar)

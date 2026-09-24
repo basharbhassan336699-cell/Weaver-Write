@@ -3375,6 +3375,9 @@
         const el = makeAiMsg(m.content, m.tools);
         box.appendChild(el);
         if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
+        if (m.toolsPending && typeof wvLoadTurnTools === 'function') {
+          wvLoadTurnTools(id, m, function () { wvRenderTools(el.querySelector('.tool-steps'), m.tools); });
+        }
       });
       box.scrollTop = box.scrollHeight;
     }
@@ -3633,6 +3636,66 @@
 
   // يرسم أكورديونَ الأدوات داخل حاوية. `tools` مصفوفةُ كائنات:
   //   { title, sub, status:'ok'|'running'|'err', kind, request, response }
+  // ── بطاقاتُ أدوات النوبة: طلبٌ مستقلٌّ عن مجرى الجواب ──
+  var WV_TOOLS_INFLIGHT = {};
+  function wvToolCard(t) {
+    return { title: t.title || t.name || '', sub: t.sub || '',
+             kind: t.kind || t.name || '', status: t.status || 'ok',
+             request: String(t.request == null ? '' : t.request).slice(0, 20000),
+             response: String(t.response == null ? '' : t.response).slice(0, 20000) };
+  }
+  // احفظ رسالةً في محادثتها — الحاليّةِ أو غيرِها (إن انتقل المستخدمُ).
+  async function wvPersistMsg(chatId, msg, since) {
+    if (!chatId || !msg) return;
+    if (chatId === currentChatId) { await saveCurrentChat(); return; }
+    try {
+      var d = await (await fetch('/api/chats/one?id=' + encodeURIComponent(chatId))).json();
+      if (!d || d.error || !d.messages) return;
+      var hit = d.messages.find(function (m) {
+        return m && m.role === 'assistant' && m.toolsPending && m.toolsPending.since === since; });
+      if (!hit) return;
+      hit.tools = msg.tools;
+      if (msg.toolsPending) hit.toolsPending = msg.toolsPending; else delete hit.toolsPending;
+      await fetch('/api/chats/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: chatId, title: d.title, projectId: d.projectId,
+                               windowId: d.windowId, messages: d.messages }) });
+    } catch (e) {}
+  }
+  async function wvLoadTurnTools(chatId, msg, paint) {
+    if (!chatId || !msg || !msg.toolsPending) return;
+    var since = msg.toolsPending.since;
+    var key = chatId + ':' + since;
+    if (WV_TOOLS_INFLIGHT[key]) return;
+    WV_TOOLS_INFLIGHT[key] = 1;
+    try {
+      for (var attempt = 0; attempt < 3; attempt++) {
+        var d = null;
+        try {
+          d = await (await fetch('/api/chat/tools?chatId=' + encodeURIComponent(chatId) +
+                     '&since=' + encodeURIComponent(since) +
+                     '&lang=' + encodeURIComponent(document.documentElement.lang || 'ar'))).json();
+        } catch (e) { d = null; }
+        if (d && d.ok) {
+          var cards = (d.tools || []).map(wvToolCard);
+          var tools = (msg.tools || []).slice();
+          var at = tools.findIndex(function (t) { return t && t.kind === 'engine'; });
+          if (at < 0) at = tools.length;
+          Array.prototype.splice.apply(tools, [at, 0].concat(cards));
+          msg.tools = tools;
+          delete msg.toolsPending;
+          if (paint) { try { paint(); } catch (e) {} }
+          await wvPersistMsg(chatId, msg, since);
+          return;
+        }
+        await new Promise(function (r) { setTimeout(r, 4000 * (attempt + 1)); });
+      }
+      // تعذّر ثلاثاً: تبقى معلّقةً لفتحٍ قادم، ويُكَفّ عنها بعد ثلاث فتحات.
+      msg.toolsPending.tries = (msg.toolsPending.tries || 0) + 1;
+      if (msg.toolsPending.tries >= 3) delete msg.toolsPending;
+      await wvPersistMsg(chatId, msg, since);
+    } finally { delete WV_TOOLS_INFLIGHT[key]; }
+  }
+
   function wvRenderTools(box, tools, opts) {
     if (!box) return;
     tools = tools || [];
@@ -4184,6 +4247,7 @@
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
       let assistantFile = '';  // produced file name (for the artifacts card)
       let gotReply = false;
+      let engineTurn = false;  // نوبةُ محرّك ⟵ بطاقاتُ أدواتها تُطلب بعد المجرى
       let streamBuf = '';      // live-streamed text buffer (before final reply)
       let streaming = false;
       let streamRAF = 0;       // pending animation frame for live markdown render
@@ -4209,7 +4273,7 @@
       function handleEvent(ev) {
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); }
-        else if (ev.t === 'tool') { stepsTool(ev.tool); }
+        else if (ev.t === 'tool') { stepsTool(ev.tool); if (ev.tool && ev.tool.kind === 'engine' && ev.tool.status !== 'err') engineTurn = true; }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
         // LIVE STREAM: show the reply as it is written (like OpenClaw).
         else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
@@ -4270,9 +4334,17 @@
                    response: String(t.response || '').slice(0, 20000) };
         });
       }
+      // بطاقاتُ الأدوات تُطلب بعد المجرى بطلبٍ مستقلّ (/api/chat/tools):
+      // تجهيزُها ٣١ ثانيةً على الهاتف، والمجرى إن انقطع أضاعها. والعلامةُ
+      // «معلّقة» تُحفظ مع الرسالة، فإن أُغلقت الصفحةُ قبل وصولها طُلبت
+      // حين تُفتح المحادثةُ مرّةً أخرى.
+      if (engineTurn) amsg.toolsPending = { since: sentAt, tries: 0 };
       currentMessages.push(amsg);
       saveCurrentChat();
       messages.scrollTop = messages.scrollHeight;
+      if (engineTurn && typeof wvLoadTurnTools === 'function') {
+        wvLoadTurnTools(currentChatId, amsg, function () { wvRenderTools(stepsBox, amsg.tools); });
+      }
     })();
   }
 

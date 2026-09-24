@@ -216,7 +216,11 @@ print("=" * 70)
 # مُغلَّفُ --json يحمل الجوابَ فقط، فما استدعاه الوكيلُ من أدواتٍ لا يظهر فيه.
 # ولهذا لم يكن المستخدمُ يرى إلّا «التفكير» بينما الوكيلُ يبحث ويقرأ.
 # فتُقرأ من `sessions export-trajectory` عند المحرّك.
-_r3 = (S._engine_ready, S._chat_via_engine, W.trajectory, W.LAST_LOG)
+# والبطاقاتُ لا تُنتظَر داخل مجرى الجواب: تصديرُ المسار ٣١ ثانيةً على هاتف
+# المستخدم (مقيس)، والمجرى إن انقطع أثناءها أضاعها كلَّها — فرأى «التفكير»
+# وحدَه. فالمجرى يحمل البطاقةَ الثابتة، وأدواتُ النوبة من /api/chat/tools.
+_r3 = (S._engine_ready, S._chat_via_engine, W.trajectory_turn, W.LAST_LOG)
+_asked = {}
 try:
     os.makedirs(os.path.dirname(W.LAST_LOG), exist_ok=True)
     with open(W.LAST_LOG, "w", encoding="utf-8") as _f:
@@ -226,13 +230,17 @@ try:
     S._chat_via_engine = (
         lambda m, h=None, t=120, c=None, mem=None, att=None, session=None:
         {"reply": "الطقسُ صحو", "engine": "weaver-core", "model": "m"})
-    W.trajectory = lambda session, agent="main", timeout=90: [
-        {"name": "web_search", "request": {"query": "طقس صنعاء"},
-         "response": "١٢ نتيجة", "status": "ok"},
-        {"name": "web_fetch", "request": {"url": "https://w/x"},
-         "response": "<html>", "status": "ok"},
-        {"name": "write", "request": {"file_path": "/tmp/o.md"},
-         "response": "كُتب", "status": "err"}]
+
+    def _turn(session, since_ms=None, agent="main", timeout=90):
+        _asked.update(session=session, since=since_ms)
+        return {"ok": True, "error": "", "calls": [
+            {"name": "web_search", "request": {"query": "طقس صنعاء"},
+             "response": "١٢ نتيجة", "status": "ok"},
+            {"name": "web_fetch", "request": {"url": "https://w/x"},
+             "response": "<html>", "status": "ok"},
+            {"name": "write", "request": {"file_path": "/tmp/o.md"},
+             "response": "كُتب", "status": "err"}]}
+    W.trajectory_turn = _turn
     srv = S._ReuseTCPServer(("127.0.0.1", 0), S.Handler)
     port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -241,11 +249,22 @@ try:
         data=json.dumps({"message": "ابحث", "history": [], "chatId": "c1"}).encode(),
         headers={"Content-Type": "application/json"})
     out = urllib.request.urlopen(req, timeout=60).read().decode()
+    scards = [json.loads(l[6:])["tool"] for l in out.splitlines()
+              if l.startswith("data: ") and '"t": "tool"' in l]
+    chk("المجرى: البطاقةُ الثابتةُ وحدَها، بلا انتظار تصدير",
+        len(scards) == 1 and scards[0]["kind"] == "engine",
+        [c.get("title") for c in scards])
+    chk("  -> ولم يُنادَ التصديرُ داخل المجرى", not _asked, _asked)
+    d = json.loads(urllib.request.urlopen(
+        "http://127.0.0.1:%d/api/chat/tools?chatId=c1&since=1790000000000"
+        % port, timeout=60).read().decode())
     srv.shutdown()
-    cards = [json.loads(l[6:])["tool"] for l in out.splitlines()
-             if l.startswith("data: ") and '"t": "tool"' in l]
+    cards = d.get("tools") or []
     names = [c["title"] for c in cards]
-    chk("أربعُ بطاقات: ثلاثُ أدواتٍ ونوبة", len(cards) == 4, names)
+    chk("/api/chat/tools: ثلاثُ أدوات", d.get("ok") and len(cards) == 3, names)
+    chk("  -> لنوبةِ هذه المحادثة وهذه اللحظة",
+        _asked.get("session") == "c1" and _asked.get("since") == 1790000000000,
+        _asked)
     chk("  -> web_search فيها", "web_search" in names, names)
     chk("  -> web_fetch فيها", "web_fetch" in names, names)
     chk("  -> write فيها", "write" in names, names)
@@ -256,7 +275,7 @@ try:
     chk("  -> والمدخلاتُ والمخرجاتُ محمولةٌ معها",
         all(c["request"] and c["response"] for c in cards[:3]))
 finally:
-    (S._engine_ready, S._chat_via_engine, W.trajectory, W.LAST_LOG) = _r3
+    (S._engine_ready, S._chat_via_engine, W.trajectory_turn, W.LAST_LOG) = _r3
 
 print()
 print("=" * 70)

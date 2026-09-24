@@ -1249,25 +1249,38 @@ def _tool_events(obj):
     typ = str(obj.get("type") or "")
     data = obj.get("data") if isinstance(obj.get("data"), dict) else {}
 
-    def _add(name, req, res, status):
+    def _add(name, req, res, status, cid=None):
         name = str(name or "").strip()
         if not name:
             return
-        out.append({"name": name, "request": req, "response": res,
-                    "status": status})
+        row = {"name": name, "request": req, "response": res,
+               "status": status}
+        if cid:
+            row["id"] = str(cid)
+        out.append(row)
 
     # ① حدثٌ نوعُه أداة
     if "tool" in typ.lower():
+        # الشكلُ كما رأيتُه الآن في events.jsonl حقيقيّ: كلُّ نداءٍ يُسجَّل
+        # مرّتين (source: transcript و runtime) ونتيجتُه مرّتين، وكلُّها
+        # تحمل `toolCallId` — فيُلتقط ليُضَمّ النداءُ إلى نتيجته.
+        _msg = data.get("message") if isinstance(data.get("message"),
+                                                  dict) else {}
         nm = (data.get("toolName") or data.get("name") or data.get("tool")
-              or obj.get("toolName") or obj.get("name") or "")
+              or obj.get("toolName") or obj.get("name")
+              or _msg.get("toolName") or "")
         req = (data.get("input") if data.get("input") is not None
                else data.get("arguments") if data.get("arguments") is not None
                else data.get("args"))
         res = (data.get("output") if data.get("output") is not None
                else data.get("result") if data.get("result") is not None
-               else data.get("content"))
-        st = "err" if ("error" in typ.lower() or data.get("isError")) else "ok"
-        _add(nm, req, res, st)
+               else data.get("content") if data.get("content") is not None
+               else _msg.get("content"))
+        st = "err" if ("error" in typ.lower() or data.get("isError")
+                       or _msg.get("isError")
+                       or data.get("success") is False) else "ok"
+        _add(nm, req, res, st,
+             data.get("toolCallId") or _msg.get("toolCallId"))
 
     # ② مدخلةُ نصٍّ فيها محتوىً بأجزاء، وفيها toolCall/toolResult
     for item in (data.get("content") or obj.get("content") or []):
@@ -1277,7 +1290,8 @@ def _tool_events(obj):
         if it in ("toolCall", "tool_call", "tool_use"):
             _add(item.get("name") or item.get("toolName"),
                  item.get("input") if item.get("input") is not None
-                 else item.get("arguments"), None, "ok")
+                 else item.get("arguments"), None, "ok",
+                 item.get("id") or item.get("toolCallId"))
         elif it in ("toolResult", "tool_result"):
             # نتيجةٌ تُلحَق بآخرِ نداءٍ بلا نتيجة
             for prev in reversed(out):
@@ -1291,10 +1305,117 @@ def _tool_events(obj):
     return out
 
 
+def _merge_calls(calls):
+    """نداءٌ واحدٌ لكلِّ `toolCallId` — طلبُه ونتيجتُه في صفٍّ واحد.
+
+    قِيس: نداءٌ واحدٌ لـexec ظهر ثلاثَ بطاقات — اثنتان بالطلب وحدَه (المحرّكُ
+    يسجّله من المحضر ومن التشغيل) وواحدةٌ بالنتيجة وحدَها. وعلى هاتف
+    المستخدم: ٢٧ صفّاً لمحادثةٍ واحدة. وما لا معرّفَ له يبقى كما هو."""
+    merged, by = [], {}
+    for c in calls or []:
+        k = c.get("id")
+        if not k:
+            merged.append(c)
+            continue
+        m = by.get(k)
+        if m is None:
+            by[k] = dict(c)
+            merged.append(by[k])
+            continue
+        if m.get("request") is None and c.get("request") is not None:
+            m["request"] = c["request"]
+        if m.get("response") is None and c.get("response") is not None:
+            m["response"] = c["response"]
+        if c.get("status") == "err":
+            m["status"] = "err"
+    return merged
+
+
+def _event_ms(ev):
+    """زمنُ الحدث بالميلي‌ثانية من `ts` (ISO) — أو None."""
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(
+            str(ev.get("ts")).replace("Z", "+00:00")).timestamp() * 1000.0
+    except Exception:
+        return None
+
+
+def trajectory_turn(session, since_ms=None, agent="main", timeout=90):
+    """أدواتُ **نوبةٍ واحدة** من هذه الجلسة. dict، ولا يرفع استثناءً.
+
+    `export-trajectory` يُخرج المحادثةَ كلَّها لا النوبةَ الأخيرة — قِيس:
+    رسالةٌ ثانيةٌ بلا أيّ أداةٍ عُرضت لها أدواتُ الأولى. والمحرّكُ يفصل
+    النوبات بحدث `user.message`. فالنوبةُ: من رسالة المستخدم التي بعد
+    `since_ms` (أو الأخيرة) إلى التي تليها.
+
+    يعيد {ok, calls, error}. ok=False حين تعذّر التصدير — لا حين لم تُستعمل
+    أداة (تلك calls=[] وok=True)."""
+    try:
+        os.makedirs(TRAJ_DIR, exist_ok=True)
+        code, out, err = run(["sessions", "export-trajectory",
+                              "--session-key", session_key(session, agent),
+                              "--json", "--workspace", TRAJ_DIR],
+                             timeout=timeout)
+        if code != 0 or not out.strip():
+            return {"ok": False, "calls": [],
+                    "error": _real_error(err) or _real_error(out)
+                    or "export-trajectory رمز %s" % code}
+        import json as _j
+        d = _j.loads(out[out.find("{"):out.rfind("}") + 1])
+        if not isinstance(d, dict) or d.get("ok") is False:
+            return {"ok": False, "calls": [], "error": "تصديرٌ فاشل"}
+        ev = os.path.join(d.get("outputDir") or "", "events.jsonl")
+        if not os.path.isfile(ev):
+            return {"ok": False, "calls": [], "error": "لا events.jsonl"}
+        events = []
+        with open(ev, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        events.append(_j.loads(line))
+                    except Exception:
+                        continue
+        starts = [i for i, e in enumerate(events)
+                  if isinstance(e, dict) and e.get("type") == "user.message"]
+        a = 0
+        if starts:
+            a = starts[-1]
+            if since_ms:
+                # الأقربُ زمناً إلى لحظة الإرسال — لا «أوّلُ ما بعد since
+                # ناقصَ فسحة»: رسالتان متتاليتان بينهما ثوانٍ فأخذت الفسحةُ
+                # الأولى للثانية (قِيس في المتصفّح). وساعةُ المتصفّح وساعةُ
+                # المحرّك على جهازٍ واحد، فالأقربُ هو هو.
+                _best = None
+                for i in starts:
+                    ms = _event_ms(events[i])
+                    if ms is None:
+                        continue
+                    dist = abs(ms - float(since_ms))
+                    if _best is None or dist < _best[0]:
+                        _best = (dist, i)
+                if _best is not None:
+                    a = _best[1]
+        b = next((i for i in starts if i > a), len(events))
+        calls = []
+        for e in events[a:b]:
+            try:
+                calls.extend(_tool_events(e))
+            except Exception:
+                continue
+        return {"ok": True, "calls": _merge_calls(calls), "error": ""}
+    except Exception as e:
+        return {"ok": False, "calls": [],
+                "error": "%s: %s" % (type(e).__name__, str(e)[:160])}
+
+
 def trajectory(session, agent="main", timeout=90):
     """استدعاءاتُ الأدوات في نوبةِ هذه الجلسة. قائمةٌ (قد تكون فارغة).
 
-    لا ترفع استثناءً، ولا تُبطئ الجواب: تُنادى **بعد** أن يُسلَّم الردّ."""
+    لا ترفع استثناءً، ولا تُبطئ الجواب: تُنادى **بعد** أن يُسلَّم الردّ.
+    (المحادثةُ كلُّها كما كانت — والصفوفُ الآن مدموجةٌ نداءً بنتيجته. ولنوبةٍ
+    واحدة: `trajectory_turn`.)"""
     try:
         os.makedirs(TRAJ_DIR, exist_ok=True)
         code, out, err = run(["sessions", "export-trajectory",
@@ -1320,7 +1441,7 @@ def trajectory(session, agent="main", timeout=90):
                     calls.extend(_tool_events(_j.loads(line)))
                 except Exception:
                     continue
-        return calls
+        return _merge_calls(calls)
     except Exception:
         return []
 
