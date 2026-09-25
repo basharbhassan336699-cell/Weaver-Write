@@ -76,6 +76,45 @@ open(os.path.join(_d, "dist", "cli-startup-metadata.json"), "w").write(
 ok("ناتجٌ غيرُ صالح ⟵ لا يُكتب", H.patch_file(
     os.path.join(_d, "dist", "cli-startup-metadata.json"))[0] == "bad")
 
+print("\n— سطرُ «Usage:» الحيّ — عند العرض فقط —")
+_FN = ('function formatProgramHelpOutput(str) {\n\tlet output = str;\n'
+       '\tif (x) output = y;\n' + H.USAGE_ANCHOR
+       + '.replace(/^Options:/gm, "O");\n}\nprogram.name(CLI_NAME);\n')
+_n, _st = H.patch_usage_text(_FN)
+ok("المرساةُ موجودة ⟵ سطرٌ واحدٌ يُضاف قبلها", _st == "patched"
+   and _n.count(H.USAGE_MARK) == 1
+   and _n.index(H.USAGE_MARK) < _n.index(H.USAGE_ANCHOR))
+ok("  ⟵ وCLI_NAME لا يُمَسّ (العمليّاتُ وإكمالُ الصدفة)",
+   "program.name(CLI_NAME);" in _n)
+ok("  ⟵ وبعد فحص سطر الجذر (فيبقى تلميحُه)",
+   _n.index("if (x)") < _n.index(H.USAGE_MARK))
+ok("عديمُ الأثر إن أُعيد", H.patch_usage_text(_n) == (_n, "already"))
+ok("المرساةُ غائبة (إصدارٌ آخر) ⟵ لا يُمَسّ",
+   H.patch_usage_text("function formatProgramHelpOutput(s) {}")[1] == "absent")
+ok("والتبديلُ لا يعيد تسميةَ ما أضافه (RX لا يطابقه)",
+   H.rebrand_help(H.USAGE_LINE)[1] == 0)
+# السطرُ JavaScript صالحٌ ويفعل المطلوب — بـnode إن وُجد.
+import shutil as _sh
+import subprocess as _sp
+_node = os.environ.get("WEAVER_NODE") or _sh.which("node")
+if _node:
+    _js = ("let output = 'Usage: openclaw [options] [command]\\n"
+           "Usage: openclaw gateway [options]\\n  openclaw.json stays';\n"
+           + H.USAGE_LINE + "process.stdout.write(output);")
+    _r = _sp.run([_node, "-e", _js], capture_output=True, text=True, timeout=60)
+    ok("node: الجذرُ والفرعيُّ ⟵ «Usage: weaver core …»، وغيرُهما كما هو",
+       _r.stdout == "Usage: weaver core [options] [command]\n"
+       "Usage: weaver core gateway [options]\n  openclaw.json stays",
+       (_r.stdout, _r.stderr[:200]))
+else:
+    print("  – node غيرُ موجود — فحصُ JavaScript تُخطّي")
+_d2 = tempfile.mkdtemp()
+os.makedirs(os.path.join(_d2, "dist"))
+open(os.path.join(_d2, "dist", "help-Z.mjs"), "w").write(_FN)
+ok("patch_usage على مجلّد ⟵ patched ثمّ already",
+   H.patch_usage(_d2)[0] == "patched" and H.patch_usage(_d2)[0] == "already")
+ok("  ⟵ وبلا ملفّ الدالّة ⟵ bad بلا لمس", H.patch_usage(_d)[0] == "bad")
+
 print("\n— الوصل —")
 _pp = open(os.path.join(_ROOT, "engines", "weaver-core", "patch_portability.py"),
            encoding="utf-8").read()

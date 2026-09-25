@@ -42,6 +42,52 @@ LITERALS = (("use `openclaw qr` instead", "use `weaver core qr` instead"),)
 LITERAL_GLOB = ("dist/argv-*.mjs", "dist/devices-cli-*.mjs")
 
 
+# وسطرُ «Usage:» نفسُه لا يأتي من النصوص المطبوخة: المحرّكُ يرسمه حيّاً من
+# `program.name(CLI_NAME)` (قِيس على المحرّك الحقيقيّ: الأمثلةُ صارت
+# «weaver core …» وبقي «Usage: openclaw [options] [command]»). وتغييرُ
+# CLI_NAME خطر: يسمّي به العمليّاتِ (process.title) وإكمالَ الصدفة، واسمٌ فيه
+# مسافةٌ يكسر الإكمال. فيُبدَّل **عند العرض فقط**: للمحرّك دالّةٌ تمرّ بها كلُّ
+# مساعدةٍ قبل طباعتها (formatProgramHelpOutput)، يُضاف فيها سطرٌ واحد — بعد
+# فحصه لسطر الجذر، فيبقى تلميحُه كما كان.
+USAGE_ANCHOR = ('\treturn output.replace(/^Usage:/gm, theme.heading("Usage:"))')
+USAGE_MARK = "/*weaver-usage*/"
+USAGE_LINE = ('\toutput = output.replace(/^(Usage:\\s+)openclaw(?=\\s)/gm, '
+              '"$1weaver core"); ' + USAGE_MARK + "\n")
+
+
+def patch_usage_text(text):
+    """(النصّ، الحالة): patched · already · absent (المرساةُ ليست مرّةً واحدة)."""
+    if USAGE_MARK in text:
+        return text, "already"
+    if text.count(USAGE_ANCHOR) != 1 or "function formatProgramHelpOutput(" \
+            not in text:
+        return text, "absent"
+    return text.replace(USAGE_ANCHOR, USAGE_LINE + USAGE_ANCHOR), "patched"
+
+
+def patch_usage(root, check=False):
+    """(الحالة، الرسالة). يلمس ملفَّ help-*.mjs الذي فيه الدالّةُ وحده."""
+    files = [p for p in sorted(glob.glob(os.path.join(root, "dist", "help-*.mjs")))
+             if "function formatProgramHelpOutput(" in
+             open(p, encoding="utf-8", errors="replace").read()]
+    if len(files) != 1:
+        return "bad", "دالّةُ عرض المساعدة غيرُ موجودة — تغيّر الإصدار؟ لم يُمَسّ"
+    p = files[0]
+    src = open(p, encoding="utf-8").read()
+    new, st = patch_usage_text(src)
+    if st == "already":
+        return "already", os.path.relpath(p, root) + " — سطرُ Usage مُبدَّلٌ سلفاً"
+    if st == "absent":
+        return "bad", os.path.relpath(p, root) + " — المرساةُ تغيّرت، لم يُمَسّ"
+    if check:
+        return "patched", os.path.relpath(p, root) + " — قابلٌ للتبديل (فحصٌ فقط)"
+    tmp = p + ".tmp-rebrand"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(new)
+    os.replace(tmp, p)
+    return "patched", os.path.relpath(p, root) + " — Usage: weaver core"
+
+
 def rebrand_help(text):
     """(النصُّ الجديد، عددُ المواضع)."""
     return RX.subn(NEW, text)
@@ -103,6 +149,13 @@ def apply(root, check=False, say=print):
             say("    %s %s  — %s%s" % (mark, os.path.relpath(p, root), msg,
                                       (" (%d)" % n) if n else ""))
             good = good and st != "bad"
+        # سطرُ Usage الحيّ — تجميليّ: فشلُه يُقال ولا يُفشل الباقي.
+        try:
+            st, msg = patch_usage(root, check)
+            say("    %s %s" % ({"patched": "✓", "already": "·",
+                                "bad": "؟"}[st], msg))
+        except Exception as e:
+            say("    ؟ سطرُ Usage: %s" % type(e).__name__)
         return good
     except Exception as e:
         say("    ✗ %s: %s" % (type(e).__name__, str(e)[:120]))
