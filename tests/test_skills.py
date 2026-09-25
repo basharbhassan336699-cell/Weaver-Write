@@ -38,7 +38,7 @@ def ok(name, cond, extra=""):
 
 
 WANT = ("detect-ai", "fix-conclusion", "humanize-ar", "check-plagiarism",
-        "academic-humanize", "voice-inject")
+        "academic-humanize", "voice-inject", "cite-pages")
 BODY = {}
 for n in WANT:
     p = os.path.join(wc.SKILLS_SRC, n, "SKILL.md")
@@ -66,6 +66,19 @@ for n in WANT:
     ok("  ⟵ وبالعربيّة والإنجليزيّة معاً",
        any("؀" <= c <= "ۿ" for c in d)
        and any("a" <= c.lower() <= "z" for c in d))
+
+print("\n— cite-pages: رقمُ الصفحة يُقرأ ولا يُخمَّن —")
+_cp = " ".join(BODY["cite-pages"].split())
+ok("cite-pages: يشغّل القارئَ الموجود (pipeline/pdf_pages.py)",
+   "{{WEAVER}}/pipeline/pdf_pages.py" in _cp
+   and os.path.isfile(os.path.join(wc._ROOT, "pipeline", "pdf_pages.py")))
+ok("  ⟵ من رابطٍ مباشرةً، ومن ملفِّ المستخدم", "ينزّل الملفَّ بنفسه" in _cp
+   and "أرسله المستخدمُ" in _cp)
+ok("  ⟵ ويتحقّق من صفحة الاقتباس المباشر (--find)", "--find" in _cp)
+ok("  ⟵ ولا رقمَ لصفحة ويب أو ملخّص", "بلا رقم" in _cp)
+ok("  ⟵ والرقمُ المطبوعُ أولى من ترتيب الملفّ", "المطبوع" in _cp)
+ok("  ⟵ وصفحاتُ OCR يُحذَر من أرقامها", "[OCR]" in _cp)
+ok("  ⟵ والممنوع: رقمٌ لم يُقرأ", "رقمُ صفحةٍ لم تقرأه" in _cp)
 
 print("\n— الحدود: كلُّ مهارةٍ تقول متى لا تُستدعى —")
 ok("detect-ai: قياسٌ لا إعادةُ صياغة", "لا تُعد صياغةَ شيء" in BODY["detect-ai"])

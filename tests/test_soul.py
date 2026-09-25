@@ -59,7 +59,19 @@ ok("  ⟵ «مرّةً واحدة» للفحص ولإعادته — لا دور�
    _s9.count("مرّةً واحدة") >= 2, _s9.count("مرّةً واحدة"))
 ok("  ⟵ ويُبقي الاستشهاد", "إبقاء استشهاده" in _s9)
 ok("  ⟵ ويُخبر المستخدم", "أخبر المستخدمَ" in _s9)
-ok("  ⟵ وهو آخرُ قسم (لم يُمَسّ ما قبله)", TXT.rstrip().endswith("في سطر."))
+ok("  ⟵ ولم يُمَسّ (يُختم كما كان)",
+   TXT.split("\n## ١٠)")[0].rstrip().endswith("في سطر."))
+
+print("\n— القسم ١٠: رقمُ الصفحة يُقرأ ولا يُخمَّن —")
+_s10 = " ".join(TXT.split("## ١٠)")[1].split()) if "## ١٠)" in TXT else ""
+ok("القسمُ ١٠ موجود، وهو آخرُ قسم", bool(_s10)
+   and TXT.rstrip().endswith("بـcite-pages."))
+ok("  ⟵ يسمّي مهارةً موجودةً فعلاً", "cite-pages" in _s10
+   and "cite-pages" in wc._skill_names())
+ok("  ⟵ «لا تكتبه إن لم تقرأه»", "لا تكتبه إن لم تقرأه" in _s10)
+ok("  ⟵ ونسخةُ ما قبله معروفة (تُرقّى بلا --force)",
+   wc._soul_hash(TXT.split("\n## ١٠)")[0]) in wc._SOUL_PAST,
+   wc._soul_hash(TXT.split("\n## ١٠)")[0]))
 
 print("\n— الترقية: نسخُنا السابقةُ تُرقّى، وتحريرُك محميّ —")
 import tempfile as _tf

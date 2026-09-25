@@ -2443,6 +2443,7 @@ _SOUL_PAST = frozenset((
     "d44a1c2b95460bfe",   # 56cfd7b  2026-09-21
     "f1d886175e9212a2",   # e872d67  2026-09-22
     "68b9d255a9243545",   # 1c38256  2026-09-22  (قبل القسم ٩)
+    "5995cedc705e0b60",   # a5abe0d  2026-09-25  (قبل القسم ١٠)
 ))
 
 
@@ -2605,6 +2606,7 @@ _SKILLS_PAST = {
     "humanize-ar": frozenset(("6c8ccf15bb195da7",)),        # d9040e8
     "academic-humanize": frozenset(("a7d250e53ae28cad",)),
     "voice-inject": frozenset(("1a65e524a5181b3c",)),
+    "cite-pages": frozenset(("f768f1146ffccc55",)),
 }
 
 
@@ -2863,9 +2865,15 @@ _SKILL_PROBES["voice-inject"] = (
     "قادراً على حضور المحاضرات من منزله. وقد أتاح ذلك فرصاً جديدةً لفئاتٍ لم تكن "
     "تستطيع السفرَ إلى المدن الكبرى. لكنّ جودةَ التفاعل ما زالت موضعَ نقاش.")
 
+# ملفُّ بحثٍ «مرفوع» من ٣ صفحات، في كلِّ صفحةٍ علامتُها — والسؤالُ عن صفحةِ
+# إحداها. لا يذكر المهارة؛ والحقيقةُ معروفة: bravo في ص. ٢.
+_SKILL_PROBES["cite-pages"] = (
+    "رفعتُ لك ملفَّ بحثٍ PDF:\n{dir}/pages.pdf\n\n"
+    "في أيّ صفحةٍ منه وردت كلمة «bravo»؟ أريد أن أستشهدَ بها برقم الصفحة.")
+
 # ملفّاتُ الحالة الواقعيّة — تُنسخ إلى مساحة العمل قبل النوبة وتُحذف بعدها.
 PROBES_DIR = os.path.join(_ROOT, "engines", "weaver-core", "probes")
-_PROBE_FILES = {"check-plagiarism": "plagiarism"}
+_PROBE_FILES = {"check-plagiarism": "plagiarism", "cite-pages": "pdf"}
 
 
 def _probe_setup(target):
