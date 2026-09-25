@@ -50,7 +50,7 @@ def _import(name, vendored=False):
     try:
         m = __import__(name)
         return m, str(getattr(m, "__version__", getattr(m, "VersionBind", "")) or "✓")
-    except Exception as e:
+    except BaseException as e:      # pypdf قد يرفع PanicException (من Rust)
         return None, "%s: %s" % (type(e).__name__, str(e)[:80])
     finally:
         if added:
@@ -118,7 +118,7 @@ def _try(label, fn):
     try:
         texts = fn()
         ok, why = _pages_ok(texts)
-    except Exception as e:
+    except BaseException as e:
         ok, why = False, "%s: %s" % (type(e).__name__, str(e)[:100])
     say("  %s %-32s %s" % ("✓" if ok else "✗", label, why))
     if ok:
