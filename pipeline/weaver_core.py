@@ -2444,6 +2444,7 @@ _SOUL_PAST = frozenset((
     "f1d886175e9212a2",   # e872d67  2026-09-22
     "68b9d255a9243545",   # 1c38256  2026-09-22  (قبل القسم ٩)
     "5995cedc705e0b60",   # a5abe0d  2026-09-25  (قبل القسم ١٠)
+    "e2bd9c71dd146f4a",   # 3f3bca1  2026-09-25  (١٠ قبل «بطلبٍ فقط»)
 ))
 
 
@@ -2606,7 +2607,8 @@ _SKILLS_PAST = {
     "humanize-ar": frozenset(("6c8ccf15bb195da7",)),        # d9040e8
     "academic-humanize": frozenset(("a7d250e53ae28cad",)),
     "voice-inject": frozenset(("1a65e524a5181b3c",)),
-    "cite-pages": frozenset(("f768f1146ffccc55",)),
+    "cite-pages": frozenset(("f768f1146ffccc55",           # 3f3bca1
+                             "e218b5ba2ef94f05")),
 }
 
 
@@ -2871,6 +2873,13 @@ _SKILL_PROBES["cite-pages"] = (
     "رفعتُ لك ملفَّ بحثٍ PDF:\n{dir}/pages.pdf\n\n"
     "في أيّ صفحةٍ منه وردت كلمة «bravo»؟ أريد أن أستشهدَ بها برقم الصفحة.")
 
+# والاتّجاهُ المعاكس: المهارةُ بطلبٍ فقط. الملفُّ نفسُه، والطلبُ تلخيصٌ بلا
+# ذكرٍ للصفحة ⟵ النجاحُ ألّا يفتحها. (`--skills invoke cite-pages --not`)
+_SKILL_NEGATIVE = {
+    "cite-pages": ("رفعتُ لك ملفَّ بحثٍ PDF:\n{dir}/pages.pdf\n\n"
+                   "لخّصه لي في سطرين."),
+}
+
 # ملفّاتُ الحالة الواقعيّة — تُنسخ إلى مساحة العمل قبل النوبة وتُحذف بعدها.
 PROBES_DIR = os.path.join(_ROOT, "engines", "weaver-core", "probes")
 _PROBE_FILES = {"check-plagiarism": "plagiarism", "cite-pages": "pdf"}
@@ -2902,17 +2911,23 @@ def _probe_setup(target):
         return None, None
 
 
-def skills_invoke_test(prompt=None, timeout=None, target=None):
+def skills_invoke_test(prompt=None, timeout=None, target=None,
+                       negative=False):
     """أيستدعي النموذجُ مهارةً حين يجب؟ — من مسار النوبة، لا من الجواب.
 
     `target`: مهارةٌ بعينها — فيُعطى النموذجُ طلباً طبيعياً يناسبها
     (`_SKILL_PROBES`)، والنجاحُ أن يفتحها **هي**. وبلا `target`: كما كان
     حرفاً (طلبُ humanize-ar، والنجاحُ أيُّ مهارة).
 
+    `negative`: الاتّجاهُ المعاكس (`_SKILL_NEGATIVE`) — طلبٌ لا يستدعيها،
+    والنجاحُ ألّا يفتحها. مهارةٌ تعمل في كلِّ شيءٍ عطبٌ كمهارةٍ لا تعمل.
+
     يعيد {ok, measured, target, called:[], answer, trajectory:[], note,
     extra:{}}. و`extra` معلوماتٌ للعرض لا تدخل في الحكم."""
     sk = "skillinvoke-" + str(int(time.time()))
     _pdir, _truth = (None, None) if prompt else _probe_setup(target)
+    if negative and not prompt:
+        prompt = _SKILL_NEGATIVE.get(target or "")
     prompt = prompt or _SKILL_PROBES.get(target or "") or _SKILL_PROBE
     if "{dir}" in prompt:
         prompt = prompt.replace("{dir}", _pdir or "(تعذّر تجهيزُ الملفّات)")
@@ -2953,6 +2968,16 @@ def skills_invoke_test(prompt=None, timeout=None, target=None):
             shutil.rmtree(_pdir, ignore_errors=True)
         except Exception:
             pass
+    if target == "cite-pages" and ans:
+        import re as _re
+        _pg = _re.findall(r"(?:ص\.?|صفحة|الصفحة|p\.|page)\s*([0-9٠-٩]+)",
+                          ans, _re.I)
+        if negative:
+            extra["رقمُ صفحةٍ في الجواب (لم يُطلب)"] = bool(_pg)
+        else:
+            extra["الصفحةُ الصحيحة (٢)"] = any(
+                x.translate(str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")) == "2"
+                for x in _pg)
     if target == "fix-conclusion" and ans:
         extra["الفقرةُ الأولى لم تُمَسّ"] = _FIX_FIRST in ans
         import re as _re
@@ -2961,7 +2986,10 @@ def skills_invoke_test(prompt=None, timeout=None, target=None):
             _sc = soul_check(_paras[-1])
             extra["فاحصُ الدستور على آخر فقرة"] = (
                 "%s/100" % _sc.get("score") if isinstance(_sc, dict) else "—")
-    return {"ok": (target in hit) if target else bool(hit),
+    _ok = (target in hit) if target else bool(hit)
+    if negative and target:
+        _ok = _ran and target not in hit
+    return {"ok": _ok, "negative": bool(negative and target),
             "measured": _ran, "target": target or "",
             "called": hit, "answer": ans,
             "trajectory": [c.get("name") for c in calls if c.get("name")],
@@ -3343,7 +3371,15 @@ def _cli():
             print("  أيستدعي النموذجُ " + (("«%s»" % _tgt) if _tgt
                                          else "مهارةً")
                   + " حين يجب؟   (نداءُ نموذجٍ واحد)\n")
-            _r = skills_invoke_test(target=_tgt)
+            _neg = "--not" in argv
+            if _neg and _tgt not in _SKILL_NEGATIVE:
+                print("  لا طلبَ معاكساً لـ«%s» — المتاح: %s" % (
+                    _tgt, ", ".join(_SKILL_NEGATIVE)), file=sys.stderr)
+                sys.exit(2)
+            if _neg:
+                print("  والاتّجاهُ المعاكس: طلبٌ لا يستدعيها — النجاحُ ألّا "
+                      "يفتحها\n")
+            _r = skills_invoke_test(target=_tgt, negative=_neg)
             if _r.get("measured") is False:
                 print("  ⚠ لم يُقَس — النموذجُ لم يعمل، فلا دليلَ على المهارة.\n")
                 print("  السبب:")
@@ -3367,7 +3403,12 @@ def _cli():
                 print("\n  ⓘ " + str(_r["note"]))
             for _k, _v in (_r.get("extra") or {}).items():
                 print("  ⓘ %s: %s" % (_k, {True: "نعم", False: "لا"}.get(_v, _v)))
-            if _tgt:
+            if _tgt and _r.get("negative"):
+                print("\n  " + ("✓ لم يستدعِ «%s» — لم يُطلب منه" % _tgt
+                                 if _r["ok"] else
+                                 "✗ استدعى «%s» ولم يُطلب منه — وصفُها واسع"
+                                 % _tgt))
+            elif _tgt:
                 print("\n  " + ("✓ اختار «%s» بنفسه" % _tgt if _r["ok"] else
                                  "✗ لم يستدعِ «%s»" % _tgt
                                  + (" (استدعى غيرَها)" if _r["called"]

@@ -68,7 +68,12 @@ ok("القسمُ ١٠ موجود، وهو آخرُ قسم", bool(_s10)
    and TXT.rstrip().endswith("بـcite-pages."))
 ok("  ⟵ يسمّي مهارةً موجودةً فعلاً", "cite-pages" in _s10
    and "cite-pages" in wc._skill_names())
-ok("  ⟵ «لا تكتبه إن لم تقرأه»", "لا تكتبه إن لم تقرأه" in _s10)
+ok("  ⟵ بشرطين: بطلبٍ فقط، وبعد قراءته", "بطلبٍ فقط" in _s10
+   and "بعد قراءته" in _s10)
+_s10_v1 = TXT.split("\n## ١٠)")[0] + "\n## ١٠) رقمُ الصفحة\n" \
+    "لا تكتبه إن لم تقرأه بـcite-pages."
+ok("  ⟵ ونسختُه الأولى معروفة (تُرقّى بلا --force)",
+   wc._soul_hash(_s10_v1) in wc._SOUL_PAST, wc._soul_hash(_s10_v1))
 ok("  ⟵ ونسخةُ ما قبله معروفة (تُرقّى بلا --force)",
    wc._soul_hash(TXT.split("\n## ١٠)")[0]) in wc._SOUL_PAST,
    wc._soul_hash(TXT.split("\n## ١٠)")[0]))
