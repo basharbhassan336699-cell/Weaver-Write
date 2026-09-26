@@ -88,8 +88,22 @@ def _palette(theme, n):
         return [mc.to_hex((1 - i/(n-1)) * p + (i/(n-1)) * a) for i in range(n)]
 
 
+def _native_shaping():
+    """True when matplotlib shapes and orders RTL text itself (built with
+    libraqm, matplotlib >= 3.11). Measured: reshaping + get_display on top of
+    that reverses the text a second time (backwards, unjoined letters)."""
+    try:
+        from matplotlib import ft2font
+        return bool(getattr(ft2font, "__libraqm_version__", ""))
+    except Exception:
+        return False
+
+
 def _reshape_ar(labels):
-    """Reshape Arabic labels for correct display; pass through if libs absent."""
+    """Reshape Arabic labels for correct display; pass through if libs absent
+    or if matplotlib already shapes Arabic natively."""
+    if _native_shaping():
+        return [str(l) for l in labels]
     try:
         import arabic_reshaper
         from bidi.algorithm import get_display
