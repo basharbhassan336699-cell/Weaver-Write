@@ -1861,23 +1861,37 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
             _engine_fail(_wc.why_unavailable())
             return None
         parts = []
+        # لغةُ الغلاف تتبع لغةَ رسالة المستخدم. قِيس على هاتفه: كتب بالإنجليزيّة
+        # فجاء الردُّ بالعربيّة — والغلافُ كلُّه عربيّ («[الطلب]»، «[ذاكرة]»،
+        # وسطرُ مجلّد العمل)، فيرى النموذجُ رسالةً أغلبُها عربيّ. والدستورُ
+        # يقول «اكتب بلغة المستخدم». العربيّةُ كما كانت حرفاً.
+        _ar = any("\u0600" <= ch <= "\u06ff" for ch in str(message or "")[:400])
+        _L = ({"mem": "[ذاكرة]", "ctx": "[سياق]", "att": "[مرفقات]",
+               "req": "[الطلب]"} if _ar else
+              {"mem": "[Memory]", "ctx": "[Context]", "att": "[Attachments]",
+               "req": "[Request]"})
         if memory and str(memory).strip():
-            parts.append("[ذاكرة]\n" + str(memory).strip()[:4000])
+            parts.append(_L["mem"] + "\n" + str(memory).strip()[:4000])
         if context and str(context).strip():
-            parts.append("[سياق]\n" + str(context).strip()[:4000])
+            parts.append(_L["ctx"] + "\n" + str(context).strip()[:4000])
         for h in (history or [])[-6:]:
             if isinstance(h, dict) and h.get("content"):
                 parts.append(f"{h.get('role', 'user')}: "
                              + str(h["content"])[:1200])
         if attachments and str(attachments).strip():
-            parts.append("[مرفقات]\n" + str(attachments).strip()[:8000])
+            parts.append(_L["att"] + "\n" + str(attachments).strip()[:8000])
         # مجلّدُ عمل هذه المحادثة: ملفّاتُها ومسوّداتُ مهاراتها فيه وحدَه.
         _cdir = _chat_dir_ensure(session) if session else ""
-        if _cdir:
+        if _cdir and _ar:
             parts.append("[مجلّد العمل]\n" + _cdir + "/ — اكتب فيه كلَّ ملفٍّ "
                          "تُنشئه في هذه المحادثة (المستنداتِ والمسوّدات)، "
                          "لا في جذر مساحة العمل.")
-        parts.append("[الطلب]\n" + str(message or ""))
+        elif _cdir:
+            # «مجلّد العمل» باقٍ في العنوان: المهاراتُ تُحيل إليه بهذا الاسم.
+            parts.append("[Working folder / مجلّد العمل]\n" + _cdir + "/ — "
+                         "write every file you create in this chat here "
+                         "(documents and drafts), not in the workspace root.")
+        parts.append(_L["req"] + "\n" + str(message or ""))
         # مهلةٌ أوسع من مهلة النداء المباشر: المحرّكُ وكيلٌ يفتح صفحاتٍ
         # ويُعيد المحاولة، فـ١٢٠ ثانيةً تكفي نداءً واحداً ولا تكفي نوبةً
         # متعدّدةَ الأدوات على هاتف. وانتهاؤها لا يُضيع الطلب: يعود None

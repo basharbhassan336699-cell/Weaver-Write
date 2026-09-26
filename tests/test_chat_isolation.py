@@ -69,6 +69,18 @@ try:
     ok("  ⟵ والمجلّدُ أُنشئ", os.path.isdir(os.path.join(WS, "chats", "chatA")))
     S._chat_via_engine("سؤال", session=None)
     ok("بلا محادثة ⟵ لا سطر (كما كان)", "[مجلّد العمل]" not in _seen["text"])
+    # قِيس على الهاتف: كتب بالإنجليزيّة فردّ بالعربيّة — الغلافُ كان عربيّاً.
+    S._chat_via_engine("Search the news and save it in news.md",
+                       session="chatE", memory="الاسم: MBH")
+    _tx = _seen["text"]
+    ok("رسالةٌ إنجليزيّة ⟵ غلافٌ إنجليزيّ ([Request] · [Memory])",
+       "[Request]\nSearch the news" in _tx and "[Memory]" in _tx
+       and "[الطلب]" not in _tx and "[ذاكرة]" not in _tx, _tx[-300:])
+    ok("  ⟵ وسطرُ المجلّد بالإنجليزيّة مع اسمه الذي تُحيل إليه المهارات",
+       "[Working folder / مجلّد العمل]\nchats/chatE/ — write every file" in _tx)
+    S._chat_via_engine("اكتب", session="chatA", memory="x")
+    ok("رسالةٌ عربيّة ⟵ الغلافُ كما كان حرفاً",
+       "[ذاكرة]\nx" in _seen["text"] and "[الطلب]\nاكتب" in _seen["text"])
 finally:
     for n, f in _rw.items():
         setattr(W, n, f)
