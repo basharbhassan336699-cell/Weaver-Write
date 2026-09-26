@@ -1112,6 +1112,153 @@ def _session_id(key):
     return ("weaver-" + k) if k else "weaver-default"
 
 
+# ── عمليةٌ مقيمةٌ واحدة لكلِّ النوبات (engines/weaver-core/gateway_worker.mjs) ──
+#
+# كان كلُّ ردٍّ عبر البوّابة يُقلع عمليةَ node كاملة (`agent -m …`). قِيس على
+# هاتف المستخدم (Android 15، ذاكرةٌ 3.7 GB): خمسُ محادثاتٍ معاً ⟵ خمسُ عمليّات
+# ⟵ نفدت الذاكرةُ فقتل أندرويد Termux كلَّه (برامجُ المحرّك بعدها: 0).
+# العمليةُ المقيمةُ تُقلع مرّةً وتستعمل دالّةَ المحرّك نفسَها (agentCliCommand)،
+# فتجري النوباتُ المتزامنةُ داخلها. وأيُّ عجزٍ فيها ⟵ سطرُ الأوامر كما كان حرفاً.
+# `WEAVER_GATEWAY_WORKER=off` تُطفئها.
+WORKER_JS = os.path.join(_ROOT, "engines", "weaver-core", "gateway_worker.mjs")
+WORKER_LOG = os.path.join(STATE, "gateway-worker.log")
+import threading as _thr_worker
+_WORKER = {"proc": None, "port": None, "failed_at": 0.0, "why": "",
+           "lock": _thr_worker.Lock()}
+
+
+def worker_on():
+    return (os.environ.get("WEAVER_GATEWAY_WORKER", "on") or "on").strip() \
+        .lower() not in ("0", "off", "false", "no")
+
+
+def _worker_health(port, timeout=3):
+    try:
+        import urllib.request as _u
+        import json as _j
+        with _u.urlopen("http://127.0.0.1:%d/health" % port,
+                        timeout=timeout) as r:
+            return bool(_j.loads(r.read().decode("utf-8")).get("ok"))
+    except Exception:
+        return False
+
+
+def worker_port():
+    """منفذُ العملية المقيمة — تُقلَع إن لم تكن حيّة. None عند العجز. لا يرفع."""
+    if not worker_on() or not os.path.isfile(WORKER_JS) or not available():
+        return None
+    with _WORKER["lock"]:
+        p, port = _WORKER["proc"], _WORKER["port"]
+        if p is not None and p.poll() is None and port and _worker_health(port):
+            return port
+        if p is not None and p.poll() is None:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        _WORKER["proc"] = _WORKER["port"] = None
+        # فشلٌ حديث ⟵ لا يُعاد الإقلاعُ في كلِّ رسالة (١٠ دقائق)، والسطرُ يعمل.
+        if _WORKER["failed_at"] and time.time() - _WORKER["failed_at"] < 600:
+            return None
+        nb = node_bin()
+        if not nb:
+            return None
+        try:
+            os.makedirs(STATE, exist_ok=True)
+            log = open(WORKER_LOG, "ab")
+            p = subprocess.Popen([nb, WORKER_JS, RUNTIME], cwd=_ROOT,
+                                 env=engine_env(), stdout=subprocess.PIPE,
+                                 stderr=log, stdin=subprocess.DEVNULL)
+        except Exception as e:
+            _WORKER.update(failed_at=time.time(), why=str(e)[:200])
+            return None
+        import queue as _q
+        box = _q.Queue()
+        _thr_worker.Thread(target=lambda: box.put(p.stdout.readline()),
+                           daemon=True).start()
+        try:
+            line = box.get(timeout=max(60, min(_GW_READY_WAIT, 300)))
+        except Exception:
+            line = b""
+        line = (line or b"").decode("utf-8", "replace").strip()
+        if line.startswith("READY "):
+            try:
+                _WORKER.update(proc=p, port=int(line.split()[1]),
+                               failed_at=0.0, why="")
+                return _WORKER["port"]
+            except Exception:
+                pass
+        try:
+            p.terminate()
+        except Exception:
+            pass
+        _WORKER.update(failed_at=time.time(),
+                       why=(line or "لم تُقلع في المهلة")[:200])
+        _record_run(["gateway-worker"], 1, "", _WORKER["why"])
+        return None
+
+
+def worker_stop():
+    with _WORKER["lock"]:
+        p = _WORKER["proc"]
+        _WORKER["proc"] = _WORKER["port"] = None
+    if p is not None and p.poll() is None:
+        try:
+            p.terminate()
+            p.wait(timeout=10)
+        except Exception:
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+
+import atexit as _atexit_worker
+_atexit_worker.register(worker_stop)
+
+
+def _worker_agent(req, timeout):
+    """نوبةٌ عبر العملية المقيمة ⟵ (رمز، خرج، خطأ) بشكل run() نفسِه.
+
+    None ⟵ لم تصل النوبةُ إليها أصلاً (لا عملية، أو رُفض الاتّصال) فيتولّى
+    سطرُ الأوامر. وما وصلها ثمّ فشل لا يُعاد بالسطر — كي لا تُنفَّذ النوبةُ
+    مرّتين."""
+    port = worker_port()
+    if not port:
+        return None
+    import json as _j
+    import urllib.request as _u
+    import urllib.error as _ue
+    import socket as _sock
+    body = _j.dumps({k: v for k, v in req.items() if v}).encode("utf-8")
+    rq = _u.Request("http://127.0.0.1:%d/agent" % port, data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST")
+    try:
+        with _u.urlopen(rq, timeout=timeout) as r:
+            d = _j.loads(r.read().decode("utf-8"))
+    except _ue.URLError as e:
+        if isinstance(getattr(e, "reason", None), ConnectionRefusedError):
+            return None
+        if isinstance(getattr(e, "reason", None), (_sock.timeout, TimeoutError)):
+            return 124, "", "تجاوز المهلة (%s ثانية)" % timeout
+        return 1, "", "العملية المقيمة: %s" % str(e)[:300]
+    except (_sock.timeout, TimeoutError):
+        return 124, "", "تجاوز المهلة (%s ثانية)" % timeout
+    except ConnectionRefusedError:
+        return None
+    except Exception as e:
+        return 1, "", "العملية المقيمة: %s: %s" % (type(e).__name__, str(e)[:300])
+    args = ["agent(worker)", "-m", str(req.get("message") or "")[:200]]
+    if d.get("ok"):
+        out = _j.dumps(d.get("json"), ensure_ascii=False, indent=2)
+        _record_run(args, 0, out, "")
+        return 0, out, ""
+    err = str(d.get("error") or "العملية المقيمة لم تُجب")
+    _record_run(args, 1, "", err)
+    return 1, "", err
+
+
 def ask(text, timeout=None, cwd=None, fallback=True, session=None):
     """اسأل — بالمحرّك إن أمكن، وإلّا بالمسار البايثونيّ.
 
@@ -1183,7 +1330,18 @@ def ask(text, timeout=None, cwd=None, fallback=True, session=None):
             # بلا هذا يسقط المحرّكُ إلى نموذجه الافتراضيّ (openai/…) ثمّ
             # يفشل بـauth — وهو بالضبط ما رآه المستخدم.
             args += ["--model", _m]
-        code, out, err = run(args, timeout=_wall, cwd=cwd)
+        _wr = None
+        if _via_gateway and worker_on():
+            # عمليةٌ مقيمةٌ واحدة لكلِّ المحادثات بدل عمليةٍ لكلِّ رد.
+            _wr = _worker_agent({"message": str(text or ""),
+                                 "sessionId": (_session_id(session)
+                                               if session else ""),
+                                 "timeout": _to, "model": _m or ""},
+                                timeout=_wall)
+        if _wr is not None:
+            code, out, err = _wr
+        else:
+            code, out, err = run(args, timeout=_wall, cwd=cwd)
         if code == 0 and out.strip():
             return {"answer": _from_envelope(out), "engine": "weaver-core",
                     "note": ""}
