@@ -11,6 +11,8 @@ tools/probe_last_turn.py — ما سجّله المحرّكُ في آخر محا
     بطاقتُها، بان هنا: حدثٌ موجودٌ بشكلٍ لا تلتقطه البطاقات.
 
     cd ~/weaver-write && python3 tools/probe_last_turn.py [عدد النوبات=3]
+    cd ~/weaver-write && python3 tools/probe_last_turn.py --find "عبارة"
+        ⟵ المحادثةُ التي فيها العبارةُ (من أحدث ١٥ جلسة)، لا أحدثُها فقط.
 """
 import collections
 import json
@@ -37,8 +39,27 @@ def _user_text(e):
     return ""
 
 
+def _export(W, key):
+    """أحداثُ جلسةٍ من مسارها المصدَّر، أو None."""
+    os.makedirs(W.TRAJ_DIR, exist_ok=True)
+    c, o, e = W.run(["sessions", "export-trajectory", "--session-key", key,
+                     "--json", "--workspace", W.TRAJ_DIR], timeout=180)
+    try:
+        d = json.loads(o[o.find("{"):o.rfind("}") + 1])
+        ev = os.path.join(d.get("outputDir") or "", "events.jsonl")
+        return [json.loads(ln) for ln in open(ev, encoding="utf-8",
+                                              errors="replace") if ln.strip()]
+    except Exception:
+        return None
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    find = ""
+    if "--find" in argv:
+        i = argv.index("--find")
+        find = argv[i + 1] if i + 1 < len(argv) else ""
+        argv = argv[:i] + argv[i + 2:]
     n = int(argv[0]) if argv and argv[0].isdigit() else 3
     from pipeline import weaver_core as W
     if not W.available():
@@ -54,18 +75,25 @@ def main(argv=None):
         print("✗ لا جلساتَ بعد — أرسل رسالةً من الواجهة ثمّ أعِد")
         return 2
     ss.sort(key=lambda s: -(s.get("updatedAt") or 0))
-    key = ss[0].get("key") or ""
+    key, events = "", None
+    if find:
+        # كلُّ تصديرٍ ~٣٠ ثانيةً على الهاتف — فالأحدثُ أوّلاً، ويتوقّف عند أوّل تطابق.
+        for s in ss[:15]:
+            evs = _export(W, s.get("key") or "")
+            if evs and any(find in _user_text(x) for x in evs
+                           if isinstance(x, dict)
+                           and x.get("type") == "user.message"):
+                key, events = s.get("key") or "", evs
+                break
+        if not key:
+            print("✗ لا محادثةَ في أحدث ١٥ جلسةً فيها: «%s»" % find)
+            return 2
+    else:
+        key = ss[0].get("key") or ""
+        events = _export(W, key)
     print("الجلسة: " + key)
-    os.makedirs(W.TRAJ_DIR, exist_ok=True)
-    c, o, e = W.run(["sessions", "export-trajectory", "--session-key", key,
-                     "--json", "--workspace", W.TRAJ_DIR], timeout=180)
-    try:
-        d = json.loads(o[o.find("{"):o.rfind("}") + 1])
-        ev = os.path.join(d.get("outputDir") or "", "events.jsonl")
-        events = [json.loads(ln) for ln in open(ev, encoding="utf-8",
-                                                errors="replace") if ln.strip()]
-    except Exception as x:
-        print("✗ تعذّر التصدير: %s %s" % (type(x).__name__, (e or o)[:200]))
+    if events is None:
+        print("✗ تعذّر التصدير")
         return 2
     starts = [i for i, x in enumerate(events)
               if isinstance(x, dict) and x.get("type") == "user.message"]

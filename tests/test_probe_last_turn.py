@@ -77,6 +77,33 @@ try:
     ok("قراءةٌ فقط: لا config set/patch",
        not any(a[:2] in (["config", "set"], ["config", "patch"])
                for a in _calls))
+    # --find: المحادثةُ التي فيها العبارة، لا الأحدث.
+    old_dir = tempfile.mkdtemp()
+    with open(os.path.join(old_dir, "events.jsonl"), "w",
+              encoding="utf-8") as fh:
+        fh.write("\n".join(json.dumps(e, ensure_ascii=False) for e in turn(
+            "اكتب مستنداً عن التعليم الإلكتروني", [("c9", "write",
+                                                     {"path": "t.md"})])))
+
+    def _run2(args, timeout=180, **k):
+        if args[:2] == ["sessions", "list"]:
+            return 0, json.dumps({"sessions": [
+                {"key": "agent:main:explicit:doc", "updatedAt": 1},
+                {"key": "agent:main:explicit:new", "updatedAt": 5}]}), ""
+        if args[:2] == ["sessions", "export-trajectory"]:
+            d = old_dir if args[3].endswith(":doc") else out_dir
+            return 0, json.dumps({"ok": True, "outputDir": d}), ""
+        return 1, "", "?"
+    W.run = _run2
+    with redirect_stdout(io.StringIO()) as b3:
+        rc = PL.main(["--find", "التعليم الإلكتروني"])
+    ok("--find ⟵ المحادثةُ التي فيها العبارة لا الأحدث",
+       rc == 0 and "explicit:doc" in b3.getvalue()
+       and "write (t.md)" in b3.getvalue(), b3.getvalue())
+    with redirect_stdout(io.StringIO()) as b4:
+        rc = PL.main(["--find", "لا توجد هذه العبارة"])
+    ok("--find بلا تطابق ⟵ يقول ذلك", rc == 2 and "لا محادثةَ" in
+       b4.getvalue())
     W.run = lambda a, timeout=180, **k: (0, json.dumps({"sessions": []}), "")
     with redirect_stdout(io.StringIO()) as b2:
         rc = PL.main([])
