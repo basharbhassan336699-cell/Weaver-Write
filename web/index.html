@@ -201,6 +201,10 @@
   .chat-item:hover { background: var(--surface-hover); color: var(--text); }
   .chat-item.active { background: var(--surface); color: var(--text); }
   .chat-item.active .chat-dot { background: var(--accent); border-color: var(--accent); }
+  /* محادثةٌ تعمل الآن (حتى ٥ معاً) — نقطةٌ خضراءُ نابضة */
+  .chat-item.running .chat-dot { background: #4a9e6f; border-color: #4a9e6f;
+    animation: wvRunPulse 1.2s ease-in-out infinite; }
+  @keyframes wvRunPulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
   .chat-item .chat-text { flex: 1; overflow: hidden; text-overflow: ellipsis; }
   .chat-item .chat-del { opacity: 0; color: var(--text-dim); font-size: 12px; padding: 0 4px; flex: none; }
   .chat-item:hover .chat-del { opacity: 1; }
@@ -3394,6 +3398,8 @@
           wvLoadTurnTools(id, m, function () { wvRenderTools(el.querySelector('.tool-steps'), m.tools); });
         }
       });
+      // ردٌّ ما زال يُكتب لهذه المحادثة ⟵ يعود إلى مكانه ويكمل أمامك.
+      (WV_INFLIGHT[id] || []).forEach(function (el) { box.appendChild(el); });
       box.scrollTop = box.scrollHeight;
     }
     const titleEl = document.getElementById('chatTitleText'); if (titleEl && d.title) titleEl.textContent = d.title;
@@ -4079,6 +4085,57 @@
   // optimistic new chat isn't wiped before it's saved. refreshChats() pulls
   // the authoritative list from the server, then renders.
   async function refreshChats() { await fetchChats(); renderChatsList(); }
+  // ── محادثاتٌ تعمل معاً (حتى ٥) — كلُّ ردٍّ إلى محادثته ──
+  //
+  // كان الردُّ يُحفَظ في «المحادثة المفتوحة الآن»: أرسلتَ في (أ) وانتقلتَ
+  // إلى (ب) قبل وصوله ⟵ حُفظ ردُّ (أ) في (ب) وضاع من (أ). الآن تُحفَظ كلُّ
+  // رسالةٍ مع رقم محادثتها لحظةَ الإرسال، وعنصرُ الردّ الجاري يُعاد إلى
+  // الشاشة إن رجعتَ إلى محادثته قبل اكتماله.
+  var WV_MAX_PARALLEL = 5;
+  var WV_INFLIGHT = {};                 // رقمُ المحادثة ⟵ [عناصرُ ردودٍ جارية]
+  var WV_SAVE_CHAIN = {};               // حفظٌ متتابعٌ لكلِّ محادثة (لا سباق)
+  function wvInflightCount() {
+    var n = 0; for (var k in WV_INFLIGHT) n += (WV_INFLIGHT[k] || []).length; return n;
+  }
+  function wvInflightHas(id) { return !!(id && WV_INFLIGHT[id] && WV_INFLIGHT[id].length); }
+  function wvInflightAdd(id, el) {
+    if (!id) return; (WV_INFLIGHT[id] = WV_INFLIGHT[id] || []).push(el);
+    try { renderChatsList(); } catch (e) {}
+  }
+  function wvInflightDel(id, el) {
+    if (!id || !WV_INFLIGHT[id]) return;
+    WV_INFLIGHT[id] = WV_INFLIGHT[id].filter(function (x) { return x !== el; });
+    if (!WV_INFLIGHT[id].length) delete WV_INFLIGHT[id];
+    try { renderChatsList(); } catch (e) {}
+  }
+  function wvNotice(msg) {
+    try {
+      var n = document.createElement('div');
+      n.textContent = msg;
+      n.style.cssText = 'position:fixed;left:50%;bottom:110px;transform:translateX(-50%);' +
+        'background:var(--surface,#2a2a2a);color:var(--text,#eee);border:1px solid var(--border,#444);' +
+        'padding:10px 14px;border-radius:10px;font-size:13.5px;z-index:9999;max-width:88vw;text-align:center';
+      document.body.appendChild(n);
+      setTimeout(function () { try { n.remove(); } catch (e) {} }, 4000);
+    } catch (e) {}
+  }
+  // أضِف رسالةً إلى محادثةٍ غيرِ المفتوحة — على الخادم، بالتتابع.
+  function wvAppendToChat(chatId, msg) {
+    var prev = WV_SAVE_CHAIN[chatId] || Promise.resolve();
+    var next = prev.then(async function () {
+      try {
+        var d = await (await fetch('/api/chats/one?id=' + encodeURIComponent(chatId))).json();
+        if (!d || d.error) return;
+        var ms = (d.messages || []).slice(); ms.push(msg);
+        await fetch('/api/chats/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: chatId, title: d.title, projectId: d.projectId,
+                                 windowId: d.windowId, messages: ms }) });
+      } catch (e) {}
+    });
+    WV_SAVE_CHAIN[chatId] = next.catch(function () {});
+    return next;
+  }
+
   function renderChatsList() {
     const box = document.querySelector('.chats-list');
     if (!box) return;
@@ -4091,7 +4148,7 @@
       } else { currentProjectId = null; }
     }
     box.innerHTML = chip + list.map(c =>
-      `<div class="chat-item${c.id === currentChatId ? ' active' : ''}" data-id="${c.id}" title="${(c.title||'').replace(/"/g,'&quot;')}">
+      `<div class="chat-item${c.id === currentChatId ? ' active' : ''}${wvInflightHas(c.id) ? ' running' : ''}" data-id="${c.id}" title="${(c.title||'').replace(/"/g,'&quot;')}">
         <span class="chat-dot"></span>
         <span class="chat-text">${(c.title || 'Chat')}</span>
         <span class="chat-del" title="Delete chat" onclick="event.stopPropagation();deleteChat('${c.id}')">✕</span>
@@ -4126,6 +4183,12 @@
     const input = document.getElementById('mainInput');
     const text = input.value.trim();
     if (!text) return;
+    if (wvInflightCount() >= WV_MAX_PARALLEL) {
+      wvNotice((document.documentElement.lang || 'en') === 'ar'
+        ? 'تعمل الآن ' + WV_MAX_PARALLEL + ' محادثات — انتظر انتهاءَ إحداها (النقطةُ الخضراء في القائمة).'
+        : WV_MAX_PARALLEL + ' chats are running — wait for one to finish (green dot in the list).');
+      return;
+    }
 
     // Switch to chat mode (docks the input panel to the bottom)
     const main = document.getElementById('mainContent');
@@ -4157,6 +4220,8 @@
       const titleEl = document.getElementById('chatTitleText');
       if (titleEl) titleEl.textContent = text.length > 40 ? text.slice(0, 40) + '…' : text;
     }
+    // المحادثةُ التي أُرسلت منها هذه الرسالة — يُحفَظ ردُّها فيها وإن انتقلتَ.
+    const sendChatId = currentChatId;
     currentMessages.push({ role: 'user', content: text });
     // Persist immediately so the chat survives even before the reply arrives
     saveCurrentChat();
@@ -4258,6 +4323,7 @@
 
       messages.appendChild(aiMsg);
       messages.scrollTop = messages.scrollHeight;
+      wvInflightAdd(sendChatId, aiMsg);
 
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
       let assistantFile = '';  // produced file name (for the artifacts card)
@@ -4284,7 +4350,7 @@
         else if (streamBuf.trim()) { assistantRaw = streamBuf; bubble.innerHTML = renderMarkdown(streamBuf); }
         else { bubble.textContent = (isAr ? '(رد فارغ من المزوّد)' : '(empty reply from provider)'); }
         const _keep = reply || streamBuf;
-        if (_keep && typeof wvAutoSaveArtifacts === 'function') wvAutoSaveArtifacts(_keep, currentChatId);
+        if (_keep && typeof wvAutoSaveArtifacts === 'function') wvAutoSaveArtifacts(_keep, sendChatId);
       }
       function handleEvent(ev) {
         if (!ev || !ev.t) return;
@@ -4296,7 +4362,7 @@
         // LIVE STREAM: show the reply as it is written (like OpenClaw).
         else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
         else if (ev.t === 'delta') { if (streaming) { streamBuf += (ev.detail || ''); if (!streamRAF) streamRAF = requestAnimationFrame(renderStreamLive); } }
-        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); currentActiveFile = ev.output_path; if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, currentChatId, aiMsg); } }
+        else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); if (currentChatId === sendChatId) currentActiveFile = ev.output_path; if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, sendChatId, aiMsg); } }
         else if (ev.t === 'error') { stepsFinishAll(); streaming = false; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
         else if (ev.t === 'done') { stepsFinishAll(); }
       }
@@ -4314,7 +4380,7 @@
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history, chatId: currentChatId, files: files, activeFile: currentActiveFile, effort: effortEl ? effortEl.value : 'medium' })
+          body: JSON.stringify({ message: text, history: history, chatId: sendChatId, files: files, activeFile: currentActiveFile, effort: effortEl ? effortEl.value : 'medium' })
         });
         const reader = res.body.getReader();
         const dec = new TextDecoder();
@@ -4336,6 +4402,7 @@
         stepsFinishAll();
         bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
       }
+      wvInflightDel(sendChatId, aiMsg);
       // persist the RAW reply (markdown) so reloads re-render the formatting;
       // fall back to the shown text for error/empty replies
       const finalText = assistantRaw || bubble.textContent || '';
@@ -4358,11 +4425,16 @@
       // «معلّقة» تُحفظ مع الرسالة، فإن أُغلقت الصفحةُ قبل وصولها طُلبت
       // حين تُفتح المحادثةُ مرّةً أخرى.
       if (engineTurn) amsg.toolsPending = { since: sentAt, tries: 0 };
-      currentMessages.push(amsg);
-      saveCurrentChat();
-      messages.scrollTop = messages.scrollHeight;
+      if (currentChatId === sendChatId) {
+        currentMessages.push(amsg);
+        saveCurrentChat();
+        messages.scrollTop = messages.scrollHeight;
+      } else {
+        // انتقلتَ إلى محادثةٍ أخرى: يُحفَظ في محادثته هو، ولا تُمَسّ المفتوحة.
+        await wvAppendToChat(sendChatId, amsg);
+      }
       if (engineTurn && typeof wvLoadTurnTools === 'function') {
-        wvLoadTurnTools(currentChatId, amsg, function () { wvRenderTools(stepsBox, amsg.tools); });
+        wvLoadTurnTools(sendChatId, amsg, function () { wvRenderTools(stepsBox, amsg.tools); });
       }
     })();
   }

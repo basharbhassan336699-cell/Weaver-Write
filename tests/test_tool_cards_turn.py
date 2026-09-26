@@ -122,7 +122,9 @@ ok("  ⟵ والبطاقةُ الثابتةُ تُرسَل فوراً", 'sse({"t
 ok("طلبٌ مستقلّ /api/chat/tools", '"/api/chat/tools"' in _srv
    and "_engine_turn_cards" in _srv)
 _html = open(os.path.join(_ROOT, "web", "index.html"), encoding="utf-8").read()
-ok("الصفحةُ تطلبها بعد المجرى", "wvLoadTurnTools(currentChatId, amsg" in _html)
+# لمحادثة الإرسال لا «المفتوحة الآن» — وإلّا ذهبت بطاقاتُها إلى أخرى.
+ok("الصفحةُ تطلبها بعد المجرى (لمحادثة الإرسال)",
+   "wvLoadTurnTools(sendChatId, amsg" in _html)
 ok("  ⟵ وتحفظ «معلّقة» قبلها", "amsg.toolsPending = { since: sentAt" in _html)
 ok("  ⟵ وتُعيد الطلبَ عند فتح المحادثة", "if (m.toolsPending && typeof "
    "wvLoadTurnTools" in _html)
