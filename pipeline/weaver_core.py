@@ -2601,14 +2601,18 @@ def _skill_names():
 # فالمُركَّبُ المطابقُ لإحداها حرفاً ⟵ "old" ⟵ يُرقّى بلا --force؛ وما سواها
 # محميٌّ كما كان. **وعند تعديل أيّ SKILL.md تُضاف بصمةُ نسخته الجديدة هنا.**
 _SKILLS_PAST = {
-    "check-plagiarism": frozenset(("4ce91b08b67c8ea2",)),   # 56c2e5f
+    "check-plagiarism": frozenset(("4ce91b08b67c8ea2",      # 56c2e5f
+                                   "784d9d3bd9514ba6")),    # مجلّدُ المحادثة
     "detect-ai": frozenset(("62628fc00224381a",)),          # d9040e8
     "fix-conclusion": frozenset(("7e5bd97411738de0",)),     # d9040e8
     "humanize-ar": frozenset(("6c8ccf15bb195da7",)),        # d9040e8
-    "academic-humanize": frozenset(("a7d250e53ae28cad",)),
-    "voice-inject": frozenset(("1a65e524a5181b3c",)),
+    "academic-humanize": frozenset(("a7d250e53ae28cad",
+                                    "92fbfc8c430ae898")),   # مجلّدُ المحادثة
+    "voice-inject": frozenset(("1a65e524a5181b3c",
+                               "b8bb08b1e28aa185")),        # مجلّدُ المحادثة
     "cite-pages": frozenset(("f768f1146ffccc55",           # 3f3bca1
-                             "e218b5ba2ef94f05")),
+                             "e218b5ba2ef94f05",           # fcab589
+                             "0cbaae4510d2d493")),         # مجلّدُ المحادثة
 }
 
 

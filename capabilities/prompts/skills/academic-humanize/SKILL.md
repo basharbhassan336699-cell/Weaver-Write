@@ -38,11 +38,14 @@ description: Rewrite an academic text written OUTSIDE this system (pasted, uploa
 ٤ **الخاتمة:** ثغرةٌ بحثيّة، أو سؤالٌ يحتاج دراسة، أو حدٌّ منهجيّ — لا تلخيص.
 
 ## بعد الصياغة — فحصٌ إلزاميّ
-اكتب الأصلَ في `ah-original.txt` والصياغةَ في `ah-rewritten.txt` (أداة `write`)، ثمّ:
+اكتب الأصلَ في `<مجلّد العمل>/ah-original.txt` والصياغةَ في
+`<مجلّد العمل>/ah-rewritten.txt` (أداة `write`)، ثمّ:
+(`<مجلّد العمل>` هو المذكورُ في رسالتك تحت «[مجلّد العمل]»، مثلاً `chats/…/` — فلا تكتب محادثتان فوق مسوّدات بعضهما. وإن لم يُذكر فاكتب الاسمَ وحدَه.)
 
 ```bash
 python3 {{WEAVER}}/pipeline/integrity_check.py \
-  --original ah-original.txt --rewritten ah-rewritten.txt --json
+  --original <مجلّد العمل>/ah-original.txt \
+  --rewritten <مجلّد العمل>/ah-rewritten.txt --json
 ```
 
 - `intact: true` ⟵ سلّم الصياغة، ومعها سطرٌ واحد: ما الذي غيّرتَه (الكلماتُ

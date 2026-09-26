@@ -22,11 +22,12 @@ description: Measure how much of a text was copied word-for-word from its web so
 - لا تستدعِها لقياس «هل كتبه ذكاءٌ اصطناعيّ» — ذاك أسلوبٌ لا نقل.
 
 ## كيف تُشغَّل
-١ اكتب النصَّ في ملفّ (أداة `write`)، مثلاً `plagiarism-check.txt`.
+١ اكتب النصَّ في ملفّ (أداة `write`)، مثلاً `<مجلّد العمل>/plagiarism-check.txt`.
+   (`<مجلّد العمل>` هو المذكورُ في رسالتك تحت «[مجلّد العمل]»، مثلاً `chats/…/` — فلا تكتب محادثتان فوق مسوّدات بعضهما. وإن لم يُذكر فاكتب الاسمَ وحدَه.)
 ٢ مرّر **روابطَ الصفحات التي اعتمد عليها النصّ** — التي فتحتَها أو يستشهد بها:
 
 ```bash
-python3 {{WEAVER}}/pipeline/plagiarism.py --file plagiarism-check.txt \
+python3 {{WEAVER}}/pipeline/plagiarism.py --file <مجلّد العمل>/plagiarism-check.txt \
   --url "https://…" --url "https://…" --json
 ```
 

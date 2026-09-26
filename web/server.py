@@ -1438,7 +1438,13 @@ _WS_INTERNAL = {"AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md",
                 "MEMORY.md", "DREAMS.md", "plagiarism-check.txt",
                 # مسوّداتُ حارس إعادة الصياغة (academic-humanize · voice-inject)
                 "ah-original.txt", "ah-rewritten.txt",
-                "vi-original.txt", "vi-rewritten.txt"}
+                "vi-original.txt", "vi-rewritten.txt",
+                # نصُّ ملفّ PDF صفحةً صفحة (cite-pages) — مسوّدةٌ لا تسليم
+                "pdf-pages.txt"}
+# مجلّدُ عملٍ لكلِّ محادثة داخل مساحة العمل: chats/<رقمها>/. محادثتان في
+# اللحظة نفسِها كانتا تكتبان في مجلّدٍ واحد، فتظهر بطاقةُ ملفِّ إحداهما في
+# الأخرى، وتكتب مهارةٌ فوق مسوّدةِ أختها (plagiarism-check.txt مثلاً).
+_WS_CHATS = "chats"
 _WS_SKIP_DIRS = {"memory", "skills", "uploads-test", "node_modules"}
 _WS_EXTS = {".md", ".txt", ".csv", ".json", ".html", ".htm", ".pdf", ".docx",
             ".pptx", ".xlsx", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
@@ -1452,20 +1458,51 @@ def _ws_dir():
         return ""
 
 
-def _ws_snapshot(max_depth=3):
-    """{مسارٌ نسبيّ: (mtime، حجم)} لما يصلح تسليمُه في مساحة العمل. لا يرفع."""
+def _chat_dir_rel(chat_id):
+    """«chats/<رقم المحادثة>» — نظيفٌ وثابتٌ للمحادثة نفسِها، أو "" بلا رقم."""
+    k = re.sub(r"[^A-Za-z0-9_-]", "-", str(chat_id or "").strip())[:48]
+    return (_WS_CHATS + "/" + k) if k.strip("-") else ""
+
+
+def _chat_dir_ensure(chat_id):
+    """أنشئ مجلّدَ المحادثة في مساحة العمل. يعيد مسارَه النسبيّ أو ""."""
+    rel = _chat_dir_rel(chat_id)
+    root = _ws_dir()
+    if not rel or not root:
+        return ""
+    try:
+        os.makedirs(os.path.join(root, rel), exist_ok=True)
+        return rel
+    except Exception:
+        return ""
+
+
+def _ws_snapshot(max_depth=3, chat_rel=None):
+    """{مسارٌ نسبيّ: (mtime، حجم)} لما يصلح تسليمُه في مساحة العمل. لا يرفع.
+
+    مجلّداتُ المحادثات (chats/…) لا تُرى إلا مجلّدُ `chat_rel` وحده — فلا
+    يُنسب إلى محادثةٍ ما كتبته أخرى. وبلا `chat_rel`: لا يُرى منها شيء."""
     root = _ws_dir()
     out = {}
     if not root or not os.path.isdir(root):
         return out
+    _own = (chat_rel or "").strip("/").replace("/", os.sep)
     try:
         for cur, dirs, files in os.walk(root):
             rel_dir = os.path.relpath(cur, root)
             depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
             dirs[:] = [d for d in dirs if not d.startswith(".")
                        and d not in _WS_SKIP_DIRS and depth < max_depth]
+            if rel_dir == ".":
+                dirs[:] = [d for d in dirs if d != _WS_CHATS or _own]
+            elif rel_dir == _WS_CHATS:
+                dirs[:] = [d for d in dirs
+                           if os.path.join(_WS_CHATS, d) == _own]
+            _in_chat = bool(_own) and (rel_dir == _own
+                                       or rel_dir.startswith(_own + os.sep))
             for fn in files:
-                if fn.startswith(".") or (depth == 0 and fn in _WS_INTERNAL):
+                if fn.startswith(".") or ((depth == 0 or _in_chat)
+                                          and fn in _WS_INTERNAL):
                     continue
                 if os.path.splitext(fn)[1].lower() not in _WS_EXTS:
                     continue
@@ -1482,14 +1519,61 @@ def _ws_snapshot(max_depth=3):
     return out
 
 
-def _ws_new_files(before):
+def _ws_new_files(before, chat_rel=None):
     """ما جدّ أو تغيّر منذ اللقطة — الأحدثُ أوّلاً. لا يرفع."""
     if before is None:
         return []
-    after = _ws_snapshot()
+    after = _ws_snapshot(chat_rel=chat_rel)
     new = [rel for rel, v in after.items() if before.get(rel) != v]
     new.sort(key=lambda rel: -after[rel][0])
     return new
+
+
+# نوباتُ المحرّك الجارية الآن — ليُعرف أتداخلت نوبتان. ملفٌّ خارج مجلّد
+# المحادثة (كتبه النموذجُ في الجذر رغم التوجيه) لا يُعرف صاحبُه إن تداخلتا.
+import threading as _thr_turns
+_TURNS_LOCK = _thr_turns.Lock()
+_TURNS_ACTIVE = {}          # رمزٌ ⟵ {"overlap": bool}
+_TURNS_SEQ = [0]
+
+
+def _turn_begin():
+    """سجّل نوبةً جارية. يعيد رمزَها. نوبةٌ تبدأ والأخرى جاريةٌ ⟵ تداخلتا."""
+    with _TURNS_LOCK:
+        _TURNS_SEQ[0] += 1
+        tok = _TURNS_SEQ[0]
+        busy = bool(_TURNS_ACTIVE)
+        for st in _TURNS_ACTIVE.values():
+            st["overlap"] = True
+        _TURNS_ACTIVE[tok] = {"overlap": busy}
+        return tok
+
+
+def _turn_end(tok):
+    """أنهِ النوبة. يعيد: أتداخلت مع أخرى في أيّ لحظةٍ منها؟"""
+    with _TURNS_LOCK:
+        st = _TURNS_ACTIVE.pop(tok, None) or {}
+        return bool(st.get("overlap"))
+
+
+def _ws_files_for_turn(new, chat_rel, overlapped, reply):
+    """ما يُسلَّم لهذه المحادثة ممّا جدّ في مساحة العمل.
+
+    · في مجلّدها (chats/<رقمها>/) ⟵ لها بلا شكّ.
+    · خارجه ولا نوبةَ أخرى جرت معها ⟵ لها (السلوكُ القديمُ حرفاً).
+    · خارجه ونوبتان تداخلتا ⟵ لا يُعرف صاحبُه: يُسلَّم إن ذكر جوابُها
+      اسمَه فقط (الجوابُ يقول عادةً «حفظتُ المستندَ في ملفّ كذا»)."""
+    own = (chat_rel or "").strip("/")
+    out = []
+    for rel in new or []:
+        r = rel.replace(os.sep, "/")
+        if own and (r == own or r.startswith(own + "/")):
+            out.append(rel)
+        elif not overlapped:
+            out.append(rel)
+        elif os.path.basename(rel) and os.path.basename(rel) in (reply or ""):
+            out.append(rel)
+    return out
 
 
 def _ws_deliver(rel):
@@ -1763,6 +1847,12 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
                              + str(h["content"])[:1200])
         if attachments and str(attachments).strip():
             parts.append("[مرفقات]\n" + str(attachments).strip()[:8000])
+        # مجلّدُ عمل هذه المحادثة: ملفّاتُها ومسوّداتُ مهاراتها فيه وحدَه.
+        _cdir = _chat_dir_ensure(session) if session else ""
+        if _cdir:
+            parts.append("[مجلّد العمل]\n" + _cdir + "/ — اكتب فيه كلَّ ملفٍّ "
+                         "تُنشئه في هذه المحادثة (المستنداتِ والمسوّدات)، "
+                         "لا في جذر مساحة العمل.")
         parts.append("[الطلب]\n" + str(message or ""))
         # مهلةٌ أوسع من مهلة النداء المباشر: المحرّكُ وكيلٌ يفتح صفحاتٍ
         # ويُعيد المحاولة، فـ١٢٠ ثانيةً تكفي نداءً واحداً ولا تكفي نوبةً
@@ -2660,11 +2750,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     else ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
                 # لقطةُ مساحة عمل المحرّك قبل النوبة — ليُعرَف ما كتبه فيها.
-                _ws_before = _ws_snapshot() if _eng_on else None
-                r = _chat(msg, body.get("history"),
-                          effort=body.get("effort", "medium"), context=ctx,
-                          memory=mem_ctx, attachments=attach_text,
-                          session=body.get("chatId"))
+                _cdir_rel = _chat_dir_rel(body.get("chatId")) if _eng_on else ""
+                _ws_before = (_ws_snapshot(chat_rel=_cdir_rel)
+                              if _eng_on else None)
+                _turn_tok = _turn_begin()
+                try:
+                    r = _chat(msg, body.get("history"),
+                              effort=body.get("effort", "medium"), context=ctx,
+                              memory=mem_ctx, attachments=attach_text,
+                              session=body.get("chatId"))
+                finally:
+                    _overlapped = _turn_end(_turn_tok)
                 if r.get("error"):
                     if r.get("error") == "no_key":
                         sse({"t": "reply", "reply": (
@@ -2698,7 +2794,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     # وبطاقةٌ مع الجواب (معاينةٌ وتحميل)، كالمسار القديم.
                     _files = []
                     if r.get("engine") == "weaver-core":
-                        for _rel in _ws_new_files(_ws_before)[:5]:
+                        for _rel in _ws_files_for_turn(
+                                _ws_new_files(_ws_before, chat_rel=_cdir_rel),
+                                _cdir_rel, _overlapped,
+                                r.get("reply") or "")[:5]:
                             _dst = _ws_deliver(_rel)
                             if _dst:
                                 _files.append(_dst)

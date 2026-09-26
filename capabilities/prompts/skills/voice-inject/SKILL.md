@@ -34,11 +34,14 @@ description: Add the writer's own voice to an essay or blog post that reads clea
 **لا تغيّر المعنى، ولا البناءَ إلا قليلاً، ولا تحذف شيئاً.**
 
 ## بعد الإضافة — فحصٌ إلزاميّ
-اكتب الأصلَ في `vi-original.txt` والناتجَ في `vi-rewritten.txt`، ثمّ:
+اكتب الأصلَ في `<مجلّد العمل>/vi-original.txt` والناتجَ في
+`<مجلّد العمل>/vi-rewritten.txt`، ثمّ:
+(`<مجلّد العمل>` هو المذكورُ في رسالتك تحت «[مجلّد العمل]»، مثلاً `chats/…/` — فلا تكتب محادثتان فوق مسوّدات بعضهما. وإن لم يُذكر فاكتب الاسمَ وحدَه.)
 
 ```bash
 python3 {{WEAVER}}/pipeline/integrity_check.py \
-  --original vi-original.txt --rewritten vi-rewritten.txt --json
+  --original <مجلّد العمل>/vi-original.txt \
+  --rewritten <مجلّد العمل>/vi-rewritten.txt --json
 ```
 
 - `intact: true` ⟵ سلّم، ومعه سطرٌ يقتبس ما أضفتَه الثلاثةَ وأين.
