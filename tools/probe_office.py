@@ -494,9 +494,10 @@ if have.get("openpyxl"):
         out, fok, f = r
         built["sheet-ar-edited.xlsx"] = out
         mark("edit", "Excel ⟵ تغييرُ خليّةٍ وإدراجُ صفّ", True, "%.1fث" % dt)
-        mark("edit", "  ⟵ معادلةُ المجموع تتّسع للصفّ المُدرَج", fok,
-             "المعادلة الآن: %s%s" % (f, "" if fok else
-                                      " — openpyxl لا يحدّث المراجع عند الإدراج"))
+        # openpyxl وحده لا يُزيح المراجع — معلومةٌ لا حكم؛ والحكمُ على أداة
+        # المحرّك (pipeline/office.py) في القسم التالي.
+        mark("edit", "  ⟵ openpyxl وحده: معادلةُ المجموع بعد الإدراج", None,
+             "%s%s" % (f, "" if fok else " — لا يُزيحها (office.py يُزيحها)"))
     else:
         mark("edit", "Excel ⟵ تغييرُ خليّةٍ وإدراجُ صفّ", False, err)
 else:
@@ -509,6 +510,115 @@ if have.get("pptx"):
          err or "%.1fث" % dt)
 else:
     mark("edit", "PowerPoint", None, "لم يُقَس — python-pptx غيرُ مثبَّت")
+
+# ── ٣ب أداةُ المحرّك: pipeline/office.py بـpython3 الذي يناديه المحرّك ──────
+say("\n══ ٣ب) أداةُ المحرّك (pipeline/office.py) — كما تناديها المهارات ══")
+_OFF = os.path.join(_ROOT, "pipeline", "office.py")
+_PY = shutil.which("python3") or sys.executable
+
+
+def _office(*args):
+    r = subprocess.run([_PY, _OFF] + [str(a) for a in args], capture_output=True,
+                       text=True, timeout=300)
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
+def _spec(name, obj):
+    p = os.path.join(OUT, name)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False)
+    return p
+
+
+def _tool_word():
+    sp = _spec("t-word.json", {"title": AR_TITLE, "sections": [
+        {"heading": "المقدّمة", "body": "نصٌّ أوّل."},
+        {"heading": "النتائج", "body": "جدول:",
+         "table": {"headers": ["البند", "القيمة"], "rows": [["أ", 1]]}}]})
+    out = _p("tool-word.docx")
+    c, o = _office("build", sp, "--out", out)
+    assert c == 0 and "✓ saved" in o, o[-200:]
+    c, o = _office("info", out)
+    assert c == 0 and "¶" in o and "T0" in o, o[-200:]
+    ops = _spec("t-word-ops.json", [
+        {"op": "replace", "find": "نصٌّ أوّل", "with": "نصٌّ أوّل مُعدَّل"},
+        {"op": "set_cell", "table": 0, "row": 1, "col": 1, "text": "9"}])
+    c, o = _office("edit", out, ops)
+    assert c == 0, o[-200:]
+    from docx import Document
+    d = Document(_p("tool-word-edited.docx"))
+    t = "\n".join(p.text for p in d.paragraphs)
+    assert t.count("نصٌّ أوّل مُعدَّل") == 1, "الاستبدال: %d" % t.count("نصٌّ أوّل مُعدَّل")
+    assert d.tables[0].cell(1, 1).text == "9", "الخليّة لم تُعدَّل"
+    return "بناء · قراءة · تعديل"
+
+
+def _tool_pptx():
+    sp = _spec("t-deck.json", {"title": AR_TITLE, "slides": [
+        {"title": "أ", "points": ["١"]}, {"title": "ب", "points": ["٢"]},
+        {"title": "جدول", "table": {"headers": ["س"], "rows": [["١"]]}}]})
+    out = _p("tool-deck.pptx")
+    c, o = _office("build", sp, "--out", out)
+    assert c == 0, o[-200:]
+    # حذفٌ ثمّ إضافة — قِيس هنا عطبٌ: slide7.xml مرّتين ⟵ ملفٌّ فاسد
+    ops = _spec("t-deck-ops.json", [
+        {"op": "delete_slide", "slide": 2},
+        {"op": "add_slide", "after": 3, "title": "جديدة", "points": ["نقطة"]}])
+    c, o = _office("edit", out, ops)
+    assert c == 0, o[-200:]
+    ed = _p("tool-deck-edited.pptx")
+    names = zipfile.ZipFile(ed).namelist()
+    assert len(names) == len(set(names)), "أسماءٌ مكرّرة في الملفّ"
+    from pptx import Presentation
+    n = len(Presentation(ed).slides)
+    assert n == 5, "عددُ الشرائح %d لا ٥" % n
+    return "بناء · حذفٌ ثمّ إضافة · بلا تكرار"
+
+
+def _tool_xlsx():
+    sp = _spec("t-sheet.json", {"sheets": [{"name": "المصاريف",
+        "headers": ["البند", "المبلغ"], "rows": [["إيجار", 1500], ["طعام", 800]],
+        "totals": True, "chart": {"type": "bar", "data": "B1:B3",
+                                  "categories": "A2:A3"}}]})
+    out = _p("tool-sheet.xlsx")
+    c, o = _office("build", sp, "--out", out)
+    assert c == 0, o[-200:]
+    ops = _spec("t-sheet-ops.json", [
+        {"op": "add_rows", "values": [["مواصلات", 300]]}])
+    c, o = _office("edit", out, ops)
+    assert c == 0, o[-200:]
+    ed = _p("tool-sheet-edited.xlsx")
+    from openpyxl import load_workbook
+    ws = load_workbook(ed).active
+    f = str(ws["B5"].value)
+    assert f == "=SUM(B2:B4)", "المجموع: %s" % f
+    x = zipfile.ZipFile(ed).read("xl/charts/chart1.xml").decode("utf-8", "ignore")
+    assert "$B$2:$B$4" in x, "الرسمُ لم يتّسع"
+    return "صفٌّ قبل الإجمالي ⟵ %s والرسمُ يتّسع" % f
+
+
+def _tool_chart():
+    sp = _spec("t-chart.json", {"type": "bar", "title": "المبيعات",
+                                "data": {"labels": ["يناير", "فبراير"], "values": [1, 2]}})
+    c, o = _office("chart", sp, "--into", _p("tool-word.docx"))
+    assert c == 0, o[-200:]
+    names = zipfile.ZipFile(_p("tool-word-edited.docx")).namelist()
+    assert sum(1 for n in names if n.startswith("word/media/")) >= 1, "بلا صورة"
+    return "رسمٌ داخل Word"
+
+
+if not os.path.isfile(_OFF):
+    mark("tool", "pipeline/office.py", False, "غيرُ موجود")
+else:
+    for label, fn, need in (("Word عبر الأداة", _tool_word, "docx"),
+                            ("PowerPoint عبر الأداة", _tool_pptx, "pptx"),
+                            ("Excel عبر الأداة", _tool_xlsx, "openpyxl"),
+                            ("رسمٌ عبر الأداة", _tool_chart, "matplotlib")):
+        if not have.get(need):
+            mark("tool", label, None, "لم يُقَس — %s غيرُ مثبَّت" % need)
+            continue
+        r, err, dt = _timed(fn)
+        mark("tool", label, r is not None, err or "%s — %.1fث" % (r, dt))
 
 # ── ٤ طريقُ المحرّك ─────────────────────────────────────────────────────
 say("\n══ ٤) طريقُ المحرّك (ما يرسله الخادم ويستقبله) ══")
@@ -535,13 +645,22 @@ if S is not None:
         try:
             with open(src, "rb") as f:
                 b64 = base64.b64encode(f.read()).decode()
-            txt, names = S._attach_extract([{"name": "مرفق.docx", "data": b64}])
+            _up = [{"name": "مرفق.docx", "data": b64}]
+            txt, names = S._attach_extract(_up)
+            if hasattr(S, "_attach_save"):
+                S._attach_save(_up, "probe-chat")     # ما يفعله الخادمُ قبل النوبة
             saved = [os.path.join(dp, fn) for dp, _, fns in os.walk(ws) for fn in fns]
             mark("engine", "الملفُّ المرفوع يُقرأ نصّاً", AR_TITLE in txt,
                  "%d حرفاً" % len(txt))
+            same = False
+            if saved:
+                with open(saved[0], "rb") as fh, open(src, "rb") as fs:
+                    same = fh.read() == fs.read()
             mark("engine", "الملفُّ المرفوع يُحفظ في مجلّد العمل (ليُعدَّل هو نفسُه)",
-                 bool(saved), ", ".join(os.path.relpath(s, ws) for s in saved)
-                 if saved else "لا — يصل النموذجَ نصّاً فقط ⟵ تعديلُه يعني إعادةَ بنائه")
+                 bool(saved) and same,
+                 (", ".join(os.path.relpath(s, ws) for s in saved)
+                  + ("" if same else " — المحتوى مختلف!")) if saved
+                 else "لا — يصل النموذجَ نصّاً فقط ⟵ تعديلُه يعني إعادةَ بنائه")
         except BaseException as e:
             mark("engine", "الملفُّ المرفوع", None, "لم يُقَس: %s" % str(e)[:120])
         finally:
@@ -559,6 +678,17 @@ try:
                                       "xlsx", "chart", "office"))]
     mark("engine", "مهاراتُ Weaver للمحرّك لملفّات أوفيس", bool(office) or False,
          ", ".join(office) if office else "لا شيء بعد — الأدواتُ في المسار القديم فقط")
+    if office:
+        # مُركَّبةٌ في مساحة عمل المحرّك؟ (--skills apply)
+        try:
+            st = {r["name"]: r["state"] for r in W.skills_state()["skills"]}
+            miss = [n for n in office if st.get(n) != "ours"]
+            mark("engine", "  ⟵ مُركَّبةٌ في مساحة عمل المحرّك", not miss,
+                 ("غيرُ مُركَّبة: %s ⟵ python3 -m pipeline.weaver_core "
+                  "--skills apply" % ", ".join(miss)) if miss else "")
+        except BaseException as e:
+            mark("engine", "  ⟵ مُركَّبةٌ في مساحة عمل المحرّك", None,
+                 "لم يُقَس: %s" % str(e)[:100])
     rt_sk = os.path.join(getattr(W, "RUNTIME", ""), "skills")
     if os.path.isdir(rt_sk):
         import re as _re
@@ -576,7 +706,7 @@ except BaseException as e:
 # ── الخلاصة ─────────────────────────────────────────────────────────────
 say("\n══ الخلاصة ══")
 for sec, title in (("libs", "المكتبات"), ("build", "البناء"), ("edit", "التعديل"),
-                   ("engine", "المحرّك")):
+                   ("tool", "الأداة"), ("engine", "المحرّك")):
     rows = [r for r in results if r[0] == sec]
     okc = sum(1 for r in rows if r[2] is True)
     bad = [r[1].strip() for r in rows if r[2] is False]

@@ -38,7 +38,8 @@ def ok(name, cond, extra=""):
 
 
 WANT = ("detect-ai", "fix-conclusion", "humanize-ar", "check-plagiarism",
-        "academic-humanize", "voice-inject", "cite-pages")
+        "academic-humanize", "voice-inject", "cite-pages",
+        "office-word", "office-powerpoint", "office-excel", "office-charts")
 BODY = {}
 for n in WANT:
     p = os.path.join(wc.SKILLS_SRC, n, "SKILL.md")

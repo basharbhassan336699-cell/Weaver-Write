@@ -2922,6 +2922,10 @@ _SKILLS_PAST = {
     "cite-pages": frozenset(("f768f1146ffccc55",           # 3f3bca1
                              "e218b5ba2ef94f05",           # fcab589
                              "0cbaae4510d2d493")),         # مجلّدُ المحادثة
+    "office-word": frozenset(("883d5636af2515ea",)),        # أوفيس ٢
+    "office-powerpoint": frozenset(("65ddef835b011e03",)),  # أوفيس ٢
+    "office-excel": frozenset(("8aa19b85b0724753",)),       # أوفيس ٢
+    "office-charts": frozenset(("15078ee32e1500b8",)),      # أوفيس ٢
 }
 
 
@@ -3193,6 +3197,21 @@ _SKILL_NEGATIVE = {
                    "لخّصه لي في سطرين."),
 }
 
+# مهاراتُ أوفيس (office-*) — طلباتٌ طبيعيّةٌ لا تذكر اسمَ المهارة. والنجاحُ أن
+# يفتحها أو يشغّل pipeline/office.py للملفّ المطلوب. والمعاكس: سؤالٌ جوابُه
+# نصٌّ في المحادثة ⟵ النجاحُ ألّا يبني ملفّاً.
+_SKILL_PROBES["office-word"] = (
+    "اكتب لي تقريراً قصيراً من فقرتين عن فوائد القراءة، مع جدولٍ صغير، "
+    "وأريده ملفَّ وورد أحمّله.")
+_SKILL_PROBES["office-powerpoint"] = (
+    "جهّز لي عرضاً تقديمياً من ثلاث شرائح عن الطاقة الشمسيّة.")
+_SKILL_PROBES["office-excel"] = (
+    "أريد ملفَّ إكسل لمصاريفي هذا الشهر: إيجار 1500، طعام 800، "
+    "مواصلات 300، مع المجموع.")
+_SKILL_PROBES["office-charts"] = (
+    "ارسم لي رسماً بيانياً بالأعمدة لمبيعاتي: يناير 10، فبراير 15، مارس 12.")
+_SKILL_NEGATIVE["office-word"] = "ما أهمّ فوائد القراءة؟ أجبني في سطرين."
+
 # ملفّاتُ الحالة الواقعيّة — تُنسخ إلى مساحة العمل قبل النوبة وتُحذف بعدها.
 PROBES_DIR = os.path.join(_ROOT, "engines", "weaver-core", "probes")
 _PROBE_FILES = {"check-plagiarism": "plagiarism", "cite-pages": "pdf"}
@@ -3260,6 +3279,14 @@ def skills_invoke_test(prompt=None, timeout=None, target=None,
         # السكربتُ بلا فتحِ ملفّ المهارة — استعمالُها نفسُه.
         if "plagiarism.py" in str(blob) and "check-plagiarism" not in hit:
             hit.append("check-plagiarism")
+        # أداةُ أوفيس بلا فتحِ ملفّ المهارة — استعمالُها نفسُه، بنوع الملفّ.
+        if "office.py" in str(blob):
+            for _k, _sk in (("office.py chart", "office-charts"),
+                            (".docx", "office-word"),
+                            (".pptx", "office-powerpoint"),
+                            (".xlsx", "office-excel")):
+                if _k in str(blob) and _sk not in hit:
+                    hit.append(_sk)
     # لا جوابَ ولا مسار ⟶ النموذجُ لم يعمل، فلا دليلَ على شيء. وكان يُقال
     # «لم يستدعِ شيئاً — راجع وصفَ المهارة» فيُوجَّه المستخدمُ إلى إصلاح وصفٍ
     # سليم، والسببُ الحقيقيُّ رصيدٌ نفد. التشخيصُ الخاطئ أسوأُ من لا تشخيص.

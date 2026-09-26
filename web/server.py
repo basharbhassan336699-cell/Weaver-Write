@@ -1440,7 +1440,9 @@ _WS_INTERNAL = {"AGENTS.md", "BOOTSTRAP.md", "IDENTITY.md", "SOUL.md",
                 "ah-original.txt", "ah-rewritten.txt",
                 "vi-original.txt", "vi-rewritten.txt",
                 # نصُّ ملفّ PDF صفحةً صفحة (cite-pages) — مسوّدةٌ لا تسليم
-                "pdf-pages.txt"}
+                "pdf-pages.txt",
+                # مواصفاتُ مهارات أوفيس (office-*) — مسوّداتٌ لا تسليم
+                "office-spec.json", "office-ops.json", "chart-spec.json"}
 # مجلّدُ عملٍ لكلِّ محادثة داخل مساحة العمل: chats/<رقمها>/. محادثتان في
 # اللحظة نفسِها كانتا تكتبان في مجلّدٍ واحد، فتظهر بطاقةُ ملفِّ إحداهما في
 # الأخرى، وتكتب مهارةٌ فوق مسوّدةِ أختها (plagiarism-check.txt مثلاً).
@@ -1475,6 +1477,74 @@ def _chat_dir_ensure(chat_id):
         return rel
     except Exception:
         return ""
+
+
+# الملفُّ المرفوعُ نفسُه في مجلّد المحادثة — لا نصُّه وحده. قِيس
+# (tools/probe_office.py على هاتف المستخدم): «الملفُّ المرفوع يُحفظ في مجلّد
+# العمل ✗ — يصل النموذجَ نصّاً فقط ⟵ تعديلُه يعني إعادةَ بنائه». وملفّاتُ
+# pptx وxlsx لا نصَّ لها هنا أصلاً («تعذّرت قراءة محتواه»).
+# يُحفظ قبل لقطة النوبة، فلا يعود إليك بطاقةً كأنّه جديد — إلا إن عدّله.
+_ATTACH_SAVE_MAX = 25 * 1024 * 1024
+_ATTACH_TOO_BIG = "(الملف كبير جداً"
+
+
+def _attach_safe_name(name):
+    """اسمٌ بلا مسارٍ ولا رموزٍ خطرة، ولا يبدأ بنقطة."""
+    n = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    n = re.sub(r'[\x00-\x1f<>:"|?*]', "_", n).lstrip(".").strip()
+    if not n:
+        n = "upload"
+    stem, ext = os.path.splitext(n)
+    return (stem[:100] or "upload") + ext[:10]
+
+
+def _attach_save(files, chat_id):
+    """احفظ الملفّاتِ المرفوعة كما هي في chats/<رقمها>/. يعيد مساراتِها
+    النسبيّة. لا يرفع. ملفٌّ بالاسم نفسِه والمحتوى نفسِه لا يُعاد كتابتُه."""
+    rel = _chat_dir_ensure(chat_id)
+    root = _ws_dir()
+    if not rel or not root:
+        return []
+    out = []
+    for f in [x for x in (files or [])[:5] if isinstance(x, dict)]:
+        raw = None
+        if f.get("data"):
+            try:
+                raw = base64.b64decode(str(f["data"]).split(",")[-1])
+            except Exception:
+                raw = None
+        elif isinstance(f.get("text"), str) and f["text"] \
+                and not f["text"].startswith(_ATTACH_TOO_BIG):
+            raw = f["text"].encode("utf-8")
+        if not raw or len(raw) > _ATTACH_SAVE_MAX:
+            continue
+        name = _attach_safe_name(f.get("name"))
+        dst = os.path.join(root, rel, name)
+        try:
+            same = False
+            if os.path.isfile(dst):
+                with open(dst, "rb") as fh:
+                    same = fh.read() == raw
+            if not same:
+                with open(dst, "wb") as fh:
+                    fh.write(raw)
+            out.append(rel + "/" + name)
+        except Exception:
+            continue
+    return out
+
+
+def _attach_saved_note(paths, isar):
+    """سطرٌ يسبق المرفقات: أين الملفُّ نفسُه، ليعمل عليه النموذج."""
+    if not paths:
+        return ""
+    if isar:
+        head = ("[الملفّاتُ المرفوعة نفسُها محفوظةٌ في مجلّد العمل — لتعديلها "
+                "اعمل على الملفّ نفسِه، لا تُعِد بناءه]")
+    else:
+        head = ("[The uploaded files themselves are saved in the working "
+                "folder — to edit one, work on that file; do not rebuild it]")
+    return head + "\n" + "\n".join(paths)
 
 
 def _ws_snapshot(max_depth=3, chat_rel=None):
@@ -2809,6 +2879,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ("قراءة الملفات" if isar else "Reading files") if attach_text
                     else ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
+                # الملفُّ المرفوعُ نفسُه في مجلّد المحادثة — قبل اللقطة.
+                if _eng_on and body.get("chatId") and body.get("files"):
+                    try:
+                        _saved_up = _attach_save(body.get("files"),
+                                                 body.get("chatId"))
+                    except Exception:
+                        _saved_up = []
+                    if _saved_up:
+                        attach_text = (_attach_saved_note(_saved_up, isar)
+                                       + "\n\n" + (attach_text or "")).strip()
                 # لقطةُ مساحة عمل المحرّك قبل النوبة — ليُعرَف ما كتبه فيها.
                 _cdir_rel = _chat_dir_rel(body.get("chatId")) if _eng_on else ""
                 _ws_before = (_ws_snapshot(chat_rel=_cdir_rel)
