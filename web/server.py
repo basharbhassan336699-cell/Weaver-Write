@@ -2293,6 +2293,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._oauth_page("Connected ✓  You can close this tab and "
                              "return to Weaver Write.", True)
             return
+        if path == "/api/websearch/status":
+            # آخرُ فحصٍ للبحث (عند إقلاع البوّابة): أيعمل؟ أبُدِّل؟ ولماذا؟
+            try:
+                from pipeline import weaver_core as _wc
+                self._json(_wc._json_read(_wc.WEB_SEARCH_STATUS) or {})
+            except Exception:
+                self._json({})
+            return
         if path == "/api/parallel":
             self._json({"limit": parallel_limit(), "running": _turns_running(),
                         "min": PARALLEL_MIN, "max": PARALLEL_MAX})

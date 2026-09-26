@@ -694,6 +694,14 @@ def gateway_start(wait=None, say=None):
                 configure_model()
         except Exception:
             pass
+        # البحثُ قبل الإقلاع: مزوّدٌ لا يعمل — وليس اختيارَك — يُبدَّل ببديلٍ
+        # يعمل، فتراه البوّابةُ من أوّل نوبة. واختيارُك لا يُمَسّ.
+        try:
+            if (os.environ.get("WEAVER_SEARCH_GUARD", "on") or "on").strip() \
+                    .lower() not in ("0", "off", "false", "no"):
+                ensure_web_search(say=_say)
+        except Exception:
+            pass
         try:
             os.makedirs(STATE, exist_ok=True)
             _log = open(GATEWAY_LOG, "ab", buffering=0)
@@ -754,9 +762,8 @@ def gateway_start(wait=None, say=None):
                             run(["config", "set",
                                  "tools.web.search.enabled", "true"],
                                 timeout=60)
-                            run(["config", "set",
-                                 "tools.web.search.provider",
-                                 WEB_SEARCH_FREE[0]], timeout=60)
+                            _set_search_provider(WEB_SEARCH_FREE[0],
+                                                 auto=True)
                 except Exception:
                     pass
                 return True, f"أقلعت في {time.time() - _t0:.1f} ث"
@@ -909,6 +916,126 @@ WEB_SEARCH_FREE = ("parallel-free", "duckduckgo")
 WEB_SEARCH_KEY = "tools.web.search.enabled"
 
 
+# ── مَن اختار مزوّدَ البحث؟ — مبدأُ أوبن كلاو نفسُه ─────────────────────────
+#
+# مقروءٌ من كوده لا مظنون (dist/runtime-CFtRzJUE.mjs، runWebSearch):
+#     const allowFallback = !hasExplicitWebSearchSelection(...)
+# مزوّدٌ مُعيَّنٌ صراحةً ⟵ يُجرَّب وحده، ويفشل بلا بديل. ولا تعيين ⟵ يُجرَّب
+# المزوّدون بالترتيب وينتقل إلى التالي عند الفشل. أي: الاختيارُ الصريحُ
+# يُحترَم بصرامة، والتلقائيُّ له بدائل.
+#
+# وعطبُنا (مقيسٌ على هاتف المستخدم): حلقتُنا التلقائيّةُ كانت تكتب المزوّدَ
+# بـ`config set` — الأمرِ نفسِه الذي يكتبه اختيارُ المستخدم — فصار duckduckgo
+# «صريحاً» في نظر المحرّك (allowFallback=false)، ثمّ حجبه DuckDuckGo
+# («bot-detection challenge») فبقي البحثُ معطّلاً، و`chosen_provider()` لا
+# تميّز مَن كتبه فتقول «اختيارُك لا يعمل» ولا تبدّل.
+#
+# فنُطبّق مبدأه في طبقتنا: ما كتبناه نحن يُسجَّل هنا ⟵ تلقائيٌّ له بدائل؛
+# وما سواه اختيارُ المستخدم ⟵ لا يُمَسّ، ويُقال له إن فشل.
+WEB_SEARCH_AUTO = os.path.join(STATE, "web_search.auto.json")
+WEB_SEARCH_STATUS = os.path.join(STATE, "web_search.status.json")
+
+
+def _json_read(path):
+    try:
+        import json as _j
+        with open(path, encoding="utf-8") as fh:
+            d = _j.load(fh)
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _json_write(path, d):
+    try:
+        import json as _j
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            _j.dump(d, fh, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def search_origin(configured=None):
+    """"" بلا تعيين · "system" كتبناه نحن · "user" اختيارُ المستخدم.
+
+    والقديمُ بلا سجلّ: مزوّدٌ بلا مفتاح (duckduckgo · parallel-free) لا يختاره
+    المحرّكُ تلقائياً أبداً (توثيقُه: «never auto-selected»)، وحلقتُنا هي التي
+    كانت تكتبه — فيُعدّ «system». وما سواه ⟵ «user»."""
+    cfg = chosen_provider() if configured is None else (configured or "")
+    if not cfg:
+        return ""
+    rec = _json_read(WEB_SEARCH_AUTO)
+    if rec.get("provider"):
+        if rec.get("provider") == cfg:
+            return "user" if rec.get("by") == "user" else "system"
+        return "user"            # غيّره أحدٌ من خارجنا (معالجُ المحرّك مثلاً)
+    return "system" if cfg in WEB_SEARCH_FREE else "user"
+
+
+def _mark_search_choice(pid, by):
+    """سجّل مَن اختار المزوّد: "system" (له بدائل) أو "user" (لا يُمَسّ)."""
+    if pid:
+        _json_write(WEB_SEARCH_AUTO, {"provider": pid, "by": by,
+                                      "ts": time.time()})
+
+
+def _set_search_provider(pid, auto=True):
+    """اكتب المزوّد. `auto` ⟵ نحن كتبناه (له بدائل)؛ وإلّا ⟵ اختيارُ المستخدم."""
+    code, _o, err = run(["config", "set", "tools.web.search.provider", pid],
+                        timeout=90)
+    if code == 0:
+        _mark_search_choice(pid, "system" if auto else "user")
+    return code == 0, _real_error(err)
+
+
+def ensure_web_search(say=None):
+    """البحثُ يعمل؟ وإلّا — ولم يكن الاختيارُ للمستخدم — فبديلٌ يعمل.
+
+    يعيد dict: ok · provider · origin · switched_from · error. ويكتبها في
+    WEB_SEARCH_STATUS لتُخبر بها الواجهة. لا يرفع استثناءً."""
+    out = {"ok": False, "provider": "", "origin": "", "switched_from": "",
+           "error": "", "ts": time.time()}
+    try:
+        cfg = chosen_provider()
+        st = probe_search("test")
+        out.update(provider=st.get("chosen") or cfg, origin=search_origin(cfg))
+        if st.get("ok"):
+            out["ok"] = True
+            _json_write(WEB_SEARCH_STATUS, out)
+            return out
+        out["error"] = (st.get("error") or "")[:300]
+        if cfg and out["origin"] == "user":
+            # اختيارُ المستخدم: لا يُبدَّل من ورائه — كما يفعل المحرّك.
+            _json_write(WEB_SEARCH_STATUS, out)
+            return out
+        for pid in WEB_SEARCH_FREE:
+            if pid == cfg:
+                continue
+            if say:
+                try:
+                    say("… البحثُ عبر %s لا يعمل — تجربةُ %s" % (cfg or "—", pid))
+                except Exception:
+                    pass
+            okw, _why = _set_search_provider(pid, auto=True)
+            if not okw:
+                continue
+            st2 = probe_search("test")
+            if st2.get("ok"):
+                out.update(ok=True, provider=pid, origin="system",
+                           switched_from=cfg or "")
+                _json_write(WEB_SEARCH_STATUS, out)
+                return out
+        # لا بديلَ يعمل ⟵ يعود ما كان، فلا يتقلّب الإعدادُ بلا فائدة.
+        if cfg:
+            _set_search_provider(cfg, auto=True)
+        _json_write(WEB_SEARCH_STATUS, out)
+        return out
+    except Exception as e:
+        out["error"] = "%s: %s" % (type(e).__name__, str(e)[:200])
+        return out
+
+
 def enable_web_search():
     """يُركّب مزوّدَي البحثِ الرسميّين ويُفعّل الأداة — بأوامر المحرّك نفسِه.
 
@@ -958,6 +1085,14 @@ def enable_web_search():
     if _mine and st.get("ok"):
         rows.append(("اختيارُك محفوظ: " + _mine, True, ""))
         return rows
+    if _mine and not st.get("ok") and search_origin(_mine) == "system":
+        # كتبناه نحن ولا يعمل ⟵ بديلٌ يعمل (مبدأُ المحرّك: التلقائيُّ له بدائل).
+        r = ensure_web_search()
+        rows.append(("المزوّد: " + (r.get("provider") or "لا شيء")
+                     + ((" (بدل %s)" % r["switched_from"])
+                        if r.get("switched_from") else ""),
+                     bool(r.get("ok")), r.get("error", "")[:160]))
+        return rows
     if _mine and not st.get("ok"):
         # اختيارُه قائمٌ لكنّه لا يعمل: يُقال له، ولا يُبدَّل من ورائه.
         rows.append(("اختيارُك (" + _mine + ") لا يعمل الآن", False,
@@ -975,9 +1110,9 @@ def enable_web_search():
         for _free in WEB_SEARCH_FREE:
             if st.get("chosen") == _free and st.get("ok"):
                 break
-            code2, _o2, err2 = run(["config", "set",
-                                    "tools.web.search.provider", _free],
-                                   timeout=90)
+            # يُسجَّل أنّنا كتبناه ⟵ تلقائيٌّ له بدائلُ لاحقاً، لا «اختيارُك».
+            _okw, _errw = _set_search_provider(_free, auto=True)
+            code2, err2 = (0 if _okw else 1), _errw
             rows.append(("tools.web.search.provider = " + _free, code2 == 0,
                          _real_error(err2)
                          or (("السابقُ فشل: " + _why[:100]) if _why
@@ -3969,15 +4104,26 @@ def _cli():
     if argv[:2] == ["--web-search", "choose"]:
         # معالجُ المحرّك نفسُه. وإن لم تكن الطرفيّةُ تفاعليّةً قال هو ذلك
         # ودلّ على البديل غير التفاعليّ — فلا نكرّر كلامه.
-        sys.exit(configure_web())
+        _rc = configure_web()
+        # اختيارٌ صريحٌ منك ⟵ لا بدائلَ من ورائك (مبدأُ المحرّك).
+        _mark_search_choice(chosen_provider(), "user")
+        sys.exit(_rc)
     if argv == ["--web-search", "ddg"]:
         # تعيينٌ صريح: يجعل duckduckgo هو المزوّد، فيعمل البحثُ بلا مفتاح.
-        code, out, err = run(["config", "set",
-                              "tools.web.search.provider", "duckduckgo"],
-                             timeout=90)
-        print("  " + ("✓ المزوّد = duckduckgo" if code == 0
-                      else "⚠ تعذّر: " + (_real_error(err) or "")[:160]))
+        _okd, _errd = _set_search_provider("duckduckgo", auto=False)
+        print("  " + ("✓ المزوّد = duckduckgo" if _okd
+                      else "⚠ تعذّر: " + (_errd or "")[:160]))
         return
+    if argv[:2] == ["--web-search", "ensure"]:
+        r = ensure_web_search(say=lambda s: print("  " + s))
+        print("  %s المزوّد: %s%s   (%s)" % (
+            "✓" if r.get("ok") else "✗", r.get("provider") or "—",
+            (" بدل " + r["switched_from"]) if r.get("switched_from") else "",
+            {"user": "اختيارُك — لا يُبدَّل", "system": "تلقائيّ",
+             "": "لا تعيين"}.get(r.get("origin"), r.get("origin"))))
+        if not r.get("ok") and r.get("error"):
+            print("    السبب: " + r["error"][:200])
+        sys.exit(0 if r.get("ok") else 1)
     if argv == ["--web-search"]:
         if not (available() and node_bin()):
             print(why_unavailable(), file=sys.stderr)

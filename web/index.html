@@ -5048,6 +5048,30 @@
   }
   try{ document.addEventListener('DOMContentLoaded', wvLoadParallel); if(document.readyState!=='loading') wvLoadParallel(); }catch(e){}
 
+  // تنبيهُ البحث: بُدِّل مزوّدٌ لا يعمل، أو اختيارُك لا يعمل — مرّةً لكلِّ فحص.
+  async function wvSearchNotice(){
+    try{
+      var s=await (await fetch('/api/websearch/status')).json();
+      if(!s||!s.ts) return;
+      var seen=0; try{ seen=parseFloat(localStorage.getItem('wv_search_seen')||'0')||0; }catch(e){}
+      if(s.ts<=seen) return;
+      var ar=(document.documentElement.lang||'en')==='ar', msg='';
+      if(s.ok && s.switched_from){
+        msg = ar ? ('البحث: '+s.switched_from+' لا يعمل الآن — صار البحث عبر '+s.provider+'.')
+                 : ('Web search: '+s.switched_from+' is not working — now using '+s.provider+'.');
+      } else if(!s.ok && s.origin==='user'){
+        msg = ar ? ('البحث: اختيارك ('+s.provider+') لا يعمل الآن. لتغييره: python3 -m pipeline.weaver_core --web-search choose')
+                 : ('Web search: your choice ('+s.provider+') is not working. To change it: python3 -m pipeline.weaver_core --web-search choose');
+      } else if(!s.ok){
+        msg = ar ? 'البحث في الإنترنت لا يعمل الآن — سيفتح النموذج المواقع مباشرة.'
+                 : 'Web search is not working right now — the model will open sites directly.';
+      }
+      if(msg) wvNotice(msg);
+      try{ localStorage.setItem('wv_search_seen', String(s.ts)); }catch(e){}
+    }catch(e){}
+  }
+  try{ document.addEventListener('DOMContentLoaded', wvSearchNotice); if(document.readyState!=='loading') wvSearchNotice(); }catch(e){}
+
   async function wvLoadPenalty(){
     try{
       var r=await (await fetch('/api/penalty')).json();
