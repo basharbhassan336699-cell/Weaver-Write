@@ -33,6 +33,15 @@ if not _c:
 
 import server as S                        # noqa: E402
 from pipeline import weaver_core as W     # noqa: E402
+from config import keysync as K           # noqa: E402
+import pathlib                            # noqa: E402
+
+# الإعدادُ يُكتب في config/.env — فيُعزل في ملفٍّ مؤقّت.
+_ENV_TMP = pathlib.Path(tempfile.mkdtemp())
+_real_env = (K._ENV_FILE, K._CONF_DIR)
+K._CONF_DIR, K._ENV_FILE = _ENV_TMP, _ENV_TMP / ".env"
+K._ENV_FILE.write_text("", encoding="utf-8")
+os.environ.pop("WEAVER_PARALLEL_CHATS", None)
 
 P = F = 0
 
@@ -97,6 +106,17 @@ try:
                         " i.value=t; sendMessage(); }", txt)
             pg.wait_for_timeout(400)
 
+        print("\n— الحدُّ من الإعدادات —")
+        ok("الافتراضيُّ ٢ (حمايةٌ للهاتف)", pg.evaluate("WV_MAX_PARALLEL") == 2
+           and pg.evaluate("document.getElementById('parallelLimit').value")
+           == "2")
+        pg.evaluate("()=>{document.getElementById('parallelLimit').value='5';"
+                    "wvSaveParallel();}")
+        pg.wait_for_timeout(700)
+        ok("اختيارُ ٥ من الإعدادات ⟵ يُحفَظ ويعمل",
+           pg.evaluate("WV_MAX_PARALLEL") == 5
+           and "WEAVER_PARALLEL_CHATS=5" in K._ENV_FILE.read_text())
+
         print("\n— خمسُ محادثاتٍ تُرسَل وتُترك تعمل —")
         ids = []
         for i in range(1, 6):
@@ -160,6 +180,8 @@ finally:
     W.workspace_dir = _real["ws"]
     S._engine_ready = _real["ready"]
     S._chat_via_engine = _real["eng"]
+    K._ENV_FILE, K._CONF_DIR = _real_env
+    os.environ.pop("WEAVER_PARALLEL_CHATS", None)
 
 print("\n" + "=" * 62)
 print(f" RESULT: {'PASS' if F == 0 else 'FAIL'}   ({P}/{P + F})")

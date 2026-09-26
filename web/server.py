@@ -1537,6 +1537,30 @@ _TURNS_ACTIVE = {}          # رمزٌ ⟵ {"overlap": bool}
 _TURNS_SEQ = [0]
 
 
+# كم محادثةً تعمل معاً — من الإعدادات (config/.env)، ١ إلى ٥، والافتراضيُّ ٢.
+# قِيس على هاتف المستخدم (Android 15، ذاكرةٌ 3.7 GB): خمسٌ معاً ⟵ نفدت
+# الذاكرةُ فقتل أندرويد Termux كلَّه (برامجُ المحرّك بعدها: 0). فالحدُّ حمايةٌ
+# للهاتف، ويرفعه المستخدمُ إن تحمّل جهازُه أكثر.
+PARALLEL_MIN, PARALLEL_MAX, PARALLEL_DEFAULT = 1, 5, 2
+
+
+def parallel_limit():
+    try:
+        keysync.reload_env()
+    except Exception:
+        pass
+    try:
+        v = int(str(os.environ.get("WEAVER_PARALLEL_CHATS") or "").strip())
+    except (TypeError, ValueError):
+        return PARALLEL_DEFAULT
+    return v if PARALLEL_MIN <= v <= PARALLEL_MAX else PARALLEL_DEFAULT
+
+
+def _turns_running():
+    with _TURNS_LOCK:
+        return len(_TURNS_ACTIVE)
+
+
 def _turn_begin():
     """سجّل نوبةً جارية. يعيد رمزَها. نوبةٌ تبدأ والأخرى جاريةٌ ⟵ تداخلتا."""
     with _TURNS_LOCK:
@@ -2255,6 +2279,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._oauth_page("Connected ✓  You can close this tab and "
                              "return to Weaver Write.", True)
             return
+        if path == "/api/parallel":
+            self._json({"limit": parallel_limit(), "running": _turns_running(),
+                        "min": PARALLEL_MIN, "max": PARALLEL_MAX})
+            return
         if path == "/api/penalty":
             # زرُّ «تقليل التكرار» في الإعدادات — يقرأ القيمةَ من config/.env.
             keysync.reload_env()
@@ -2424,6 +2452,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         body = self._body()
+
+        if path == "/api/parallel":
+            try:
+                v = int(body.get("limit"))
+            except (TypeError, ValueError):
+                v = PARALLEL_DEFAULT
+            v = min(PARALLEL_MAX, max(PARALLEL_MIN, v))
+            keysync.save_env({"WEAVER_PARALLEL_CHATS": str(v)})
+            self._json({"ok": True, "limit": v})
+            return
 
         if path == "/api/penalty":
             # تشغيلٌ/إطفاء: قيمةٌ في (0، 2] تُكتب، وغيرُها ⟵ 0 (مطفأة). والصفرُ
@@ -2753,6 +2791,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _cdir_rel = _chat_dir_rel(body.get("chatId")) if _eng_on else ""
                 _ws_before = (_ws_snapshot(chat_rel=_cdir_rel)
                               if _eng_on else None)
+                # حارسُ الخادم: ولو من تبويبين — لا يتجاوز الحدَّ ما يعمل معاً.
+                if _eng_on and _turns_running() >= parallel_limit():
+                    _lim = parallel_limit()
+                    sse({"t": "reply", "reply": (
+                        ("تعمل الآن %d محادثات (الحدُّ في الإعدادات) — انتظر "
+                         "انتهاءَ إحداها ثمّ أعِد الإرسال." % _lim) if isar else
+                        ("%d chats are running (the limit in Settings) — wait "
+                         "for one to finish, then resend." % _lim))})
+                    sse({"t": "done"})
+                    return
                 _turn_tok = _turn_begin()
                 try:
                     r = _chat(msg, body.get("history"),

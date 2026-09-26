@@ -2647,6 +2647,21 @@
             </select>
             <label class="switch"><input type="checkbox" id="penaltyToggle" onchange="wvSavePenalty()"><span class="switch-slider"></span></label>
           </div>
+
+          <h2 class="settings-section-title sub">Performance</h2>
+          <div class="settings-row">
+            <div class="settings-row-main">
+              <div class="settings-row-label">Parallel chats</div>
+              <div class="settings-row-desc">How many chats can work at the same time. Each running chat uses phone memory — if Termux closes by itself, lower this. <span id="parallelMsg"></span></div>
+            </div>
+            <select id="parallelLimit" class="settings-select" style="width:auto" onchange="wvSaveParallel()">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+          </div>
         </div>
 
         <!-- PLUGINS -->
@@ -4091,7 +4106,7 @@
   // إلى (ب) قبل وصوله ⟵ حُفظ ردُّ (أ) في (ب) وضاع من (أ). الآن تُحفَظ كلُّ
   // رسالةٍ مع رقم محادثتها لحظةَ الإرسال، وعنصرُ الردّ الجاري يُعاد إلى
   // الشاشة إن رجعتَ إلى محادثته قبل اكتماله.
-  var WV_MAX_PARALLEL = 5;
+  var WV_MAX_PARALLEL = 2;              // يُقرأ من الإعدادات (/api/parallel)
   var WV_INFLIGHT = {};                 // رقمُ المحادثة ⟵ [عناصرُ ردودٍ جارية]
   var WV_SAVE_CHAIN = {};               // حفظٌ متتابعٌ لكلِّ محادثة (لا سباق)
   function wvInflightCount() {
@@ -5015,6 +5030,24 @@
     }catch(e){ wvSetMsg('Discovery failed: '+e.message, 'err'); }
   }
   // زرُّ «تقليل التكرار»: يقرأ ويكتب WEAVER_FREQUENCY_PENALTY عبر /api/penalty.
+  // عددُ المحادثات المتزامنة: يُقرأ ويُكتب عبر /api/parallel (config/.env).
+  async function wvLoadParallel(){
+    try{
+      var r=await (await fetch('/api/parallel')).json();
+      var v=parseInt(r.limit,10);
+      if(v>=1&&v<=5){ WV_MAX_PARALLEL=v; var s=document.getElementById('parallelLimit'); if(s) s.value=String(v); }
+    }catch(e){}
+  }
+  async function wvSaveParallel(){
+    var s=document.getElementById('parallelLimit'), msg=document.getElementById('parallelMsg');
+    try{
+      var r=await (await fetch('/api/parallel',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({limit:parseInt(s.value,10)})})).json();
+      if(r.ok){ WV_MAX_PARALLEL=r.limit; if(msg) msg.textContent=' ✓ '+r.limit; }
+    }catch(e){ if(msg) msg.textContent=' ✗ '+e.message; }
+  }
+  try{ document.addEventListener('DOMContentLoaded', wvLoadParallel); if(document.readyState!=='loading') wvLoadParallel(); }catch(e){}
+
   async function wvLoadPenalty(){
     try{
       var r=await (await fetch('/api/penalty')).json();

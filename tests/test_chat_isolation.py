@@ -173,6 +173,28 @@ try:
     ok("ملفٌّ في مجلّد محادثةٍ أخرى ⟵ لا يُرى أبداً، ولو ذُكر اسمُه",
        files_of(chat("طلب", "G")) == [])
 
+    print("\n— حارسُ الخادم: لا يتجاوز الحدَّ ولو من تبويبين —")
+    os.environ["WEAVER_PARALLEL_CHATS"] = "1"
+    _rl = S.keysync.reload_env
+    S.keysync.reload_env = lambda: {}          # لا يُقرأ config/.env الحقيقيّ
+    _plan.clear()
+    _plan["H"] = {"reply": "ردُّ ح"}
+    _busy = S._turn_begin()                   # محادثةٌ أخرى تعمل الآن
+    try:
+        ev = chat("طلب", "H")
+        rep = next((e.get("reply") for e in ev if e.get("t") == "reply"), "")
+        ok("الحدُّ ١ ومحادثةٌ تعمل ⟵ تنبيهٌ لا تشغيل", "تعمل الآن 1" in rep
+           and "ردُّ ح" not in rep, rep)
+    finally:
+        S._turn_end(_busy)
+    ev = chat("طلب", "H")
+    ok("وحين تنتهي ⟵ تعمل", any(e.get("reply") == "ردُّ ح" for e in ev))
+    os.environ["WEAVER_PARALLEL_CHATS"] = "9"
+    ok("قيمةٌ خارج ١–٥ ⟵ الافتراضيُّ ٢", S.parallel_limit() == 2)
+    os.environ.pop("WEAVER_PARALLEL_CHATS", None)
+    ok("بلا ضبط ⟵ ٢", S.parallel_limit() == 2)
+    S.keysync.reload_env = _rl
+
     print("\n— حالةُ النوبات —")
     ok("لا نوبةَ عالقة بعد الانتهاء", S._TURNS_ACTIVE == {}, S._TURNS_ACTIVE)
     t1 = S._turn_begin()
