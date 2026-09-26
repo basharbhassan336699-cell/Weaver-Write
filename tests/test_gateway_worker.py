@@ -176,6 +176,39 @@ finally:
     for n, f in _real.items():
         setattr(W, n, f)
 
+print("\n— لا تُوقَف عمليةٌ حيّةٌ لأنّها بطيئة (قِيس: 143 على الهاتف) —")
+class _FakeProc:
+    def __init__(self):
+        self.killed = False
+    def poll(self):
+        return None
+    def terminate(self):
+        self.killed = True
+_fp = _FakeProc()
+_rh, _ra = W._worker_health, W.available
+W._WORKER.update(proc=_fp, port=45678, failed_at=0.0)
+W._worker_health = lambda port, timeout=3: False      # مشغولةٌ لا تردّ بسرعة
+W.available = lambda: True
+try:
+    ok("حيّةٌ وبطيئة ⟵ يُستعمل منفذُها ولا تُوقَف",
+       W.worker_port() == 45678 and not _fp.killed)
+    W._worker_refused(45678)
+    ok("رفضت الاتّصال ⟵ تُنسى وتُوقَف (لا نوبةَ فيها)", _fp.killed
+       and W._WORKER["proc"] is None and W._WORKER["port"] is None)
+    _fp2 = _FakeProc()
+    W._WORKER.update(proc=_fp2, port=11111)
+    W._worker_refused(45678)
+    ok("رفضٌ من منفذٍ قديم ⟵ لا يمسّ العمليةَ الحاليّة", not _fp2.killed
+       and W._WORKER["port"] == 11111)
+finally:
+    W._worker_health, W.available = _rh, _ra
+    W._WORKER.update(proc=None, port=None, failed_at=0.0)
+src = open(os.path.join(_ROOT, "pipeline", "weaver_core.py"),
+           encoding="utf-8").read()
+_wp = src[src.index("def worker_port"):src.index("def worker_stop")]
+ok("worker_port لا تُوقف عمليةً حيّة", "terminate" not in
+   _wp.split("_WORKER[\"proc\"] = _WORKER[\"port\"] = None")[0])
+
 print("\n— _worker_agent: ما لم يصل لا يُحسب فشلاً —")
 _rp = W.worker_port
 try:

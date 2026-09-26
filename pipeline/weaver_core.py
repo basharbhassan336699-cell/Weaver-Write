@@ -1149,13 +1149,12 @@ def worker_port():
         return None
     with _WORKER["lock"]:
         p, port = _WORKER["proc"], _WORKER["port"]
-        if p is not None and p.poll() is None and port and _worker_health(port):
+        # حيّةٌ ⟵ تُستعمل، ولا يُسأل «أأنت حيّة؟» بمهلةٍ قصيرة: قِيس على هاتف
+        # المستخدم — كانت تُسأل بمهلة ٣ ثوانٍ وهي مشغولةٌ بنوبة، فتأخّرت،
+        # فحُسبت ميّتةً وأُوقفت (SIGTERM) ⟵ «agent exited with code 143»
+        # وانقطعت نوبةٌ جارية. لا تُوقَف عمليةٌ حيّةٌ أبداً لأنّها بطيئة.
+        if p is not None and p.poll() is None and port:
             return port
-        if p is not None and p.poll() is None:
-            try:
-                p.terminate()
-            except Exception:
-                pass
         _WORKER["proc"] = _WORKER["port"] = None
         # فشلٌ حديث ⟵ لا يُعاد الإقلاعُ في كلِّ رسالة (١٠ دقائق)، والسطرُ يعمل.
         if _WORKER["failed_at"] and time.time() - _WORKER["failed_at"] < 600:
@@ -1217,6 +1216,21 @@ import atexit as _atexit_worker
 _atexit_worker.register(worker_stop)
 
 
+def _worker_refused(port):
+    """رفضت الاتّصال ⟵ لا تخدم أصلاً (فلا نوبةَ جاريةَ فيها تُقطع): تُنسى
+    فتُقلَع من جديد في النداء التالي. تبقى إن كانت عمليةً أخرى على المنفذ."""
+    with _WORKER["lock"]:
+        p = _WORKER["proc"]
+        if _WORKER["port"] != port:
+            return
+        _WORKER["proc"] = _WORKER["port"] = None
+    if p is not None and p.poll() is None:
+        try:
+            p.terminate()
+        except Exception:
+            pass
+
+
 def _worker_agent(req, timeout):
     """نوبةٌ عبر العملية المقيمة ⟵ (رمز، خرج، خطأ) بشكل run() نفسِه.
 
@@ -1239,6 +1253,7 @@ def _worker_agent(req, timeout):
             d = _j.loads(r.read().decode("utf-8"))
     except _ue.URLError as e:
         if isinstance(getattr(e, "reason", None), ConnectionRefusedError):
+            _worker_refused(port)
             return None
         if isinstance(getattr(e, "reason", None), (_sock.timeout, TimeoutError)):
             return 124, "", "تجاوز المهلة (%s ثانية)" % timeout
@@ -1246,6 +1261,7 @@ def _worker_agent(req, timeout):
     except (_sock.timeout, TimeoutError):
         return 124, "", "تجاوز المهلة (%s ثانية)" % timeout
     except ConnectionRefusedError:
+        _worker_refused(port)
         return None
     except Exception as e:
         return 1, "", "العملية المقيمة: %s: %s" % (type(e).__name__, str(e)[:300])
