@@ -16,6 +16,7 @@ Excel.
     python3 office.py chart SPEC.json --out FILE.png
     python3 office.py chart SPEC.json --into FILE.docx|.pptx [--out NEW]
     python3 office.py edit  FILE OPS.json [--out NEW]
+    python3 office.py fonts [NAME]
 
 قواعد:
   · الأرقامُ في OPS هي أرقامُ `info` **قبل** التعديل، ولو تتابعت العمليّات.
@@ -51,6 +52,45 @@ def _paths():
 
 
 _AR = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
+
+
+# ── الخطوط: الاسمُ المطلوب ⟵ خطٌّ عندنا (engines/fonts-core/font_catalog.py) ──
+# وخطٌّ عندنا يُضمَّن في ملفّ Word فيظهر على هاتفٍ لا خطَّ فيه (مقيس: Amiri غيرُ
+# مثبَّتٍ هنا، والرسمُ رسمه بـAmiri من داخل الملفّ). PowerPoint وExcel: بالاسم.
+def find_font(query):
+    if not query:
+        return None
+    _paths()
+    try:
+        import font_catalog
+        return font_catalog.find_font(query)
+    except Exception:
+        return {"family": str(query), "bundled": False, "files": {},
+                "embeddable": False, "stand_in": None, "note": "font catalog missing"}
+
+
+def _font_says(e, where):
+    """سطرٌ للنموذج: أيُّ خطٍّ كُتب، وهل يظهر على الهاتف."""
+    if not e:
+        return ""
+    if e.get("bundled") and where == "word" and e.get("embeddable"):
+        return "font %s (embedded — shows on any device)" % e["family"]
+    if e.get("bundled"):
+        return "font %s (by name; bundled font — shows where installed)" % e["family"]
+    return "font %s (by name only — not bundled; shows where installed%s)" % (
+        e["family"], "; charts use %s" % e["stand_in"] if e.get("stand_in") else "")
+
+
+def _embed_word_fonts(path, entries):
+    """ضمّن ما عندنا من الخطوط المطلوبة في ملفّ Word. يعيد الأسماء."""
+    _paths()
+    from docx_rtl import embed_fonts
+    todo, seen = [], set()
+    for e in entries:
+        if e and e.get("bundled") and e.get("embeddable") and e["family"] not in seen:
+            seen.add(e["family"])
+            todo.append((e["family"], e["files"]))
+    return embed_fonts(path, todo) if todo else []
 
 
 def _is_ar(text):
@@ -381,13 +421,18 @@ def chart_png(spec, out):
                     title=spec.get("title", ""),
                     theme_id=spec.get("theme", spec.get("theme_id", "academic_navy")),
                     xlabel=spec.get("xlabel", ""), ylabel=spec.get("ylabel", ""),
-                    lang=lang)
+                    lang=lang, font=spec.get("font"))
+    _LAST_CHART.clear()
+    _LAST_CHART.update(r)
     if not r.get("ok"):
         raise Fail("chart failed: %s" % r.get("error"))
     with open(out, "rb") as f:
         if f.read(8) != b"\x89PNG\r\n\x1a\n":
             raise Fail("chart output is not a PNG")
     return out
+
+
+_LAST_CHART = {}
 
 
 def _tmp_png(tag="chart"):
@@ -404,18 +449,27 @@ def build_word(spec, out):
     lang = _lang_of(spec, spec.get("title"), *[s.get("heading", "") + " " +
                                                 str(s.get("body", ""))[:200]
                                                 for s in sections[:3]])
+    # الخطّ: المطلوبُ، وإلّا Kufyan (خطُّ المستخدم المفضَّل، مضمَّنٌ عندنا)
+    # للعربيّ — باسمه الحقيقيّ في ملفّه («Kufyan Arabic Regular»، لا «Kufyan
+    # Arabic» الذي كانت تكتبه الأدوات فلا يطابقه شيء).
+    main = find_font(spec.get("font") or ("Kufyan Arabic Regular" if lang == "ar"
+                                           else None))
+    latin = find_font(spec.get("font_en")) if spec.get("font_en") else None
     tmp = []
     try:
         for s in sections:
             if s.get("chart") and not s.get("image"):
                 ch = dict(s["chart"])
                 ch.setdefault("lang", lang)
+                if main and main.get("bundled"):
+                    ch.setdefault("font", main["family"])   # الرسمُ بخطِّ المستند
                 png = chart_png(ch, _tmp_png())
                 tmp.append(png)
                 s["image"] = {"path": png, "caption": ch.get("caption", "")}
         build_rich_docx(
             spec.get("title", ""), sections, output_path=out, lang=lang,
-            theme_id=spec.get("theme", "academic_navy"), font=spec.get("font"),
+            theme_id=spec.get("theme", "academic_navy"),
+            font=main["family"] if main else None,
             subtitle=spec.get("subtitle", ""), references=spec.get("references"),
             header_text=spec.get("header"),
             page_numbers=spec.get("page_numbers", True),
@@ -429,12 +483,23 @@ def build_word(spec, out):
             except OSError:
                 pass
     from docx import Document
+    import docx_rtl
+    d = Document(out)
+    docx_rtl.finalize_direction(d, lang)
+    if main or latin:
+        docx_rtl.apply_fonts(d, cs=main["family"] if main else None,
+                             latin=(latin or main)["family"])
+    d.save(out)
+    _embed_word_fonts(out, [main, latin])
+    _no_dupes(out)
     d = Document(out)
     imgs = sum(1 for n in zipfile.ZipFile(out).namelist()
                if n.startswith("word/media/"))
-    return "Word %s: %d paragraphs · %d tables · %d images · %s" % (
+    fonts = " · ".join(x for x in (_font_says(main, "word"),
+                                   _font_says(latin, "word")) if x)
+    return "Word %s: %d paragraphs · %d tables · %d images · %s%s" % (
         lang.upper(), len(d.paragraphs), len(d.tables), imgs,
-        "RTL" if lang == "ar" else "LTR")
+        "RTL" if lang == "ar" else "LTR", (" · " + fonts) if fonts else "")
 
 
 def _slide_kind(s):
@@ -445,7 +510,7 @@ def _slide_kind(s):
     return "normal"
 
 
-def _pptx_chart_slide(prs, spec, title, rtl):
+def _pptx_chart_slide(prs, spec, title, rtl, font_ar=None, font_en=None):
     """شريحةُ رسمٍ على كائن العرض نفسِه (embed_chart يعمل على مسارٍ فقط)."""
     _paths()
     from pptx.util import Inches
@@ -463,7 +528,8 @@ def _pptx_chart_slide(prs, spec, title, rtl):
                                           prs.slide_width - Inches(1.4), Inches(0.9))
             tb.text_frame.word_wrap = True
             bp._add_text(tb.text_frame, title, size=26, bold=True, color=bp.NAVY,
-                         align=None, rtl=rtl)
+                         align=None, rtl=rtl, font_ar=font_ar or bp.AR_FONT,
+                         font_en=font_en or bp.EN_FONT)
             top = Inches(1.4)
         iw, ih = Image.open(png).size
         avail_h = prs.slide_height - top - Inches(0.3)
@@ -497,10 +563,14 @@ def build_powerpoint(spec, out):
     lang = _lang_of(spec, spec.get("title"), *[s.get("title", "") + " " + " ".join(
         str(p) for p in (s.get("points") or [])[:3]) for s in slides[:4]])
     rtl = lang == "ar"
+    main = find_font(spec.get("font"))
+    latin = find_font(spec.get("font_en"))
+    f_ar = main["family"] if main else None
+    f_en = (latin or main)["family"] if (latin or main) else None
     normal = [s for s in slides if _slide_kind(s) == "normal"]
     bp.build_deck(title=spec.get("title", ""), slides=normal,
                   subtitle=spec.get("subtitle", ""), output_path=out, lang=lang,
-                  closing=spec.get("closing"))
+                  closing=spec.get("closing"), font_ar=f_ar, font_en=f_en)
     prs = Presentation(out)
     ids = list(prs.slides._sldIdLst)          # غلاف · العاديّة · الختام
     cover, closing, body = ids[0], ids[-1], iter(ids[1:-1])
@@ -514,18 +584,60 @@ def build_powerpoint(spec, out):
             t = s["table"]
             add_table_slide(prs, t.get("headers", []), t.get("rows", []),
                             lang=lang, theme_id=spec.get("theme", "academic_navy"),
-                            title=s.get("title", ""), totals=t.get("totals"))
+                            title=s.get("title", ""), totals=t.get("totals"),
+                            font=f_ar if rtl else f_en)
         else:
             ch = dict(s["chart"])
             ch.setdefault("lang", lang)
-            _pptx_chart_slide(prs, ch, s.get("title", ""), rtl)
+            if main and main.get("bundled"):
+                ch.setdefault("font", main["family"])
+            _pptx_chart_slide(prs, ch, s.get("title", ""), rtl, f_ar, f_en)
         order.append(prs.slides._sldIdLst[-1])
     order.append(closing)
     _reorder(prs, order)
+    if f_ar or f_en:
+        _pptx_fonts(prs.slides, f_ar, f_en)
     prs.save(out)
     p2 = Presentation(out)
-    return "PowerPoint %s: %d slides · %s" % (lang.upper(), len(p2.slides),
-                                              "RTL" if rtl else "LTR")
+    fonts = " · ".join(x for x in (_font_says(main, "pptx"),
+                                   _font_says(latin, "pptx")) if x)
+    return "PowerPoint %s: %d slides · %s%s" % (
+        lang.upper(), len(p2.slides), "RTL" if rtl else "LTR",
+        (" · " + fonts) if fonts else "")
+
+
+_A_RPR_AFTER_LATIN = ("ea", "cs", "sym", "hlinkClick", "hlinkMouseOver", "rtl",
+                      "extLst")
+
+
+def _pptx_fonts(slides, f_ar=None, f_en=None):
+    """الخطُّ على كلِّ نصٍّ في الشرائح: a:cs للعربيّ، a:latin للاتينيّ. يعيد العدد.
+    (python-pptx يكتب font.name في a:latin وحده — فالعربيُّ في خلايا الجداول
+    كان بخطّ القالب.) الترتيبُ كما في المخطّط: latin ثمّ ea ثمّ cs."""
+    from pptx.oxml.ns import qn
+    n = 0
+    for s in slides:
+        for tf in _text_frames(s):
+            for p in tf.paragraphs:
+                for r in p.runs:
+                    rPr = r._r.get_or_add_rPr()
+                    for tag, fam, later in (
+                            ("latin", f_en or f_ar, _A_RPR_AFTER_LATIN),
+                            ("cs", f_ar, _A_RPR_AFTER_LATIN[2:])):
+                        if not fam:
+                            continue
+                        el = rPr.find(qn("a:" + tag))
+                        if el is None:
+                            el = rPr.makeelement(qn("a:" + tag), {})
+                            nxt = next((c for c in rPr if c.tag in
+                                        [qn("a:" + x) for x in later]), None)
+                            if nxt is not None:
+                                nxt.addprevious(el)
+                            else:
+                                rPr.append(el)
+                        el.set("typeface", fam)
+                    n += 1
+    return n
 
 
 def _copy_sheet(src, dst):
@@ -569,6 +681,19 @@ def _xl_chart(ws, ch):
         (ws.max_column or 1) + 2))
 
 
+def _xlsx_font(sheets, family, ranges=None):
+    """خطٌّ لكلِّ خليّةٍ فيها قيمة — يبقى حجمُها وعرضُها ولونُها."""
+    from openpyxl.styles import Font
+    for ws in sheets:
+        for row in ws.iter_rows():
+            for c in row:
+                if c.value is None:
+                    continue
+                f = c.font
+                c.font = Font(name=family, size=f.size, bold=f.bold, italic=f.italic,
+                              underline=f.underline, color=f.color)
+
+
 def _col_letter(n):
     from openpyxl.utils import get_column_letter
     return get_column_letter(n)
@@ -606,16 +731,20 @@ def build_excel(spec, out):
             if s.get("chart"):
                 _xl_chart(dst, s["chart"])
             dst.freeze_panes = "A2" if s.get("headers") else None
+        main = find_font(spec.get("font"))
+        if main:
+            _xlsx_font(wb.worksheets, main["family"])
         wb.calculation.fullCalcOnLoad = True
         wb.save(out)
     finally:
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
     wb2 = load_workbook(out)
-    return "Excel %s: %d sheets (%s) · %s" % (
+    _f = _font_says(find_font(spec.get("font")), "xlsx")
+    return "Excel %s: %d sheets (%s) · %s%s" % (
         lang.upper(), len(wb2.worksheets),
         ", ".join("%s %s" % (w.title, w.dimensions) for w in wb2.worksheets),
-        "RTL" if lang == "ar" else "LTR")
+        "RTL" if lang == "ar" else "LTR", (" · " + _f) if _f else "")
 
 
 def cmd_build(spec_path, out):
@@ -637,7 +766,10 @@ def cmd_chart(spec_path, out=None, into=None):
         if _ext(out or "") != ".png":
             raise Fail("--out must be a .png (or use --into FILE.docx/.pptx)")
         chart_png(spec, out)
-        return "chart %s → %s" % (spec.get("type", "bar"), out)
+        _fn = _LAST_CHART.get("font_note") or (
+            "font %s" % _LAST_CHART["font"] if _LAST_CHART.get("font") else "")
+        return "chart %s → %s%s" % (spec.get("type", "bar"), out,
+                                    (" · " + _fn) if _fn else "")
     _need(into)
     dst = out or _default_out(into)
     if _ext(into) == ".docx":
@@ -718,8 +850,9 @@ def _set_para_text(p, text):
         p.add_run(text)
 
 
-def _new_para_after(anchor_el, template, text, style=None):
-    """فقرةٌ جديدةٌ بعد عنصر: تنسيقُ الفقرة والخطِّ من `template`."""
+def _new_para_after(anchor_el, template, text, style=None, doc_rtl=None):
+    """فقرةٌ جديدةٌ بعد عنصر: تنسيقُ الفقرة والخطِّ من `template`، واتّجاهُها
+    من نصّها (docx_rtl.fix_paragraph)."""
     from docx.oxml import OxmlElement
     from docx.text.paragraph import Paragraph
     new = OxmlElement("w:p")
@@ -735,13 +868,20 @@ def _new_para_after(anchor_el, template, text, style=None):
     run = para.add_run(text)
     if template.runs and template.runs[0]._r.rPr is not None:
         run._r.insert(0, copy.deepcopy(template.runs[0]._r.rPr))
-    if _is_ar(text):
-        pPr = new.get_or_add_pPr()
-        if pPr.find(W_NS + "bidi") is None:
-            from docx.enum.text import WD_ALIGN_PARAGRAPH
-            pPr.append(OxmlElement("w:bidi"))
-            para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    # كان هنا alignment = RIGHT للعربيّ — وقِيس بالرسم أنّ «right» في فقرةٍ من
+    # اليمين تقع يساراً. فالاتّجاهُ بالقاعدة المقيسة وحدها.
+    _paths()
+    import docx_rtl
+    docx_rtl.fix_paragraph(new, _is_ar(text) if doc_rtl is None else doc_rtl)
     return para
+
+
+def _fix_new(d, lang, elements):
+    """اتّجاهُ ما أُضيف فقط (جداول وصور ونصوص) — لا يُمَسّ بقيّةُ ملفّ المستخدم."""
+    _paths()
+    import docx_rtl
+    docx_rtl.finalize_direction(
+        d, lang, paragraphs=[p for el in elements or [] for p in el.iter(W_NS + "p")])
 
 
 def _doc_lang(d):
@@ -778,6 +918,7 @@ def edit_docx(path, ops, out):
     lang = _doc_lang(d)
     done, failed = [], []
     gone = set()
+    embed_later = []
 
     def P(i, key):
         try:
@@ -841,7 +982,8 @@ def edit_docx(path, ops, out):
                 texts = op.get("text")
                 texts = texts if isinstance(texts, list) else [texts]
                 for t in texts:
-                    np_ = _new_para_after(cur, tmpl, str(t or ""), style)
+                    np_ = _new_para_after(cur, tmpl, str(t or ""), style,
+                                          doc_rtl=(lang == "ar"))
                     cur = np_._p
                 done.append("inserted %d paragraph(s)" % len(texts))
             elif kind == "delete_paragraph":
@@ -855,9 +997,10 @@ def edit_docx(path, ops, out):
             elif kind == "add_table":
                 from docx_advanced import add_table
                 anc = anchor_of(op)
-                _append_then_move(d, lambda: add_table(
+                _new = _append_then_move(d, lambda: add_table(
                     d, op.get("headers") or [], op.get("rows") or [], lang,
                     op.get("theme", "academic_navy"), None, op.get("totals")), anc)
+                _fix_new(d, lang, _new)
                 done.append("table added")
             elif kind == "set_cell":
                 t = tables[int(op.get("table", 0))]
@@ -900,13 +1043,36 @@ def edit_docx(path, ops, out):
                 if not png or not os.path.isfile(png):
                     raise Fail("image not found: %s" % png)
                 try:
-                    _append_then_move(d, lambda: add_image(
+                    _new = _append_then_move(d, lambda: add_image(
                         d, png, str(op.get("caption", "")),
                         float(op.get("width", 5.5)), lang=lang), anc)
+                    _fix_new(d, lang, _new)
                 finally:
                     if tmp:
                         os.remove(tmp)
                 done.append("%s added" % ("chart" if tmp else "image"))
+            elif kind == "set_font":
+                import docx_rtl
+                main = find_font(op.get("font"))
+                latin = find_font(op.get("font_en"))
+                if not (main or latin):
+                    raise Fail("set_font needs font (and/or font_en)")
+                sel = op.get("paragraph")
+                paras_sel = None
+                if sel is not None:
+                    paras_sel = [P(i, "paragraph")._p
+                                 for i in (sel if isinstance(sel, list) else [sel])]
+                docx_rtl.apply_fonts(d, cs=main["family"] if main else None,
+                                     latin=(latin or main)["family"],
+                                     paragraphs=paras_sel)
+                embed_later.extend(x for x in (main, latin) if x)
+                done.append("font → %s" % " / ".join(
+                    _font_says(x, "word") for x in (main, latin) if x))
+            elif kind == "fix_direction":
+                import docx_rtl
+                docx_rtl.finalize_direction(d, op.get("lang") or lang)
+                done.append("direction fixed for the whole document (%s)"
+                            % (op.get("lang") or lang).upper())
             else:
                 raise Fail("unknown Word op: %s" % kind)
         except Fail as e:
@@ -917,6 +1083,7 @@ def edit_docx(path, ops, out):
     if not done:
         return {"done": done, "failed": failed, "out": None}
     d.save(out)
+    _embed_word_fonts(out, embed_later)
     _no_dupes(out)
     Document(out)
     return {"done": done, "failed": failed, "out": out}
@@ -1100,9 +1267,23 @@ def edit_pptx(path, ops, out):
                 rtl = _is_ar(str(op.get("title", "")) + str(ch.get("title", ""))) \
                     or deck_ar
                 ch.setdefault("lang", "ar" if rtl else "en")
-                _pptx_chart_slide(prs, ch, op.get("title", ""), rtl)
+                _pptx_chart_slide(prs, ch, op.get("title", ""), rtl,
+                                  (find_font(op.get("font")) or {}).get("family"))
                 _move_after(prs, prs.slides._sldIdLst[-1], anchor(op))
                 done.append("chart slide added")
+            elif kind == "set_font":
+                main = find_font(op.get("font"))
+                latin = find_font(op.get("font_en"))
+                if not (main or latin):
+                    raise Fail("set_font needs font (and/or font_en)")
+                sel = op.get("slide")
+                targets = ([S(i)[0] for i in (sel if isinstance(sel, list) else [sel])]
+                           if sel is not None else
+                           [x for i, x in enumerate(slides, 1) if i not in gone])
+                c = _pptx_fonts(targets, main["family"] if main else None,
+                                (latin or main)["family"])
+                done.append("font on %d text runs → %s" % (c, " / ".join(
+                    _font_says(x, "pptx") for x in (main, latin) if x)))
             else:
                 raise Fail("unknown PowerPoint op: %s" % kind)
         except Fail as e:
@@ -1430,6 +1611,12 @@ def edit_xlsx(path, ops, out, allow_loss=False):
                                           bold=op.get("bold", f.bold),
                                           italic=f.italic,
                                           color=op.get("color") or f.color)
+                        if op.get("font"):
+                            _fe = find_font(op["font"])
+                            f = copy.copy(c.font)
+                            c.font = Font(name=_fe["family"], size=f.size,
+                                          bold=f.bold, italic=f.italic,
+                                          color=f.color)
                         if op.get("fill"):
                             c.fill = PatternFill("solid", fgColor=op["fill"])
                         if op.get("number_format"):
@@ -1500,7 +1687,7 @@ def cmd_edit(path, ops_path, out=None, allow_loss=False):
 
 
 # ═════════════════════════════════ CLI ══════════════════════════════════
-USAGE = __doc__.split("قواعد:")[0].strip().splitlines()[-5:]
+USAGE = __doc__.split("قواعد:")[0].strip().splitlines()[-6:]
 
 
 def _opt(args, name, default=None):
@@ -1521,6 +1708,15 @@ def main(argv=None):
         return 0
     cmd = args.pop(0)
     try:
+        if cmd == "fonts":
+            _paths()
+            import font_catalog
+            if args:
+                e = font_catalog.find_font(" ".join(args))
+                print("%s → %s · %s" % (" ".join(args), e["family"], e["note"]))
+            else:
+                print(font_catalog.list_text())
+            return 0
         if cmd == "info":
             find = _opt(args, "--find")
             rows = int(_opt(args, "--rows", 40))

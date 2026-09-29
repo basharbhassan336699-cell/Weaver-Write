@@ -36,8 +36,17 @@ description: Create or edit a Word file (.docx) — report, research, letter —
  "references": ["…"]}
 ```
    `body` يقبل Markdown (فقرات، نقاط، جداول). `level` ٢ و٣ للعناوين الفرعيّة.
-   `cover` اختياريّ (صفحةُ غلاف). اللغةُ تُكتشف من النصّ (أو `"lang": "ar"|"en"`).
+   `cover` اختياريّ (صفحةُ غلاف). اللغةُ تُكتشف من النصّ (أو `"lang": "ar"|"en"`):
+   العربيُّ من اليمين والإنجليزيُّ من اليسار — تلقائيّاً، فقرةً فقرة.
 ٢. `python3 {{WEAVER}}/pipeline/office.py build <مجلّد العمل>/office-spec.json --out <مجلّد العمل>/<اسمٌ واضح>.docx`
+
+## الخطّ — بالاسم الذي طلبه المستخدم
+`"font": "أميري"` في المواصفة (يقبل الاسمَ بأيّ صيغة: Amiri · أميري · «القاهرة عريض»)،
+و`"font_en"` لخطٍّ آخر للاتينيّ إن طُلب. ما عندنا:
+`python3 {{WEAVER}}/pipeline/office.py fonts` — واسمٌ بعينه: `… fonts القاهرة`.
+خطٌّ عندنا **يُضمَّن في الملفّ** فيظهر على أيّ جهاز. وخطٌّ تجاريّ (Arial،
+Simplified Arabic…) يُكتب باسمه ويظهر حيث يكون مثبَّتاً — قل ذلك للمستخدم كما
+يقوله سطرُ `font …` في الخرج. بلا طلب: Kufyan للعربيّ.
 
 ## تعديلُ ملفٍّ موجود
 ١. **اقرأه أوّلاً:** `python3 {{WEAVER}}/pipeline/office.py info <الملفّ>` —
@@ -53,9 +62,13 @@ description: Create or edit a Word file (.docx) — report, research, letter —
  {"op": "add_row", "table": 0, "after_row": 2, "values": ["ج", "7"]},
  {"op": "add_table", "after": 14, "headers": ["…"], "rows": [["…"]]},
  {"op": "add_chart", "after": 14, "chart": {"type": "line", "data": {…}}, "caption": "…"},
- {"op": "add_image", "after": 14, "path": "<مجلّد العمل>/صورة.png", "caption": "…"}]
+ {"op": "add_image", "after": 14, "path": "<مجلّد العمل>/صورة.png", "caption": "…"},
+ {"op": "set_font", "font": "أميري"},
+ {"op": "fix_direction"}]
 ```
    الفقرةُ المُدرجةُ تأخذ تنسيقَ ما قبلها (أو فقرةٍ بالنمط `style`، أو `"like": N`).
+   `set_font` للمستند كلِّه (أو `"paragraph": [N…]`). و`fix_direction`: ملفٌّ
+   عربيٌّ يظهر نصُّه من اليسار ⟵ يُصلح اتّجاهَ كلِّ فقراته.
 ٣. `python3 {{WEAVER}}/pipeline/office.py edit <الملفّ> <مجلّد العمل>/office-ops.json`
    ⟵ يُحفظ `<الاسم>-edited.docx` بجانبه، والأصلُ لا يُمَسّ.
 

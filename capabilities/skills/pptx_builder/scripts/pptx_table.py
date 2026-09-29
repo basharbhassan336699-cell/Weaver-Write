@@ -102,6 +102,7 @@ def add_table_slide(prs_or_path, headers, rows, lang="ar",
         run.font.size = Pt(26); run.font.bold = True
         run.font.name = font; run.font.color.rgb = _rgb(primary)
         para.alignment = PP_ALIGN.RIGHT if rtl else PP_ALIGN.LEFT
+        para._p.get_or_add_pPr().set("rtl", "1" if rtl else "0")   # paragraph direction
 
     n_rows = 1 + len(display_rows) + (1 if display_totals else 0)
     n_cols = len(display_headers)
@@ -109,10 +110,14 @@ def add_table_slide(prs_or_path, headers, rows, lang="ar",
                                  prs.slide_width - Inches(1.4), Inches(0.5 * n_rows))
     table = gfx.table
 
-    # mark the whole table RTL at XML level
+    # The columns are ALREADY reversed above (first logical column physically
+    # on the right), so the table flag stays "0". Measured: PowerPoint honours
+    # tblPr rtl="1" and flips the columns again (first column back on the
+    # left); LibreOffice ignores it. Physical order + rtl="0" reads the same
+    # in every viewer.
     tblPr = table._tbl.find(qn("a:tblPr"))
     if tblPr is not None:
-        tblPr.set("rtl", "1" if rtl else "0")
+        tblPr.set("rtl", "0")
 
     # header row
     for c, h in enumerate(display_headers):

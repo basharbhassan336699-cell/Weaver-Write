@@ -36,6 +36,15 @@ def _is_rtl_text(text: str) -> bool:
     return letters > 0 and (ar / max(letters, 1)) >= 0.4
 
 
+def _text_rtl(text, default):
+    """Direction from the text itself: Arabic -> RTL, Latin -> LTR; no letters
+    (numbers, symbols) -> the deck's direction. The user asked for exactly
+    this: Arabic from the right, English from the left — per line."""
+    if any(c.isalpha() for c in str(text or "")):
+        return _is_rtl_text(text)
+    return default
+
+
 def _rgb(t):
     from pptx.dml.color import RGBColor
     return RGBColor(*t)
@@ -145,8 +154,10 @@ def _content_slide(prs, title, points, rtl, fa, fe):
     tb = slide.shapes.add_textbox(Inches(0.9), Inches(0.6),
                                   prs.slide_width - Inches(1.8), Inches(1.0))
     tb.text_frame.word_wrap = True
+    t_rtl = _text_rtl(title, rtl)
     _add_text(tb.text_frame, title, size=28, bold=True, color=NAVY,
-              align=align, rtl=rtl, font_ar=fa, font_en=fe)
+              align=("right" if t_rtl else "left"), rtl=t_rtl,
+              font_ar=fa, font_en=fe)
     _accent_bar(slide, prs, rtl=rtl, top_in=1.45, width_in=1.6)
     body = slide.shapes.add_textbox(Inches(0.9), Inches(1.9),
                                     prs.slide_width - Inches(1.8),
@@ -154,7 +165,7 @@ def _content_slide(prs, title, points, rtl, fa, fe):
     tf = body.text_frame
     tf.word_wrap = True
     for i, pt in enumerate(points):
-        p_rtl = True if rtl else _is_rtl_text(pt)
+        p_rtl = _text_rtl(pt, rtl)        # was: always RTL in an Arabic deck
         marker = "◀ " if p_rtl else "▶ "
         _add_text(tf, marker + pt, size=18, bold=False, color=DARK,
                   align=("right" if p_rtl else "left"), rtl=p_rtl,
@@ -175,12 +186,13 @@ def _closing_slide(prs, text, rtl, fa, fe):
 
 
 def build_deck(title, slides, subtitle="", output_path="deck.pptx",
-               lang="ar", closing=None):
-    """Build a complete professional deck. lang: 'ar' (RTL) | 'en' (LTR)."""
+               lang="ar", closing=None, font_ar=None, font_en=None):
+    """Build a complete professional deck. lang: 'ar' (RTL) | 'en' (LTR).
+    font_ar / font_en: requested font names (default AR_FONT / EN_FONT)."""
     from pptx import Presentation
     from pptx.util import Inches
     rtl = (lang == "ar")
-    fa, fe = AR_FONT, EN_FONT
+    fa, fe = font_ar or AR_FONT, font_en or EN_FONT
     prs = Presentation()
     prs.slide_width = Inches(13.333)
     prs.slide_height = Inches(7.5)

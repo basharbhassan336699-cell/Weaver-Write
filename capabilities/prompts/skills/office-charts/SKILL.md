@@ -6,8 +6,11 @@ description: Draw a chart image (bar, line, pie, donut, scatter, radar…) with 
 # الرسومُ البيانيّة
 
 الأداة: `python3 {{WEAVER}}/pipeline/office.py chart`. ترسم بألوان Weaver،
-والعربيُّ فيها بترتيبه الصحيح (مقيس). **لا تكتب كودَ matplotlib بنفسك** —
-إلا لشيءٍ لا تفعله الأداة، فقل ذلك.
+والعربيُّ فيها متّصلُ الحروف بترتيبه الصحيح — يُقاس على الجهاز نفسِه قبل
+الرسم — والتصميمُ من اليمين: الفئةُ الأولى يميناً، والمحورُ يميناً، والدائرةُ
+مع عقارب الساعة. **لا تكتب كودَ matplotlib بنفسك** (arabic-reshaper مع
+matplotlib الحديث يقلب العربيّ ويقطّعه — مقيس) — إلا لشيءٍ لا تفعله الأداة،
+فقل ذلك.
 
 ## متى
 - طلب **رسماً بيانياً** / مخطّطاً / chart / graph لبيانات.
@@ -32,6 +35,10 @@ description: Draw a chart image (bar, line, pie, donut, scatter, radar…) with 
 - `line` · `area`: `{"labels": […], "values": […]}` أو `{"x": […], "y": […]}`
 - `multi_line`: `{"x": […], "series": {"أ": […], "ب": […]}}`
 - `scatter`: `{"x": […], "y": […]}`
+
+`"font": "أميري"` في المواصفة ⟵ يُرسم بالخطّ نفسِه (ما عندنا:
+`python3 {{WEAVER}}/pipeline/office.py fonts`؛ وخطٌّ تجاريٌّ لا نملكه يُرسم بأقرب
+خطٍّ عندنا ويُقال ذلك في الخرج).
 
 ## صورةٌ وحدها
 `python3 {{WEAVER}}/pipeline/office.py chart <مجلّد العمل>/chart-spec.json --out <مجلّد العمل>/<اسم>.png`

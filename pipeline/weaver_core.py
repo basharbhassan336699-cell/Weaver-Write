@@ -2922,10 +2922,14 @@ _SKILLS_PAST = {
     "cite-pages": frozenset(("f768f1146ffccc55",           # 3f3bca1
                              "e218b5ba2ef94f05",           # fcab589
                              "0cbaae4510d2d493")),         # مجلّدُ المحادثة
-    "office-word": frozenset(("883d5636af2515ea",)),        # أوفيس ٢
-    "office-powerpoint": frozenset(("65ddef835b011e03",)),  # أوفيس ٢
-    "office-excel": frozenset(("8aa19b85b0724753",)),       # أوفيس ٢
-    "office-charts": frozenset(("15078ee32e1500b8",)),      # أوفيس ٢
+    "office-word": frozenset(("883d5636af2515ea",           # أوفيس ٢
+                              "aae67eee87150f33")),         # الاتّجاه والخطوط
+    "office-powerpoint": frozenset(("65ddef835b011e03",
+                                    "d63d0fedb6314c9b")),
+    "office-excel": frozenset(("8aa19b85b0724753",
+                               "c24fd80195fb0e6c")),
+    "office-charts": frozenset(("15078ee32e1500b8",
+                                "01b5b5cbb6be3239")),
 }
 
 

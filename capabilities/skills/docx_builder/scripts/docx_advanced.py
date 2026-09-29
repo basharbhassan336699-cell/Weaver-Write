@@ -761,5 +761,17 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
         except Exception:
             pass
 
+    # اتّجاهُ Word كما يقرؤه Word (docx_rtl.py): قِيس بالرسم أنّ «right» في
+    # فقرةٍ من اليمين تقع يساراً — فكانت كلُّ فقرةٍ عربيّةٍ هنا تظهر يساراً.
+    try:
+        import sys, os
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from docx_rtl import finalize_direction
+        finalize_direction(doc, lang)
+    except Exception:
+        pass
+
     doc.save(output_path)
     return output_path

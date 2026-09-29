@@ -30,7 +30,16 @@ description: Create or edit a PowerPoint deck (.pptx) — slides, tables, charts
    {"title": "الاتّجاه", "chart": {"type": "line", "data": {"labels": ["٢٠٢٣", "٢٠٢٤"], "values": [3, 5]}}}]}
 ```
    النقاطُ قصيرة (٣–٦ في الشريحة). الغلافُ والختامُ يُضافان وحدَهما.
+   العربيُّ والتصميمُ من اليمين (العنوان، الشريطُ الذهبيّ، النقاط، أعمدةُ
+   الجداول، الرسوم)، والإنجليزيُّ من اليسار — من لغة النصّ.
 ٢. `python3 {{WEAVER}}/pipeline/office.py build <مجلّد العمل>/office-spec.json --out <مجلّد العمل>/<اسم>.pptx`
+
+## الخطّ — بالاسم الذي طلبه المستخدم
+`"font": "أميري"` في المواصفة (يقبل الاسمَ بأيّ صيغة: Amiri · أميري · «القاهرة عريض»)،
+و`"font_en"` لخطٍّ آخر للاتينيّ إن طُلب. ما عندنا:
+`python3 {{WEAVER}}/pipeline/office.py fonts` — واسمٌ بعينه: `… fonts القاهرة`.
+في العرض يُكتب الخطُّ **باسمه** (لا يُضمَّن): يظهر حيث يكون مثبَّتاً — قل ذلك
+للمستخدم كما يقوله سطرُ `font …` في الخرج. والرسومُ داخله تُرسم بالخطّ نفسِه.
 
 ## تعديلُ عرضٍ موجود
 ١. `python3 {{WEAVER}}/pipeline/office.py info <الملفّ>` — الشرائحُ `slide N`
@@ -44,7 +53,8 @@ description: Create or edit a PowerPoint deck (.pptx) — slides, tables, charts
  {"op": "add_chart_slide", "after": 3, "title": "…", "chart": {…}},
  {"op": "delete_slide", "slide": [4, 5]},
  {"op": "move_slide", "slide": 7, "to": 2},
- {"op": "notes", "slide": 1, "text": "ملاحظاتُ المتحدّث"}]
+ {"op": "notes", "slide": 1, "text": "ملاحظاتُ المتحدّث"},
+ {"op": "set_font", "font": "Cairo", "slide": [2, 3]}]
 ```
    الشريحةُ الجديدةُ تأخذ تخطيطَ العرض نفسِه إن كان مبنيّاً بقوالب.
 ٣. `python3 {{WEAVER}}/pipeline/office.py edit <الملفّ> <مجلّد العمل>/office-ops.json`

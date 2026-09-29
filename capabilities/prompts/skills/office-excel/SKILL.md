@@ -32,7 +32,9 @@ description: Create or edit an Excel workbook (.xlsx) — tables, formulas and t
    "chart": {"type": "pie", "title": "توزيع المصاريف", "data": "B1:B4", "categories": "A2:A4"}}]}
 ```
    `totals` يضيف سطرَ «الإجمالي» بمعادلات SUM. `chart` رسمٌ أصليٌّ في Excel
-   (bar · line · pie) يبقى قابلاً للتعديل فيه.
+   (bar · line · pie) يبقى قابلاً للتعديل فيه. الورقةُ العربيّةُ من اليمين.
+   `"font": "أميري"` خطٌّ للخلايا (باسمه؛ يظهر حيث يكون مثبَّتاً) —
+   `python3 {{WEAVER}}/pipeline/office.py fonts` لما عندنا.
 ٢. `python3 {{WEAVER}}/pipeline/office.py build <مجلّد العمل>/office-spec.json --out <مجلّد العمل>/<اسم>.xlsx`
 
 ## تعديلُ ملفٍّ موجود
@@ -46,7 +48,7 @@ description: Create or edit an Excel workbook (.xlsx) — tables, formulas and t
  {"op": "insert_rows", "sheet": "المصاريف", "at": 3, "values": [["…", 0]]},
  {"op": "delete_rows", "sheet": "المصاريف", "at": 4, "count": 1},
  {"op": "set_range", "sheet": "المصاريف", "start": "E2", "values": [[1, 2], [3, 4]]},
- {"op": "format", "sheet": "المصاريف", "range": "B2:B9", "number_format": "#,##0", "bold": true},
+ {"op": "format", "sheet": "المصاريف", "range": "B2:B9", "number_format": "#,##0", "bold": true, "font": "Cairo"},
  {"op": "add_chart", "sheet": "المصاريف", "type": "bar", "data": "B1:B5", "categories": "A2:A5"},
  {"op": "add_sheet", "name": "ملخّص", "headers": ["…"], "rows": [["…"]]},
  {"op": "rename_sheet", "sheet": "Sheet1", "to": "البيانات"}]

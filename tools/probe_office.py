@@ -138,6 +138,16 @@ else:
 
 try:
     sys.path.insert(0, os.path.join(_ROOT, "engines", "fonts-core"))
+    import font_catalog   # noqa: E402
+    _cat = font_catalog.catalog()
+    _am = font_catalog.find_font("أميري")
+    mark("libs", "فهرسُ الخطوط (بأسمائها الحقيقيّة)", bool(_cat) and _am["family"]
+         == "Amiri", "%d عربيّ · %d لاتينيّ · «أميري» ⟵ %s" % (
+             sum(1 for e in _cat if e["script"] == "ar"),
+             sum(1 for e in _cat if e["script"] == "latin"), _am["family"]))
+except BaseException as e:
+    mark("libs", "فهرسُ الخطوط", False, str(e)[:90])
+try:
     from fonts import resolve_arabic_font   # noqa: E402
     _f = resolve_arabic_font("Kufyan Arabic Black")
     mark("libs", "خطٌّ عربيٌّ مضمَّن للرسوم", bool(_f), str(_f)[:90])
@@ -305,14 +315,13 @@ if have.get("matplotlib"):
         mark("build", "رسم %s %s (build_chart)" % (kind, "عربيّ" if lg == "ar"
                                                    else "إنجليزيّ"),
              r is not None, err or "%.1fث" % dt)
-    def _ar_order():
-        """أيظهر العربيُّ في الرسم بترتيبه الصحيح؟ يُرسم «ا ب» بطريق build_chart
-        نفسِه: الألفُ (الأضيق) يجب أن تكون يميناً. قِيس: matplotlib 3.11
-        يشكّل العربيَّ بنفسه، فتشكيلُه مرّةً ثانيةً يقلبه."""
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import numpy as np
+    def _ar_draw():
+        """العربيُّ في الرسم **كما يرسمه build_chart**: متّصلُ الحروف وبترتيبه.
+        شكا المستخدمُ: «الكتابة العربية تطلع مقطوع ومن اليسار». فيُقاس هنا:
+          الترتيب: «ا ب» ⟵ الألفُ (الأضيق) يميناً
+          الاتّصال: «ببب» ⟵ كتلةٌ واحدة (المقطّعة ثلاث)
+        ويُقال أيُّ الطريقين اختير بالقياس، وهل كان القرارُ القديمُ (من اسم
+        المكتبة) سيصيب على هذا الجهاز."""
         import build_chart as bc
         fam = None
         try:
@@ -320,29 +329,44 @@ if have.get("matplotlib"):
             fam = register_for_matplotlib("Kufyan Arabic Black")
         except Exception:
             pass
-        fig = plt.figure(figsize=(3, 1), dpi=100)
-        kw = {"fontfamily": fam} if fam else {}
-        fig.text(0.1, 0.3, bc._reshape_ar(["ا ب"])[0], fontsize=40, **kw)
-        fig.canvas.draw()
-        a = np.asarray(fig.canvas.buffer_rgba())[:, :, :3].min(axis=2) < 128
-        plt.close(fig)
-        cols = a.any(axis=0)
-        blobs, start = [], None
-        for x, v in enumerate(list(cols) + [False]):
-            if v and start is None:
-                start = x
-            elif not v and start is not None:
-                blobs.append((start, x - start))
-                start = None
-        assert len(blobs) == 2, "كتلُ الحبر %d لا ٢" % len(blobs)
-        (x1, w1), (x2, w2) = blobs
-        assert w2 < w1, "الألفُ يسارَ الباء ⟵ النصُّ مقلوب"
-        return "طبقةُ matplotlib: %s" % ("يشكّل بنفسه (libraqm) ⟵ يُمرَّر كما هو"
-                                         if bc._native_shaping()
-                                         else "arabic-reshaper + bidi")
-    r, err, dt = _timed(_ar_order)
-    mark("build", "العربيُّ في الرسم بترتيبه الصحيح (لا مقلوب)", r is not None,
-         err or r)
+        mode = bc._shaping_mode(fam)
+        bc._ACTIVE["mode"] = mode
+        try:
+            conv = lambda t: bc._reshape_ar([t])[0]
+            r = bc._ink_runs(conv("\u0627 \u0628"), fam)
+            assert len(r) == 2, "كتلُ الحبر %d لا ٢" % len(r)
+            assert r[1][1] < r[0][1], "الألفُ يسارَ الباء ⟵ النصُّ مقلوب"
+            j = bc._ink_runs(conv("\u0628\u0628\u0628"), fam)
+            assert len(j) == 1, "«ببب» %d كتل ⟵ الحروفُ مقطّعة" % len(j)
+        finally:
+            bc._ACTIVE["mode"] = None
+        old = "native" if bc._native_shaping() else "reshape"
+        return "الطريقُ المقيس: %s · القرارُ القديم (من اسم المكتبة): %s %s" % (
+            "كما هو (matplotlib يشكّل بنفسه)" if mode == "native"
+            else "arabic-reshaper + bidi", old,
+            "✓" if old == mode else "✗ كان سيُخطئ هنا")
+    r, err, dt = _timed(_ar_draw)
+    mark("build", "العربيُّ في الرسم متّصلٌ وبترتيبه (يُقاس على الجهاز)",
+         r is not None, err or r)
+
+    def _rtl_chart():
+        """التصميمُ من اليمين: الفئةُ الأولى يميناً (المحورُ معكوس)."""
+        import matplotlib.axes as mx
+        import build_chart as bc
+        calls = []
+        orig = mx.Axes.invert_xaxis
+        mx.Axes.invert_xaxis = lambda self: (calls.append(1), orig(self))[1]
+        try:
+            res = bc.build_chart("bar", {"labels": ["\u0623", "\u0628"],
+                                         "values": [1, 2]}, _p("rtl-chart.png"),
+                                 title="\u0639\u0646\u0648\u0627\u0646", lang="ar")
+        finally:
+            mx.Axes.invert_xaxis = orig
+        assert res.get("ok"), res.get("error")
+        assert calls, "المحورُ غيرُ معكوس ⟵ الفئةُ الأولى يساراً"
+        return "الفئةُ الأولى يميناً · الخط: %s" % res.get("font")
+    r, err, dt = _timed(_rtl_chart)
+    mark("build", "الرسمُ العربيُّ من اليمين", r is not None, err or r)
     if not (have.get("arabic_reshaper") and have.get("bidi")):
         mark("build", "حروفُ الرسم العربيّ متّصلة", False,
              "arabic-reshaper/python-bidi غيرُ مثبَّتين ⟵ حروفٌ مقطّعة")
@@ -553,6 +577,46 @@ def _tool_word():
     return "بناء · قراءة · تعديل"
 
 
+_WNS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _word_right_aligned(path):
+    """(فقراتٌ عربيّة، منها يساراً) — «right» في فقرةٍ من اليمين تقع يساراً
+    (قِيس بالرسم)؛ فالصحيحُ: bidi بلا jc=right."""
+    from docx import Document
+    d = Document(path)
+    ar = bad = 0
+    for p in d.element.body.iter(_WNS + "p"):
+        txt = "".join(t.text or "" for t in p.iter(_WNS + "t"))
+        if not any("\u0600" <= c <= "\u06FF" for c in txt):
+            continue
+        ar += 1
+        pPr = p.find(_WNS + "pPr")
+        bidi = pPr is not None and pPr.find(_WNS + "bidi") is not None
+        jc = pPr.find(_WNS + "jc") if pPr is not None else None
+        if not bidi or (jc is not None and jc.get(_WNS + "val") in ("right", "end")):
+            bad += 1
+    return ar, bad
+
+
+def _tool_word_rtl():
+    sp = _spec("t-word-rtl.json", {"title": AR_TITLE, "font": "أميري", "sections": [
+        {"heading": "المقدّمة", "body": "نصٌّ عربيّ.\n\n- نقطة"},
+        {"heading": "النتائج", "body": "جدول:",
+         "table": {"headers": ["البند", "القيمة"], "rows": [["أ", 1]]}}],
+        "references": ["مرجعٌ عربيّ", "Smith, J. (2020). English."]})
+    out = _p("tool-word-rtl.docx")
+    c, o = _office("build", sp, "--out", out)
+    assert c == 0, o[-200:]
+    ar, bad = _word_right_aligned(out)
+    assert ar and not bad, "%d فقرةً عربيّةً من %d تظهر يساراً" % (bad, ar)
+    names = zipfile.ZipFile(out).namelist()
+    assert any(n.startswith("word/fonts/") for n in names), "الخطُّ غيرُ مضمَّن"
+    ft = zipfile.ZipFile(out).read("word/fontTable.xml").decode("utf-8", "ignore")
+    assert 'w:name="Amiri"' in ft and "embedRegular" in ft, "Amiri ليس في جدول الخطوط"
+    return "%d فقرةً عربيّةً كلُّها من اليمين · Amiri مضمَّنٌ في الملفّ" % ar
+
+
 def _tool_pptx():
     sp = _spec("t-deck.json", {"title": AR_TITLE, "slides": [
         {"title": "أ", "points": ["١"]}, {"title": "ب", "points": ["٢"]},
@@ -572,7 +636,17 @@ def _tool_pptx():
     from pptx import Presentation
     n = len(Presentation(ed).slides)
     assert n == 5, "عددُ الشرائح %d لا ٥" % n
-    return "بناء · حذفٌ ثمّ إضافة · بلا تكرار"
+    # الجدول: الأعمدةُ معكوسةٌ فعلاً، فعلَمُ rtl في الجدول "0" — وإلّا قلبها
+    # PowerPoint ثانيةً (قِيس: LibreOffice يتجاهل العلَم وPowerPoint يطبّقه).
+    import re as _re
+    z = zipfile.ZipFile(out)
+    tbl = [_re.search(r"<a:tblPr[^>]*>", z.read(n).decode("utf-8", "ignore"))
+           for n in z.namelist() if _re.match(r"ppt/slides/slide\d+\.xml$", n)]
+    tbl = [m.group(0) for m in tbl if m]
+    assert tbl, "لا جدولَ في العرض"
+    assert not any('rtl="1"' in t for t in tbl), \
+        "علَمُ rtl=1 على جدولٍ معكوس ⟵ PowerPoint يقلبه ثانيةً"
+    return "بناء · حذفٌ ثمّ إضافة · بلا تكرار · جدولٌ من اليمين في كلِّ عارض"
 
 
 def _tool_xlsx():
@@ -611,6 +685,8 @@ if not os.path.isfile(_OFF):
     mark("tool", "pipeline/office.py", False, "غيرُ موجود")
 else:
     for label, fn, need in (("Word عبر الأداة", _tool_word, "docx"),
+                            ("Word عربيٌّ من اليمين وبالخطّ المطلوب", _tool_word_rtl,
+                             "docx"),
                             ("PowerPoint عبر الأداة", _tool_pptx, "pptx"),
                             ("Excel عبر الأداة", _tool_xlsx, "openpyxl"),
                             ("رسمٌ عبر الأداة", _tool_chart, "matplotlib")):

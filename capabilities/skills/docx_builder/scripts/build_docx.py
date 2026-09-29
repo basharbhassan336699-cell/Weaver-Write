@@ -104,6 +104,18 @@ def build_academic_docx(title, sections, references=None,
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
                 _set_rtl(p)
 
+    # اتّجاهُ Word كما يقرؤه Word (docx_rtl.py): «right» في فقرةٍ من اليمين
+    # تقع يساراً — قِيس بالرسم.
+    try:
+        import sys, os
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from docx_rtl import finalize_direction
+        finalize_direction(doc, lang)
+    except Exception:
+        pass
+
     doc.save(output_path)
     return output_path
 
