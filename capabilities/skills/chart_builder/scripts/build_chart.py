@@ -235,9 +235,12 @@ def _font_for_chart(font, lang):
     return fams, note
 
 
+_theme_palette = _palette      # ألوانُ القالب (build_chart يقدّم الصريحةَ عليها)
+
+
 def build_chart(chart_type, data, output_path, title="", theme_id="academic_navy",
                 xlabel="", ylabel="", lang="ar", figsize=(8, 5), dpi=150,
-                font=None):
+                font=None, colors=None):
     """
     Render a themed chart. `data` shape depends on chart_type:
       bar/pie/donut/hist:   {"labels": [...], "values": [...]}
@@ -257,6 +260,13 @@ def build_chart(chart_type, data, output_path, title="", theme_id="academic_navy
 
     theme = _load_theme(theme_id)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    # ألوانٌ صريحة (التصميمُ الحرّ يختارها) — وإلّا ألوانُ القالب كما كانت
+    _custom = [("#" + str(c).lstrip("#")) for c in (colors or []) if c]
+
+    def _palette(th, n):
+        if _custom:
+            return [_custom[i % len(_custom)] for i in range(max(1, n))]
+        return _theme_palette(th, n)
 
     # Register a bundled Arabic font so Arabic labels render in a real
     # Arabic typeface (Kufyan preferred -> Cairo/Tajawal/Amiri fallback).

@@ -429,7 +429,8 @@ def chart_png(spec, out):
                     title=spec.get("title", ""),
                     theme_id=spec.get("theme", spec.get("theme_id", "academic_navy")),
                     xlabel=spec.get("xlabel", ""), ylabel=spec.get("ylabel", ""),
-                    lang=lang, font=spec.get("font"))
+                    lang=lang, font=spec.get("font"),
+                    **({"colors": spec["colors"]} if spec.get("colors") else {}))
     _LAST_CHART.clear()
     _LAST_CHART.update(r)
     if not r.get("ok"):
@@ -658,7 +659,99 @@ def build_designed(spec, out):
                 if frames else "", (" · " + fonts) if fonts else ""))
 
 
+def _free_enabled():
+    """مفتاحُ التجربة: `WEAVER_PPTX_FREE=off` (البيئة أو config/.env) يعيد القوالب."""
+    v = os.environ.get("WEAVER_PPTX_FREE")
+    if v is None:
+        try:
+            envf = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__))), "config", ".env")
+            for line in open(envf, encoding="utf-8", errors="replace"):
+                k, _, val = line.strip().partition("=")
+                if k.strip() == "WEAVER_PPTX_FREE":
+                    v = val.strip().strip("'\"")
+        except OSError:
+            pass
+    return str(v or "on").lower() not in ("0", "off", "false", "no")
+
+
+def build_free(spec, out):
+    """التصميمُ الحرّ (pptx_free.py): النموذجُ يصمّم كلَّ شريحةٍ بعناصرها، والأداةُ
+    تبنيها أصليّةً، وترسم صورةً لكلِّ شريحة، وتفحص بالقياس. تجريبيّ."""
+    _paths()
+    import pptx_free as PF
+    import pptx_design as PD
+    from pptx import Presentation
+    slides = [s for s in (spec.get("slides") or []) if isinstance(s, dict)]
+    if not slides:
+        raise Fail("free design needs \"slides\": [{\"elements\": [...]}]")
+    texts = []
+    for sd in slides[:6]:
+        for e in sd.get("elements") or []:
+            if isinstance(e, dict):
+                texts.append(" ".join(p["text"] for p in PF.paragraphs(e))[:200])
+    lang = _lang_of(spec, spec.get("title"), *texts[:12])
+    want = spec.get("slides_total") or spec.get("total_slides")
+    if want not in (None, "", 0):
+        try:
+            want = int(want)
+        except (TypeError, ValueError):
+            raise Fail("slides_total must be a number")
+        if want != len(slides):
+            raise Fail("the user asked for %d slides; this spec has %d. Every slide "
+                       "(cover and closing included) is one entry in \"slides\". "
+                       "Nothing written." % (want, len(slides)))
+    main = find_font(spec.get("font") or ("Kufyan Arabic Regular" if lang == "ar"
+                                           else None))
+    latin = find_font(spec.get("font_en"))
+    f_ar = main["family"] if main else None
+    f_en = (latin or main)["family"] if (latin or main) else None
+
+    def _chart(sp):
+        return chart_png(sp, _tmp_png())
+    n, _tid = PF.build(spec, out, lang, _chart, f_ar, f_en)
+    got = len(Presentation(out).slides)
+    if got != n:
+        raise Fail("built %d slides, expected %d" % (got, n))
+    lines = ["PowerPoint %s (free design): %d slide%s" % (lang.upper(), got,
+                                                          "" if got == 1 else "s")]
+    if PD.CHART_LOG:
+        nat = sum(1 for _, how, _ in PD.CHART_LOG if how == "native")
+        lines[0] += " · charts: %d native (editable: Edit Data)" % nat
+    fonts = " · ".join(x for x in (_font_says(main, "pptx"),
+                                   _font_says(latin, "pptx")) if x)
+    if fonts:
+        lines[0] += " · " + fonts
+    # المعاينةُ والفحص: لا تمنع الحفظ — تُري النموذجَ ما سيراه المستخدم
+    try:
+        stem = os.path.splitext(os.path.basename(out))[0]
+        pdir = os.path.join(os.path.dirname(os.path.abspath(out)), stem + "-preview")
+        paths, ov, issues = PF.render_check(spec, pdir, "slide", lang, f_ar, f_en,
+                                            _chart)
+        if issues:
+            lines.append("⚠ design check: %d issue%s — fix them in the spec and "
+                         "build again:" % (len(issues), "" if len(issues) == 1 else "s"))
+            lines += ["   · " + i for i in issues[:30]]
+            if len(issues) > 30:
+                lines.append("   · … %d more" % (len(issues) - 30))
+        else:
+            lines.append("✓ design check: no overflow, overlap, small text or low "
+                         "contrast found")
+        lines.append("previews (open them with read and LOOK before you reply): "
+                     "%s  ·  slides: %s" % (ov, os.path.join(pdir, "slide-sNN.png")))
+    except Exception as e:                        # Pillow غيرُ متاح مثلاً
+        lines.append("⚠ previews unavailable (%s: %s) — the file is built" % (
+            type(e).__name__, str(e)[:120]))
+    return "\n".join(lines)
+
+
 def build_powerpoint(spec, out):
+    if str(spec.get("design", "")).lower() == "free":
+        if not _free_enabled():
+            raise Fail("free design is turned off on this device (WEAVER_PPTX_FREE=off)"
+                       " — remove \"design\": \"free\" and build with the template "
+                       "layouts. Nothing written.")
+        return build_free(spec, out)
     if str(spec.get("design", "")).lower() != "classic":
         return build_designed(spec, out)
     _paths()
