@@ -2139,8 +2139,14 @@ def custom_provider_tree(route=None, key_present=True):
     if r.get("mode") != "custom":
         return {}
     mid = r["model"]
+    # الصور: كان الإعلانُ «نصٌّ فقط» دائماً، فلا يُرسل المحرّكُ صورةً للنموذج —
+    # قِيس على الهاتف: «افتح favicon.png وصفها» ⟵ «النموذجُ الحاليّ لا يعرض
+    # الصور»، وحلّلها بكسلاتٍ في ١٠ أدوات. `WEAVER_MODEL_VISION=on` يعلن
+    # الصور؛ ومطفأٌ افتراضياً (منصّةٌ لا تقبل الصور ترفض الطلب حين تُرسَل).
+    vision = _setting("WEAVER_MODEL_VISION").lower() in ("1", "on", "true", "yes")
     model = {"id": mid, "name": mid + " (Weaver Write)",
-             "input": ["text"], "reasoning": False,
+             "input": ["text", "image"] if vision else ["text"],
+             "reasoning": False,
              "cost": {"input": 0, "output": 0, "cacheRead": 0,
                       "cacheWrite": 0},
              "contextWindow": 128000}
@@ -2209,6 +2215,10 @@ def _model_fingerprint():
                      r.get("base_url", ""), r.get("api", ""),
                      hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
                      if key else ""])
+    # الصورُ تغيّر تعريفَ النموذج في المزوّد ⟵ إعادةُ كتابةٍ وإقلاع. ولا أثرَ
+    # لمن لم يفعّلها: بصمتُه كما كانت حرفاً.
+    if _setting("WEAVER_MODEL_VISION").lower() in ("1", "on", "true", "yes"):
+        boot += "|vision"
     fp = {"boot": boot, "model": r.get("ref", "")}
     # خارجَ boot: تغييرُها يُعيد الكتابةَ بلا إعادةِ إقلاع. ولا مفتاحَ حين
     # لا عقوبة — فبصمةُ من لم يضبطها كما كانت حرفاً، ولا كتابةَ زائدة.
