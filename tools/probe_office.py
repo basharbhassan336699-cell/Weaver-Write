@@ -649,6 +649,43 @@ def _tool_pptx():
     return "بناء · حذفٌ ثمّ إضافة · بلا تكرار · جدولٌ من اليمين في كلِّ عارض"
 
 
+def _tool_design():
+    """التصميمُ الاحترافيّ: العددُ المطلوبُ بالضبط، وأطرُ الصور داخل الشرائح.
+    قِيس على عرض المستخدم: طُلب ١٦ فخرج ٢١، والأشكالُ في شريحتين آخرَه."""
+    spec = {"title": AR_TITLE, "slides_total": 6, "slides": [
+        {"layout": "section", "title": "مدخل"},
+        {"title": "بطاقات", "cards": [{"title": "أ", "text": "نصّ"},
+                                      {"title": "ب", "text": "نصّ"}]},
+        {"title": "دوائر بصور", "circles": [{"title": "الأسرة"}, {"title": "المعلّم"}],
+         "images": True},
+        {"title": "نقاطٌ وصورة", "points": ["أولى", "ثانية"],
+         "image": {"shape": "square"}}]}
+    out = _p("tool-design.pptx")
+    c, o = _office("build", _spec("t-design.json", spec), "--out", out)
+    assert c == 0, o[-300:]
+    from pptx import Presentation
+    n = len(Presentation(out).slides)
+    assert n == 6, "العدد %d لا ٦" % n
+    bad = dict(spec, slides_total=5)
+    c2, o2 = _office("build", _spec("t-design-bad.json", bad), "--out",
+                     _p("tool-design-bad.pptx"))
+    assert c2 != 0 and not os.path.exists(_p("tool-design-bad.pptx")), \
+        "عددٌ خاطئٌ لم يُرفض"
+    try:
+        from PIL import Image
+        Image.new("RGB", (400, 300), "#3b7dd8").save(_p("t-img.png"))
+        ops = _spec("t-design-ops.json", [{"op": "set_image", "slide": 4, "frame": 1,
+                                           "path": _p("t-img.png")}])
+        c3, o3 = _office("edit", out, ops)
+        assert c3 == 0, o3[-200:]
+        x = zipfile.ZipFile(_p("tool-design-edited.pptx"))
+        assert any(nm.startswith("ppt/media/") for nm in x.namelist()), "لا صورة"
+        filled = "صورةٌ في إطارٍ دائريّ ✓"
+    except ImportError:
+        filled = "Pillow غيرُ مثبَّت — ملءُ الإطار لم يُقَس"
+    return "٦ شرائح بالضبط · العددُ الخاطئُ مرفوض · %s" % filled
+
+
 def _tool_xlsx():
     sp = _spec("t-sheet.json", {"sheets": [{"name": "المصاريف",
         "headers": ["البند", "المبلغ"], "rows": [["إيجار", 1500], ["طعام", 800]],
@@ -688,6 +725,8 @@ else:
                             ("Word عربيٌّ من اليمين وبالخطّ المطلوب", _tool_word_rtl,
                              "docx"),
                             ("PowerPoint عبر الأداة", _tool_pptx, "pptx"),
+                            ("عرضٌ احترافيّ: العددُ وأطرُ الصور", _tool_design,
+                             "pptx"),
                             ("Excel عبر الأداة", _tool_xlsx, "openpyxl"),
                             ("رسمٌ عبر الأداة", _tool_chart, "matplotlib")):
         if not have.get(need):

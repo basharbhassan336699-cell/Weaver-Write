@@ -275,8 +275,11 @@ ok("كلُّ نصٍّ بـCairo (a:cs وa:latin — خلايا الجدول أي
                 and r._r.rPr.find(qn("a:cs")).get("typeface") == "Cairo"
                 and r._r.rPr.find(qn("a:latin")).get("typeface") == "Cairo"
                 for r in runs), len(runs))
+# فقراتٌ فيها حروفٌ عربيّة — لا أرقامُ الشرائح والدوائر («٢»): رقمُ الشريحة في
+# طرفها الأيسر عمداً (نهايةُ الشريحة العربيّة)، وأرقامُ الدوائر في وسطها.
 ar_p = [p for s in prs.slides for sh in s.shapes if sh.has_text_frame
-        for p in sh.text_frame.paragraphs if X.has_ar(p.text)]
+        for p in sh.text_frame.paragraphs
+        if any(c.isalpha() and X.has_ar(c) for c in p.text)]
 ok("الفقراتُ العربيّة: rtl=1 ومحاذاةٌ يمين (والختامُ في الوسط عمداً)", ar_p and all(
     p._p.pPr.get("rtl") == "1" and p._p.pPr.get("algn") in ("r", "ctr")
     for p in ar_p), [(p.text[:12], dict(p._p.pPr.attrib)) for p in ar_p])

@@ -240,6 +240,14 @@ def info_pptx(path, find=None):
     for n, s in enumerate(prs.slides, 1):
         lines = []
         for k, sh in enumerate(s.shapes):
+            if sh.name == "Weaver Image Frame":
+                full = sh._element.spPr.find(
+                    "{http://schemas.openxmlformats.org/drawingml/2006/main}blipFill")
+                if not find:
+                    lines.append("    #%d image-frame %s (%s)" % (
+                        k, "circle" if "ellipse" in sh._element.spPr.xml[:400]
+                        else "square", "filled" if full is not None else "empty"))
+                continue
             kind = ("title" if sh.is_placeholder and sh.placeholder_format.type
                     in (1, 3) else "table" if sh.has_table else
                     "picture" if sh.shape_type == 13 else
@@ -554,7 +562,66 @@ def _reorder(prs, order_ids):
         lst.append(el)
 
 
+def build_designed(spec, out):
+    """العرضُ بنظام التصميم (pptx_design.py) — الافتراضيّ. والقالبُ القديم
+    بـ"design": "classic"."""
+    _paths()
+    import pptx_design as PD
+    from pptx import Presentation
+    slides = [s for s in (spec.get("slides") or []) if isinstance(s, dict)]
+    lang = _lang_of(spec, spec.get("title"), *[str(s.get("title", "")) + " " +
+                                                " ".join(str(p) for p in (
+                                                    s.get("points") or [])[:3])
+                                                for s in slides[:4]])
+    total, c, k, e = PD.plan_count(spec)
+    want = spec.get("slides_total") or spec.get("total_slides")
+    if want not in (None, "", 0):
+        try:
+            want = int(want)
+        except (TypeError, ValueError):
+            raise Fail("slides_total must be a number")
+        if want != total:
+            # قِيس: طُلب ١٦ فخرج ٢١ وقيل «١٦ محتوى» — العددُ يُفرض هنا.
+            raise Fail("the user asked for %d slides; this spec makes %d "
+                       "(cover %d + %d slides + closing %d). Change the slides — "
+                       "or set \"cover\"/\"closing\": false — so the TOTAL is "
+                       "exactly %d. Nothing written." % (want, total, c, k, e, want))
+    main = find_font(spec.get("font") or ("Kufyan Arabic Regular" if lang == "ar"
+                                           else None))
+    latin = find_font(spec.get("font_en"))
+    f_ar = main["family"] if main else None
+    f_en = (latin or main)["family"] if (latin or main) else None
+
+    def _chart(sp):
+        return chart_png(sp, _tmp_png())
+    n, tid = PD.build(spec, out, lang, _chart, f_ar, f_en)
+    prs = Presentation(out)
+    got = len(prs.slides)
+    if got != n or (want and got != want):
+        raise Fail("built %d slides, expected %d" % (got, want or n))
+    kinds = {}
+    for sd in slides:
+        kk = PD.kind_of(sd)
+        kinds[kk] = kinds.get(kk, 0) + 1
+    frames = sum(1 for s in prs.slides for sh in s.shapes if sh.name == PD.FRAME_NAME)
+    filled = sum(1 for s in prs.slides for sh in s.shapes if sh.name == PD.FRAME_NAME
+                 and sh._element.spPr.find(
+                     "{http://schemas.openxmlformats.org/drawingml/2006/main}blipFill")
+                 is not None)
+    fonts = " · ".join(x for x in (_font_says(main, "pptx"),
+                                   _font_says(latin, "pptx")) if x)
+    return ("PowerPoint %s: %d slides (cover %d + %d + closing %d) · theme %s · "
+            "layouts: %s%s%s" % (
+                lang.upper(), got, c, k, e, tid,
+                ", ".join("%s %d" % kv for kv in kinds.items()),
+                (" · image frames: %d (%d empty — fill with set_image, or in "
+                 "PowerPoint: Format Shape ⟵ Fill ⟵ Picture)" % (frames, frames - filled))
+                if frames else "", (" · " + fonts) if fonts else ""))
+
+
 def build_powerpoint(spec, out):
+    if str(spec.get("design", "")).lower() != "classic":
+        return build_designed(spec, out)
     _paths()
     import build_pptx as bp
     from pptx_table import add_table_slide
@@ -1232,6 +1299,45 @@ def edit_pptx(path, ops, out):
                 else:
                     lst[to - 1].addprevious(sid)
                 done.append("slide %s → position %d" % (op.get("slide"), to))
+            elif kind == "add_slide" and (
+                    str(prs.core_properties.category or "").startswith(
+                        "weaver-design:") or op.get("layout") or any(
+                        op.get(x) for x in ("cards", "circles", "images", "image",
+                                            "steps", "stats", "quote", "chart",
+                                            "table"))):
+                import pptx_design as PD
+                txt = " ".join(str(v) for v in (op.get("title"), op.get("points"))
+                               if v)
+                lang = "ar" if (_is_ar(txt) if txt.strip() else deck_ar) else "en"
+                f_ar = (find_font(op.get("font")) or {}).get("family")
+                PD.add_to(prs, op, len(prs.slides._sldIdLst) + 1, lang,
+                          lambda sp: chart_png(sp, _tmp_png()), f_ar, None,
+                          op.get("theme"))
+                _move_after(prs, prs.slides._sldIdLst[-1], anchor(op))
+                done.append("slide added (%s layout)" % PD.kind_of(op))
+            elif kind == "set_image":
+                import pptx_design as PD
+                s_, _ = S(op.get("slide"))
+                path = op.get("path")
+                if not path or not os.path.isfile(path):
+                    raise Fail("image not found: %s" % path)
+                frames_ = [sh for sh in s_.shapes if sh.name == PD.FRAME_NAME]
+                if op.get("shape") is not None:
+                    shapes_ = list(s_.shapes)
+                    k_ = int(op["shape"])
+                    if not 0 <= k_ < len(shapes_):
+                        raise Fail("slide %s has no shape #%d" % (op.get("slide"), k_))
+                    target = shapes_[k_]
+                    if target.shape_type != 1:        # AUTO_SHAPE
+                        raise Fail("shape #%d is not a frame/shape" % k_)
+                else:
+                    j = int(op.get("frame", 1))
+                    if not 1 <= j <= len(frames_):
+                        raise Fail("slide %s has %d image frames" % (
+                            op.get("slide"), len(frames_)))
+                    target = frames_[j - 1]
+                PD.fill_frame(s_, target, path)
+                done.append("slide %s: picture in frame" % op.get("slide"))
             elif kind == "add_slide":
                 title = str(op.get("title", ""))
                 points = [str(p) for p in (op.get("points") or [])]

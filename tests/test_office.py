@@ -311,7 +311,11 @@ c, o = cli("build", J("p.json", pspec), "--out", PP)
 from pptx import Presentation   # noqa: E402
 prs = Presentation(PP)
 titles = [next((sh.text_frame.text for sh in s.shapes if sh.has_text_frame
-                and sh.text_frame.text.strip()), "") for s in prs.slides]
+           and sh.text_frame.text.strip()
+           # رقمُ الفاصل («١»، «01») ليس عنوانَه
+           and not sh.text_frame.text.strip().translate(
+               str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).isdigit()), "")
+      for s in prs.slides]
 want = ["عنوان العرض", "المحاور", "جدول"] + (["رسم"] if HAVE_MPL else []) + \
     ["قسم", "نهاية", "شكراً لكم"]
 ok("بناء ⟵ الشرائحُ بترتيب المواصفة (الجدولُ والرسمُ في مكانهما)",
@@ -332,7 +336,11 @@ ok("حذفٌ ثمّ إضافة ⟵ لا اسمَ مكرّراً (قِيس: slide
    c == 0 and len(names) == len(set(names)), (o[-300:], len(names) - len(set(names))))
 p2 = Presentation(ED)
 t2 = [next((sh.text_frame.text for sh in s.shapes if sh.has_text_frame
-            and sh.text_frame.text.strip()), "") for s in p2.slides]
+           and sh.text_frame.text.strip()
+           # رقمُ الفاصل («١»، «01») ليس عنوانَه
+           and not sh.text_frame.text.strip().translate(
+               str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")).isdigit()), "")
+      for s in p2.slides]
 ok("  ⟵ الترتيب: نقلٌ وإضافةٌ بعد المقصود، والمحذوفةُ غائبة",
    t2[:4] == ["عنوان العرض", "شكراً لكم", "المحاور", "جديدة"]
    and "جدول" not in t2 and "الخاتمة" in t2 and len(t2) == n0, t2)

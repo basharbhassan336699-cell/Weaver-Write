@@ -1,14 +1,14 @@
 ---
 name: office-powerpoint
-description: Create or edit a PowerPoint deck (.pptx) — slides, tables, charts, Arabic RTL; or edit a .pptx the user attached (text, add/delete/move slides, notes). Only when a presentation file is wanted. ينشئ عرضاً تقديمياً أو يعدّل عرضاً أرسله المستخدم.
+description: Create or edit a PowerPoint deck (.pptx) — professional designed slides (cards, circles, steps, stats, tables, charts, image frames), exact slide count, Arabic RTL; or edit a .pptx the user attached. Only when a presentation file is wanted. ينشئ عرضاً تقديمياً احترافياً أو يعدّل عرضاً أرسله المستخدم.
 ---
 
 # عروضُ باوربوينت (.pptx)
 
-الأداة: `python3 {{WEAVER}}/pipeline/office.py`. تبني بتصميم Weaver (غلاف،
-شرائحُ محتوى وأقسام، جداولُ أصليّة، رسوم، ختام، RTL) وتفتح العرضَ بعد كتابته
-لتتحقّق منه. **لا تكتب كودَ python-pptx بنفسك** — إلا لشيءٍ لا تفعله الأداة،
-فقل ذلك.
+الأداة: `python3 {{WEAVER}}/pipeline/office.py`. تبني بنظام تصميمٍ احترافيّ
+(أشكالُ PowerPoint الأصليّة، قابلةٌ للتعديل) بألوان أحد ٢١ قالباً، وتفتح العرضَ
+بعد كتابته لتتحقّق منه. **لا تكتب كودَ python-pptx بنفسك** — ولا سكربتاً
+للأشكال أو الصور: الأداةُ تصنعها داخل الشرائح. إلا لشيءٍ لا تفعله، فقل ذلك.
 
 ## متى
 - طلب **عرضاً تقديمياً** / شرائح / باوربوينت / pptx.
@@ -19,20 +19,56 @@ description: Create or edit a PowerPoint deck (.pptx) — slides, tables, charts
 
 `<مجلّد العمل>` هو المذكورُ تحت «[مجلّد العمل]» في رسالتك.
 
+## ⚠ عددُ الشرائح — بالضبط
+العددُ الذي طلبه المستخدم هو **المجموعُ كلُّه**: الغلافُ والفواصلُ والختامُ
+منه (إلا إن قال غيرَ ذلك). ضعه في `"slides_total"` — والأداةُ ترفض أيَّ عددٍ
+آخر ولا تكتب ملفّاً، فتُصلح المواصفة. لا غلاف؟ `"cover": false`. لا ختام؟
+`"closing": false`. قِيس: طُلب ١٦ فخرج ٢١ وقيل للمستخدم «١٦» — لا تكرّر هذا.
+
 ## إنشاء
-١. اكتب `<مجلّد العمل>/office-spec.json` بأداة `write`:
+١. خطّط الشرائحَ أوّلاً: نوعٌ لكلِّ شريحةٍ يناسب محتواها، **ونوّع** — لا عرضَ
+   كلُّه نقاط. ثمّ اكتب `<مجلّد العمل>/office-spec.json` بأداة `write`:
 ```json
-{"title": "عنوان العرض", "subtitle": "…", "closing": "شكراً لكم",
+{"title": "عنوان العرض", "subtitle": "…", "presenter": "إعداد: …",
+ "theme": "academic_navy", "font": "Kufyan Arabic Black", "slides_total": 14,
  "slides": [
-   {"title": "المحاور", "points": ["نقطةٌ قصيرة", "نقطة"]},
-   {"layout": "section", "title": "القسم الثاني"},
-   {"title": "الأرقام", "table": {"headers": ["البند", "القيمة"], "rows": [["أ", 1]]}},
-   {"title": "الاتّجاه", "chart": {"type": "line", "data": {"labels": ["٢٠٢٣", "٢٠٢٤"], "values": [3, 5]}}}]}
+  {"layout": "section", "title": "مدخلٌ تعريفي", "subtitle": "…"},
+  {"title": "…", "points": ["نقطةٌ قصيرة", "…"]},
+  {"title": "…", "points": ["…"], "image": {"shape": "circle", "caption": "…"}},
+  {"title": "…", "cards": [{"title": "…", "text": "…"}, {"title": "…", "text": "…"}]},
+  {"title": "…", "circles": [{"title": "…", "text": "…"}, {"title": "…"}]},
+  {"title": "…", "circles": [{"title": "الأسرة"}, {"title": "المعلّم"}], "images": true},
+  {"title": "…", "images": {"shape": "square", "items": [{"caption": "…"}, {"caption": "…"}]}},
+  {"title": "…", "steps": [{"title": "الملاحظة", "text": "…"}, {"title": "…"}]},
+  {"title": "…", "stats": [{"value": "٣٠٪", "text": "…"}, {"value": "ADHD", "text": "…"}]},
+  {"title": "…", "quote": "…", "author": "…"},
+  {"title": "…", "table": {"headers": ["…", "…"], "rows": [["…", "…"]]}},
+  {"title": "…", "chart": {"type": "bar", "data": {"labels": ["أ", "ب"], "values": [3, 5]}}, "points": ["خلاصة"]}]}
 ```
-   النقاطُ قصيرة (٣–٦ في الشريحة). الغلافُ والختامُ يُضافان وحدَهما.
-   العربيُّ والتصميمُ من اليمين (العنوان، الشريطُ الذهبيّ، النقاط، أعمدةُ
-   الجداول، الرسوم)، والإنجليزيُّ من اليسار — من لغة النصّ.
+   هنا ١٢ شريحةً + الغلاف + الختام = **١٤** = `slides_total`.
+   الأنواع:
+   - `points` نقاطٌ مرقّمة (٣–٥، قصيرة) · ومعها `image` ⟵ النقاطُ بجانب إطار صورة.
+   - `cards` ٢–٤ بطاقات (مقارنة، أقسام) · `circles` ٣–٥ دوائر (أطراف، أسباب).
+   - `"images": true` مع cards/circles ⟵ الدوائرُ أو البطاقاتُ **أطرُ صور**.
+   - `images` ١–٦ أطر صور مربّعة أو دائريّة بتعليق — للصور التي سيضيفها المستخدم.
+   - `steps` خطوات ٣–٦ · `stats` أرقامٌ كبيرة ٢–٤ · `quote` اقتباس.
+   - `table` جدول · `chart` رسمٌ بألوان القالب (ومعه `points` للخلاصة).
+   - `"layout": "section"` فاصلٌ مرقّم · `"notes"` في أيّ شريحة: ملاحظاتُ المتحدّث.
+   القوالب: academic_navy · academic_green · formal_gray · modern_blue ·
+   creative_purple · warm_maroon · uae_heritage · midnight_executive ·
+   royal_burgundy · editorial_minimal · organic_nature … أو وصفٌ («رسمي»، «تقني»)
+   أو لونٌ (`"#7A2E33"`).
+   العربيُّ والتصميمُ من اليمين (البطاقةُ الأولى يميناً)، والإنجليزيُّ من اليسار.
+   **لا أرقامَ مختلَقة** في stats أو chart: من المستخدم أو من مصدرٍ تذكره.
 ٢. `python3 {{WEAVER}}/pipeline/office.py build <مجلّد العمل>/office-spec.json --out <مجلّد العمل>/<اسم>.pptx`
+   ⟵ السطرُ يذكر العددَ والأنواعَ وأطرَ الصور — انقله للمستخدم كما هو.
+
+## أطرُ الصور
+إطارٌ فارغ («+ أضف صورة») يملؤه المستخدم من PowerPoint: الشكل ⟵ تنسيق ⟵
+تعبئة ⟵ صورة. أو يرسل الصورةَ فتملؤها أنت (مقصوصةً على الشكل):
+`{"op": "set_image", "slide": 3, "frame": 1, "path": "<مجلّد العمل>/صورة.jpg"}`
+(`frame` ترتيبُ الإطار في الشريحة كما في `info`: `image-frame … (empty)`).
+وصورةٌ عندك وقتَ البناء: `"path"` في الإطار نفسِه.
 
 ## الخطّ — بالاسم الذي طلبه المستخدم
 `"font": "أميري"` في المواصفة (يقبل الاسمَ بأيّ صيغة: Amiri · أميري · «القاهرة عريض»)،
@@ -43,12 +79,13 @@ description: Create or edit a PowerPoint deck (.pptx) — slides, tables, charts
 
 ## تعديلُ عرضٍ موجود
 ١. `python3 {{WEAVER}}/pipeline/office.py info <الملفّ>` — الشرائحُ `slide N`
-   وأشكالُها `#K` بنصوصها.
+   وأشكالُها `#K` بنصوصها، وأطرُ الصور.
 ٢. `<مجلّد العمل>/office-ops.json` — **الأرقامُ من `info` قبل التعديل**:
 ```json
 [{"op": "replace", "find": "قديم", "with": "جديد"},
  {"op": "set_text", "slide": 2, "shape": 0, "text": "سطر\nسطرٌ ثانٍ"},
- {"op": "add_slide", "after": 2, "title": "…", "points": ["…"]},
+ {"op": "add_slide", "after": 2, "title": "…", "cards": [{"title": "…", "text": "…"}]},
+ {"op": "set_image", "slide": 3, "frame": 1, "path": "<مجلّد العمل>/صورة.jpg"},
  {"op": "add_table_slide", "after": 3, "title": "…", "table": {"headers": [], "rows": []}},
  {"op": "add_chart_slide", "after": 3, "title": "…", "chart": {…}},
  {"op": "delete_slide", "slide": [4, 5]},
@@ -56,9 +93,11 @@ description: Create or edit a PowerPoint deck (.pptx) — slides, tables, charts
  {"op": "notes", "slide": 1, "text": "ملاحظاتُ المتحدّث"},
  {"op": "set_font", "font": "Cairo", "slide": [2, 3]}]
 ```
-   الشريحةُ الجديدةُ تأخذ تخطيطَ العرض نفسِه إن كان مبنيّاً بقوالب.
+   `add_slide` يقبل كلَّ أنواع الإنشاء (points · cards · circles · images …)
+   ويأخذ قالبَ العرض وألوانَه.
 ٣. `python3 {{WEAVER}}/pipeline/office.py edit <الملفّ> <مجلّد العمل>/office-ops.json`
    ⟵ `<الاسم>-edited.pptx`، والأصلُ باقٍ.
 
 ## قبل أن تقول «تمّ»
-لا تقل «تمّ» إلا بعد `✓ saved:`. و`✗` لعمليّة: أصلحها أو قل ما لم يتمّ.
+لا تقل «تمّ» إلا بعد `✓ saved:`، واذكر العددَ كما في سطر الأداة لا كما خطّطت.
+و`✗` لعمليّة: أصلحها أو قل ما لم يتمّ.

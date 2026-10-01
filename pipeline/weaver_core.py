@@ -2925,7 +2925,8 @@ _SKILLS_PAST = {
     "office-word": frozenset(("883d5636af2515ea",           # أوفيس ٢
                               "aae67eee87150f33")),         # الاتّجاه والخطوط
     "office-powerpoint": frozenset(("65ddef835b011e03",
-                                    "d63d0fedb6314c9b")),
+                                    "d63d0fedb6314c9b",
+                                    "248c77d172095565")),   # التصميم والعدد
     "office-excel": frozenset(("8aa19b85b0724753",
                                "c24fd80195fb0e6c")),
     "office-charts": frozenset(("15078ee32e1500b8",
