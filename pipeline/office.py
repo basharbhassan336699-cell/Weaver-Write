@@ -739,8 +739,8 @@ def build_free(spec, out):
             if len(issues) > 30:
                 lines.append("   · … %d more" % (len(issues) - 30))
         else:
-            lines.append("✓ design check: no overflow, overlap, small text or low "
-                         "contrast found")
+            lines.append("✓ design check: no overflow, overlap, small text, low "
+                         "contrast or empty space found")
         lines.append("previews (open them with read and LOOK before you reply): "
                      "%s  ·  slides: %s" % (ov, os.path.join(pdir, "slide-sNN.png")))
     except Exception as e:                        # Pillow غيرُ متاح مثلاً

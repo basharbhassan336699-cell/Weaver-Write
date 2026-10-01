@@ -147,6 +147,29 @@ if has_pil:
         ok("الفحص: " + what, key in o2, o2)
     ok("  ⟵ والملفُّ يُحفظ ليُصلَح (لا يُمنع)", rc == 0
        and os.path.isfile(os.path.join(T, "bad.pptx")))
+    # التوازن: دائرةٌ عنوانُها في أعلاها وأغلبُها فارغ (قِيس على عرض الهاتف)
+    BAL = {"design": "free", "slides": [{"bg": "#F5F7FB", "elements": [
+        {"type": "shape", "shape": "circle", "x": 9.0, "y": 2.1, "w": 3.3, "h": 3.3,
+         "fill": "#E8EFFA"},
+        {"type": "text", "x": 9.0, "y": 2.7, "w": 3.3, "h": 0.6, "text": "دورُ المعلّم",
+         "size": 22, "bold": True, "color": "#0B1F3A", "align": "center"}]},
+        {"bg": "#F5F7FB", "elements": [
+            {"type": "shape", "shape": "circle", "x": 9.0, "y": 2.1, "w": 3.3, "h": 3.3,
+             "fill": "#E8EFFA"},
+            {"type": "text", "x": 9.2, "y": 2.6, "w": 2.9, "h": 2.3, "valign": "middle",
+             "text": ["دورُ المعلّم", "يبقى المرشدَ الذي يوجّه التقنية"], "size": 22,
+             "color": "#0B1F3A", "align": "center"}]}]}
+    rc, o5 = cli("build", J("bal.json", BAL), "--out", os.path.join(T, "bal.pptx"))
+    ok("التوازن: محتوى محشورٌ في أعلى الدائرة ⟵ تنبيه", "slide 1 · shape #1" in o5
+       and "fills only" in o5, o5)
+    ok("  ⟵ والمحتوى الموسَّطُ المكتمل ⟵ لا تنبيه", "slide 2 · shape" not in o5, o5)
+    COV = {"design": "free", "slides": [{"bg": "#FFFFFF", "elements": [
+        {"type": "text", "x": 9, "y": 0.5, "w": 3.5, "h": 0.6, "text": "عنوان", "size": 24},
+        {"type": "text", "x": 9, "y": 1.2, "w": 3.5, "h": 0.5, "text": "سطر", "size": 18},
+        {"type": "text", "x": 9, "y": 1.8, "w": 3.5, "h": 0.5, "text": "سطر", "size": 18}]}]}
+    rc, o6 = cli("build", J("cov.json", COV), "--out", os.path.join(T, "cov.pptx"))
+    ok("شريحةٌ محتواها في ركنٍ صغير ⟵ تنبيه", "occupies only" in o6, o6)
+    ok("  ⟵ والعرضُ السليمُ بلا هذا التنبيه", "occupies only" not in o, o)
     # سطرُ PowerPoint: ١٫٢ × الحجم (لا مقاييسُ الخطّ كما في Word)
     lines, need, _w, _b = PF.layout({"text": "سطر", "size": 24}, 6, "Kufyan Arabic Regular",
                                     None)

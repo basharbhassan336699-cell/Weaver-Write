@@ -649,7 +649,7 @@ def _draw_text(img, e, fa, fe, issues, sn, label, backdrop_default=None):
     for wd in broken[:2]:
         issues.append("slide %d · %s: word «%s» is wider than the box (w %.2fin) — "
                       "widen it or reduce size" % (sn, label, wd[:30], w))
-    if min_size < 11:
+    if min_size < 12 - 0.01:
         issues.append("slide %d · %s: font %.0fpt is too small to read — ≥ 12" % (
             sn, label, min_size))
     if worst < 1:
@@ -693,6 +693,60 @@ def _paste_image(img, path, r, shape):
     img.paste(im, (r[0], r[1]), mask)
 
 
+def _is_container(e):
+    """شكلٌ يحمل محتوى (بطاقة، دائرة، لوح): معتمٌ، داخلَ الشريحة، ليس خلفيّةً كاملة
+    ولا شارةً صغيرة ولا خطّاً."""
+    x, y, w, h = _box(e)
+    if str(e.get("shape") or "") == "line" or not e.get("fill"):
+        return False
+    if e.get("opacity") is not None and _f(e.get("opacity"), 1) < 0.5:
+        return False
+    if w * h < 1.5 or w * h > 0.6 * W * H:
+        return False
+    return x >= -0.01 and y >= -0.01 and x + w <= W + 0.01 and y + h <= H + 0.01
+
+
+def _balance(boxes, inks, issues, sn):
+    """محتوى البطاقة/الدائرة محشورٌ في طرفها وأغلبُها فارغ — قِيس على عرض الهاتف:
+    دوائرُ فيها عنوانٌ في أعلاها فقط، وبطاقاتٌ نصُّها الصغيرُ في ثلثها الأعلى."""
+    for (bx, by, bw, bh), lab, own in boxes:
+        rects = [own] if own else []
+        for rect, l2, _k in inks:
+            if l2 == lab or rect is own:
+                continue
+            cx, cy = rect[0] + rect[2] / 2, rect[1] + rect[3] / 2
+            if bx <= cx <= bx + bw and by <= cy <= by + bh and rect[3] < bh:
+                rects.append(rect)
+        if not rects:
+            continue
+        top = max(by, min(r[1] for r in rects))
+        bot = min(by + bh, max(r[1] + r[3] for r in rects))
+        fill = (bot - top) / bh if bh else 1
+        off = ((top + bot) / 2 - (by + bh / 2)) / bh if bh else 0
+        if fill < 0.45 and abs(off) > 0.18:
+            issues.append(
+                "slide %d · %s: its content fills only %d%% of its height and sits at "
+                "the %s — center it (valign middle / move it), enlarge the text, add "
+                "the missing explanation, or make the shape smaller" % (
+                    sn, lab, round(fill * 100), "top" if off < 0 else "bottom"))
+
+
+def _coverage(boxes, inks, issues, sn):
+    """شريحةٌ محتواها في ركنٍ صغيرٍ منها (٣ عناصرَ فأكثر). الغلافُ والختامُ — عنصران
+    — خارجَ الحساب: فراغُهما مقصود."""
+    rects = [r for r, _l, _k in inks] + [b for b, _l, _o in boxes]
+    if len(inks) < 3 or not rects:
+        return
+    x0 = max(0.0, min(r[0] for r in rects))
+    y0 = max(0.0, min(r[1] for r in rects))
+    x1 = min(W, max(r[0] + r[2] for r in rects))
+    y1 = min(H, max(r[1] + r[3] for r in rects))
+    cov = max(0.0, x1 - x0) * max(0.0, y1 - y0) / (W * H)
+    if cov < 0.35:
+        issues.append("slide %d: the content occupies only %d%% of the slide — enlarge "
+                      "the elements or spread them over the slide" % (sn, round(cov * 100)))
+
+
 def _overlap(a, b):
     ax, ay, aw, ah = a
     bx, by, bw, bh = b
@@ -717,6 +771,7 @@ def render_check(spec, out_dir, stem, lang, font_ar=None, font_en=None,
         bg = sd.get("bg") if sd.get("bg") is not None else spec.get("bg", "FFFFFF")
         _draw_bg(img, bg)
         inks = []                         # (مستطيل، تسمية، نوع)
+        boxes = []                        # أشكالٌ حاويةٌ (بطاقات، دوائر) للتوازن
         els = [e for e in sd.get("elements") or [] if isinstance(e, dict)]
         if not els:
             issues.append("slide %d: empty — no elements" % sn)
@@ -759,10 +814,13 @@ def render_check(spec, out_dir, stem, lang, font_ar=None, font_en=None,
                                (_rgb(lc) + (255,)) if lc else None,
                                max(1, int(_f(e.get("line_w"), 1) * PX / 72)) if lc else 0)
                 img.alpha_composite(layer)
+                own = None
                 if e.get("text") is not None:
-                    ink = _draw_text(img, e, fa, fe, issues, sn, lab)
-                    if ink:
-                        inks.append((ink, lab, "text"))
+                    own = _draw_text(img, e, fa, fe, issues, sn, lab)
+                    if own:
+                        inks.append((own, lab, "text"))
+                if _is_container(e):
+                    boxes.append(((x, y, w, h), lab, own))
             elif t == "text":
                 ink = _draw_text(img, e, fa, fe, issues, sn, lab)
                 if ink:
@@ -815,6 +873,9 @@ def render_check(spec, out_dir, stem, lang, font_ar=None, font_en=None,
             elif t == "table":
                 _draw_table(img, e, r, fa, fe, issues, sn, lab)
                 inks.append(((x, y, w, h), lab, "table"))
+        _balance(boxes, inks, issues, sn)
+        if len(slides) == 1 or sn not in (1, len(slides)):   # الغلافُ والختامُ: فراغٌ مقصود
+            _coverage(boxes, inks, issues, sn)
         for i in range(len(inks)):
             for j in range(i + 1, len(inks)):
                 (a, la, ka), (b, lb, kb) = inks[i], inks[j]
