@@ -725,7 +725,11 @@ def build_free(spec, out):
     # المعاينةُ والفحص: لا تمنع الحفظ — تُري النموذجَ ما سيراه المستخدم
     try:
         stem = os.path.splitext(os.path.basename(out))[0]
-        pdir = os.path.join(os.path.dirname(os.path.abspath(out)), stem + "-preview")
+        # مجلّدٌ مخفيّ (يبدأ بنقطة): المعاينةُ للنموذج لا للمستخدم — قِيس: الخادمُ
+        # يسلّم أحدثَ ٥ ملفّات، فدفعت صورُ المعاينة التسعُ ملفَّ العرض خارجها
+        # ووصلت المستخدمَ صورٌ بلا .pptx. والخادمُ يتخطّى المجلّداتِ المخفيّة.
+        pdir = os.path.join(os.path.dirname(os.path.abspath(out)),
+                            "." + stem + "-preview")
         paths, ov, issues = PF.render_check(spec, pdir, "slide", lang, f_ar, f_en,
                                             _chart)
         if issues:

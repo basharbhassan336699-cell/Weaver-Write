@@ -107,10 +107,22 @@ try:
 except ImportError:
     has_pil = False
 if has_pil:
-    pdir = os.path.join(T, "free-preview")
+    pdir = os.path.join(T, ".free-preview")
     ok("صورةٌ جامعةٌ وصورةٌ لكلِّ شريحة", os.path.isfile(os.path.join(
         pdir, "slide-overview.png")) and all(os.path.isfile(os.path.join(
             pdir, "slide-s%02d.png" % i)) for i in (1, 2, 3)), os.listdir(T))
+    ok("  ⟵ في مجلّدٍ مخفيّ: الخادمُ لا يسلّمها بدل ملفّ العرض",
+       not os.path.isdir(os.path.join(T, "free-preview")))
+    sys.path.insert(0, os.path.join(_ROOT, "web"))
+    import server as SRV
+    _old = SRV._ws_dir
+    SRV._ws_dir = lambda: T
+    try:
+        snap = SRV._ws_snapshot(chat_rel=None)
+    finally:
+        SRV._ws_dir = _old
+    ok("  ⟵ ولقطةُ الخادم ترى free.pptx ولا صورَ المعاينة",
+       "free.pptx" in snap and not any("preview" in k for k in snap), list(snap)[:8])
     ok("المواصفةُ السليمة ⟵ ✓ design check", "✓ design check" in o, o)
     ok("  ⟵ ويقول للنموذج: افتحها وانظر", "open them with read" in o)
     BAD = {"design": "free", "slides": [{"bg": "#FFFFFF", "elements": [
