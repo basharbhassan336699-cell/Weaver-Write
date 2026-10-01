@@ -449,6 +449,36 @@ def _tmp_png(tag="chart"):
     return p
 
 
+def _pages_note(path, target=None):
+    """«≈ ٤ pages» — تقديرُ الصفحات من الملفّ (docx_pages: مقاييسُ الخطّ الفعليّ،
+    معايَرٌ على LibreOffice). قِيس: طُلب تقريرٌ من صفحتين فخرج أربعاً وقيل
+    «صفحتان تقريباً» — النموذجُ لا يرى الصفحات، فهذا السطرُ يريه إيّاها."""
+    try:
+        _paths()
+        from docx_pages import estimate_pages
+        e = estimate_pages(path)
+    except Exception:
+        return ""
+    s = "≈ %d page%s (estimate %.1f · ~%d words/page)" % (
+        e["pages"], "" if e["pages"] == 1 else "s", e["exact"], e["words_per_page"])
+    try:
+        t = float(str(target).strip()) if target not in (None, "", False) else None
+    except ValueError:
+        t = None
+    if t:
+        wpp = max(1, e["words_per_page"])
+        if e["exact"] > t + 0.05:
+            s += (" · ⚠ requested %g page%s — cut ~%d words (or shrink a table/"
+                  "image) and rebuild" % (t, "" if t == 1 else "s",
+                                          int((e["exact"] - t) * wpp * 1.05) + 5))
+        elif e["exact"] < t - 0.6:
+            s += (" · ⚠ requested %g pages — add ~%d words and rebuild"
+                  % (t, int((t - 0.15 - e["exact"]) * wpp)))
+        else:
+            s += " · ✓ matches the requested %g page%s" % (t, "" if t == 1 else "s")
+    return s
+
+
 # ═════════════════════════════════ build ════════════════════════════════
 def build_word(spec, out):
     _paths()
@@ -505,9 +535,11 @@ def build_word(spec, out):
                if n.startswith("word/media/"))
     fonts = " · ".join(x for x in (_font_says(main, "word"),
                                    _font_says(latin, "word")) if x)
-    return "Word %s: %d paragraphs · %d tables · %d images · %s%s" % (
+    pages = _pages_note(out, spec.get("pages"))
+    return "Word %s: %d paragraphs · %d tables · %d images · %s%s%s" % (
         lang.upper(), len(d.paragraphs), len(d.tables), imgs,
-        "RTL" if lang == "ar" else "LTR", (" · " + fonts) if fonts else "")
+        "RTL" if lang == "ar" else "LTR", (" · " + fonts) if fonts else "",
+        (" · " + pages) if pages else "")
 
 
 def _slide_kind(s):
@@ -1172,6 +1204,9 @@ def edit_docx(path, ops, out):
     _embed_word_fonts(out, embed_later)
     _no_dupes(out)
     Document(out)
+    _pg = _pages_note(out)
+    if _pg:
+        done.append("length " + _pg)
     return {"done": done, "failed": failed, "out": out}
 
 

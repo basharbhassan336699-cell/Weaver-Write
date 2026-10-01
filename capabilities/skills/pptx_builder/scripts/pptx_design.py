@@ -42,6 +42,13 @@ W_IN, H_IN = 13.333, 7.5
 M = 0.6                                  # الهامش
 _AR = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
 _AR_DIGITS = str.maketrans("0123456789", "٠١٢٣٤٥٦٧٨٩")
+# خطوطٌ كوفيّةٌ هندسيّة أرقامُها العربيّة بأشكالٍ غيرِ مألوفة — قِيس على هاتف
+# المستخدم وبالرسم من ملفّ Kufyan نفسِه: «٣» كأنّها «Ш» و«٢» كأنّها «Γ». فالرقمُ
+# وحدَه (شاراتُ الدوائر والخطوات والأرقامُ الكبيرة) بخطٍّ أرقامُه مألوفة، والنصُّ
+# كلُّه يبقى بالخطّ المطلوب.
+_ODD_DIGIT_FONTS = ("kufyan", "kufi", "kufic")
+DIGIT_FONT = "Arial"
+_NUMERIC = re.compile(r"^[\s0-9٠-٩۰-۹٫٬.,:%٪+\-–—/×xX]*[0-9٠-٩۰-۹][\s0-9٠-٩۰-۹٫٬.,:%٪+\-–—/×xX]*$")
 
 
 # ─────────────────────────── ألوان ───────────────────────────
@@ -268,8 +275,11 @@ class Deck:
             f.color.rgb = RGBColor.from_string(_hex(o.get("color", color or
                                                           self.t["text"])))
             rPr = run._r.get_or_add_rPr()
-            for tag, fam in (("a:latin", self.fe if not r_ else self.fa),
-                             ("a:cs", self.fa)):
+            fa, fl = self.fa, (self.fe if not r_ else self.fa)
+            if (o.get("font") or (self.ar and _NUMERIC.match(txt) and any(
+                    k in self.fa.lower() for k in _ODD_DIGIT_FONTS))):
+                fa = fl = o.get("font") or DIGIT_FONT
+            for tag, fam in (("a:latin", fl), ("a:cs", fa)):
                 el = rPr.find(qn(tag))
                 if el is None:
                     el = rPr.makeelement(qn(tag), {})
@@ -334,6 +344,20 @@ class Deck:
 
 # ─────────────────────────── أنواعُ الشرائح ───────────────────────────
 TOP, BOTTOM = 1.75, 6.75                  # منطقةُ المحتوى
+
+
+def _text_h(text, w_in, size, bold=False, spacing=1.35):
+    """ارتفاعُ نصٍّ ملفوفٍ بعرضٍ ما (بوصة)."""
+    if not text:
+        return 0.0
+    n = _lines(text, w_in * 72 * 0.94, size, bold) or max(1, len(str(text)) // 8)
+    return n * size * spacing / 72
+
+
+def _vstart(block_h):
+    """أعلى كتلةٍ موسَّطةٍ عموديّاً في منطقة المحتوى. قِيس على عرض المستخدم:
+    البطاقاتُ والدوائرُ والخطواتُ في النصف الأعلى وتحتها فراغٌ كبير."""
+    return TOP + max(0.0, (BOTTOM - TOP - block_h) / 2)
 
 
 def _items(v):
@@ -465,13 +489,18 @@ def cards(D, sd, n):
     cw = (W_IN - 2 * M - gap * (k - 1)) / k
     with_img = bool(sd.get("images") or any(i["path"] for i in its))
     # ارتفاعُ البطاقة بقدر محتواها (كان ثابتاً فبقي نصفُها السفليُّ فارغاً)
-    tsz = min(fit(i["title"], cw - 0.4, 0.9, 24, 15, bold=True) for i in its)
-    bsz = min([fit(i["text"], cw - 0.5, 2.2, 20, 12) for i in its if i["text"]]
-              or [16])
+    tsz = min(fit(i["title"], cw - 0.4, 0.9, 28, 16, bold=True) for i in its)
+    bsz = min([fit(i["text"], cw - 0.5, 2.2, 22, 13) for i in its if i["text"]]
+              or [18])
     body_h = max([(_lines(i["text"], (cw - 0.5) * 72 * 0.94, bsz, False) or 1)
                   * bsz * 1.35 / 72 for i in its if i["text"]] or [0])
     top_h = (min(1.9, (BOTTOM - TOP) * 0.42) + 0.2) if with_img else 1.0
-    ch = min(BOTTOM - TOP - 0.1, 0.35 + top_h + 0.95 + body_h + 0.45)
+    # العنوانُ سطرين إن قارب العرضَ — قِيس: «Passing problem» قُدِّر سطراً فانكسر
+    # بالخطّ البديل وغطّى النصَّ تحته؛ فيُقدَّر بعرضٍ أضيق (٨٥٪) احتياطاً.
+    tl = max((_lines(i["title"], (cw - 0.4) * 72 * 0.94 * 0.85, tsz, True) or 2)
+             for i in its)
+    th = max(0.9, tl * tsz * 1.25 / 72 + 0.15)
+    ch = min(BOTTOM - TOP - 0.1, 0.35 + top_h + th + 0.05 + body_h + 0.45)
     y0 = TOP + (BOTTOM - TOP - ch) / 2
     for i, it in enumerate(its):
         x = D.X(M + i * (cw + gap), cw)
@@ -491,7 +520,6 @@ def cards(D, sd, n):
                    [(num(i + 1, D.ar), {"align": "center", "bold": True})],
                    size=22, color=t["text_on_dark"], anchor="middle")
             yy += d + 0.25
-        th = 0.9
         D.text(s, x + 0.2, yy, cw - 0.4, th, [(it["title"], {"align": "center",
                                                              "bold": True})],
                size=tsz, color=t["title_c"], anchor="middle")
@@ -510,9 +538,15 @@ def circles(D, sd, n):
     its = _items(sd.get("circles") or sd.get("items"))[:5] or _items(["—"])
     k = len(its)
     slot = (W_IN - 2 * M) / k
-    d = min(2.3, slot - 0.5)
     with_img = bool(sd.get("images") or any(i["path"] for i in its))
-    cy = TOP + 0.15
+    tsz = min(fit(i["title"], slot - 0.2, 0.75, 26, 15, bold=True) for i in its)
+    bsz = min([fit(i["text"], slot - 0.3, 1.4, 20, 12) for i in its if i["text"]]
+              or [18])
+    body = max([_text_h(i["text"], slot - 0.3, bsz) for i in its] + [0])
+    d = min(2.8 if with_img else 2.5, slot - 0.45,
+            BOTTOM - TOP - 0.3 - 0.8 - (body + 0.1 if body else 0))
+    block = d + 0.3 + 0.8 + (body + 0.1 if body else 0)
+    cy = _vstart(block)
     for i, it in enumerate(its):
         x = D.X(M + i * slot, slot)
         cx = x + (slot - d) / 2
@@ -528,15 +562,12 @@ def circles(D, sd, n):
                    size=fit(lab, d - 0.3, d - 0.4, 44, 18), color=t["text_on_dark"],
                    anchor="middle")
         yy = cy + d + 0.3
-        D.text(s, x + 0.1, yy, slot - 0.2, 0.7, [(it["title"], {"align": "center",
-                                                                "bold": True})],
-               size=fit(it["title"], slot - 0.2, 0.7, 22, 14), color=t["title_c"],
-               anchor="middle")
+        D.text(s, x + 0.1, yy, slot - 0.2, 0.75, [(it["title"], {"align": "center",
+                                                                 "bold": True})],
+               size=tsz, color=t["title_c"], anchor="middle")
         if it["text"]:
-            bh = BOTTOM - yy - 0.75
-            D.text(s, x + 0.15, yy + 0.75, slot - 0.3, bh,
-                   [(it["text"], {"align": "center"})],
-                   size=fit(it["text"], slot - 0.3, bh, 16, 11))
+            D.text(s, x + 0.15, yy + 0.85, slot - 0.3, body + 0.1,
+                   [(it["text"], {"align": "center"})], size=bsz)
     return s
 
 
@@ -583,8 +614,12 @@ def steps(D, sd, n):
     its = _items(sd.get("steps") or sd.get("items"))[:6] or _items(["—"])
     k = len(its)
     slot = (W_IN - 2 * M) / k
-    d = 0.95
-    ly = TOP + 0.55
+    d = 1.2
+    tsz = min(fit(i["title"], slot - 0.2, 0.8, 26, 14, bold=True) for i in its)
+    bsz = min([fit(i["text"], slot - 0.3, 1.8, 20, 12) for i in its if i["text"]]
+              or [18])
+    body = max([_text_h(i["text"], slot - 0.3, bsz) for i in its] + [0])
+    ly = _vstart(d + 0.35 + 0.85 + (body + 0.1 if body else 0))
     D.shape(s, MSO_SHAPE.RECTANGLE, M + slot / 2, ly + d / 2 - 0.03,
             W_IN - 2 * M - slot, 0.06, fill=t["line"])
     for i, it in enumerate(its):
@@ -593,17 +628,14 @@ def steps(D, sd, n):
         col = t["primary"] if i % 2 == 0 else t["accent"]
         D.shape(s, MSO_SHAPE.OVAL, cx, ly, d, d, fill=col, line=t["bg"], lw=4)
         D.text(s, cx, ly, d, d, [(num(i + 1, D.ar), {"align": "center", "bold": True})],
-               size=26, color=t["text_on_dark"], anchor="middle")
-        yy = ly + d + 0.3
-        D.text(s, x + 0.1, yy, slot - 0.2, 0.75, [(it["title"], {"align": "center",
-                                                                 "bold": True})],
-               size=fit(it["title"], slot - 0.2, 0.75, 20, 13), color=t["title_c"],
-               anchor="middle")
+               size=32, color=t["text_on_dark"], anchor="middle")
+        yy = ly + d + 0.35
+        D.text(s, x + 0.1, yy, slot - 0.2, 0.8, [(it["title"], {"align": "center",
+                                                                "bold": True})],
+               size=tsz, color=t["title_c"], anchor="middle")
         if it["text"]:
-            bh = BOTTOM - yy - 0.8
-            D.text(s, x + 0.15, yy + 0.8, slot - 0.3, bh,
-                   [(it["text"], {"align": "center"})],
-                   size=fit(it["text"], slot - 0.3, bh, 16, 11))
+            D.text(s, x + 0.15, yy + 0.9, slot - 0.3, body + 0.1,
+                   [(it["text"], {"align": "center"})], size=bsz)
     return s
 
 
@@ -614,8 +646,8 @@ def stats(D, sd, n):
     k = len(its)
     gap = 0.35
     cw = (W_IN - 2 * M - gap * (k - 1)) / k
-    ch = 3.3
-    y = TOP + (BOTTOM - TOP - ch) / 2
+    ch = 3.8
+    y = _vstart(ch)
     for i, it in enumerate(its):
         x = D.X(M + i * (cw + gap), cw)
         D.shape(s, MSO_SHAPE.ROUNDED_RECTANGLE, x, y, cw, ch, fill=t["card"],
@@ -623,15 +655,15 @@ def stats(D, sd, n):
         D.shape(s, MSO_SHAPE.RECTANGLE, x, y + ch - 0.1, cw, 0.1,
                 fill=t["accent"] if i % 2 else t["primary"])
         val = it["value"] or it["title"]
-        D.text(s, x + 0.2, y + 0.3, cw - 0.4, 1.6, [(val, {"align": "center",
-                                                           "bold": True})],
-               size=fit(val, cw - 0.4, 1.5, 60, 24, bold=True),
+        D.text(s, x + 0.2, y + 0.35, cw - 0.4, 1.8, [(val, {"align": "center",
+                                                            "bold": True})],
+               size=fit(val, cw - 0.4, 1.7, 72, 26, bold=True),
                color=t["primary"] if not t["dark"] else t["accent"], anchor="middle")
         lab = it["text"] if it["value"] else ""
         lab = lab or (it["title"] if it["value"] else "")
         if lab:
-            D.text(s, x + 0.25, y + 1.95, cw - 0.5, 1.15, [(lab, {"align": "center"})],
-                   size=fit(lab, cw - 0.5, 1.15, 20, 12), anchor="top")
+            D.text(s, x + 0.25, y + 2.25, cw - 0.5, 1.3, [(lab, {"align": "center"})],
+                   size=fit(lab, cw - 0.5, 1.3, 24, 13), anchor="top")
     return s
 
 
@@ -674,9 +706,10 @@ def table(D, sd, n):
     nrow = 1 + len(rows)
     tw = W_IN - 2 * M - 0.3
     avail = BOTTOM - TOP - (1.0 if sd.get("note") else 0.1)
-    rh = min(0.62, avail / nrow)
-    fs = int(max(11, min(18, rh * 30)))
-    gf = s.shapes.add_table(nrow, ncol, Inches(M + 0.15), Inches(TOP + 0.05),
+    rh = min(0.8, avail / nrow)
+    fs = int(max(11, min(20, rh * 28)))
+    gf = s.shapes.add_table(nrow, ncol, Inches(M + 0.15),
+                            Inches(_vstart(rh * nrow + (1.0 if sd.get("note") else 0))),
                             Inches(tw), Inches(rh * nrow))
     tbl = gf.table
     tbl._tbl.find(qn("a:tblPr")).set("rtl", "0")

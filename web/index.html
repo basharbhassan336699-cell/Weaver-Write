@@ -5352,7 +5352,9 @@
   async function wvOfferCalendar(taskText, chatId, anchorEl){
     if(!anchorEl) return;
     var opts=[];
-    try{ var d=await (await fetch('/api/calendar/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:taskText})})).json(); opts=d.options||[]; }catch(e){}
+    try{ var d=await (await fetch('/api/calendar/suggest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:taskText})})).json(); opts=d.options||[];
+      // لا موعدَ في الطلب ⟵ لا بطاقة (كانت تظهر بعد كلِّ رسمٍ وتعديل). التقويمُ نفسُه باقٍ في القائمة.
+      if(d && d.mentioned===false) return; }catch(e){}
     var title=(taskText||'').trim().replace(/\s+/g,' '); if(title.length>60) title=title.slice(0,60)+'…';
     var card=document.createElement('div');
     card.className='wv-cal-offer';

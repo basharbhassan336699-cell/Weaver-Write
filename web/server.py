@@ -1288,7 +1288,7 @@ def _cal_list():
     return items
 
 
-def _calendar_suggest(text):
+def _calendar_suggest(text, with_flag=False):
     """Propose up to 4 due-date options inferred from the task text (Arabic +
     English: explicit dates, غداً/tomorrow, بعد N أيام/in N days, next week,
     نهاية الأسبوع/end of week, بعد شهر/next month). Always returns concrete
@@ -1349,10 +1349,14 @@ def _calendar_suggest(text):
         add(today + td(days=days), "نهاية الأسبوع")
     if has("بعد شهر", "الشهر القادم", "الشهر المقبل", "next month", "in a month"):
         add(today + td(days=30), "بعد شهر")
+    # ما وُجد في النصّ نفسِه (تاريخٌ أو «غداً» أو «بعد أسبوع»…) قبل الافتراضيّ
+    mentioned = bool(opts)
     for dd, lab in ((1, "غداً"), (3, "بعد ٣ أيام"), (7, "بعد أسبوع")):
         if len(opts) >= 3:
             break
         add(today + td(days=dd), lab)
+    if with_flag:
+        return opts[:4], mentioned
     return opts[:4]
 
 
@@ -2684,7 +2688,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"ok": ok})
             return
         if path == "/api/calendar/suggest":
-            self._json({"options": _calendar_suggest(body.get("text", ""))})
+            # mentioned: هل في نصّ الطلب موعدٌ أصلاً؟ — قِيس: البطاقةُ كانت تظهر
+            # بعد كلِّ ملف (رسمٌ، تعديلٌ صغير) والطلبُ بلا موعد.
+            _opts, _ment = _calendar_suggest(body.get("text", ""), with_flag=True)
+            self._json({"options": _opts, "mentioned": _ment})
             return
         if path == "/api/calendar/add":
             title = (body.get("title") or "").strip()

@@ -249,6 +249,8 @@ def add_image(doc, image_path, caption="", width_inches=5.5, lang="ar",
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.add_run().add_picture(image_path, width=Inches(width_inches))
     if caption:
+        # الصورةُ مع تعليقها في صفحةٍ واحدة — قِيس: التعليقُ انفصل في الصفحة التالية
+        p.paragraph_format.keep_with_next = True
         cap = doc.add_paragraph()
         cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = cap.add_run(caption)
