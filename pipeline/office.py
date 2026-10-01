@@ -610,10 +610,17 @@ def build_designed(spec, out):
                  is not None)
     fonts = " · ".join(x for x in (_font_says(main, "pptx"),
                                    _font_says(latin, "pptx")) if x)
+    charts = ""
+    if PD.CHART_LOG:
+        nat = sum(1 for _, how, _ in PD.CHART_LOG if how == "native")
+        why = sorted({w for _, how, w in PD.CHART_LOG if how == "image" and w})
+        charts = " · charts: %d native (editable in PowerPoint: Edit Data)%s" % (
+            nat, ("; %d as image — %s" % (len(PD.CHART_LOG) - nat, "; ".join(why)))
+            if nat < len(PD.CHART_LOG) else "")
     return ("PowerPoint %s: %d slides (cover %d + %d + closing %d) · theme %s · "
-            "layouts: %s%s%s" % (
+            "layouts: %s%s%s%s" % (
                 lang.upper(), got, c, k, e, tid,
-                ", ".join("%s %d" % kv for kv in kinds.items()),
+                ", ".join("%s %d" % kv for kv in kinds.items()), charts,
                 (" · image frames: %d (%d empty — fill with set_image, or in "
                  "PowerPoint: Format Shape ⟵ Fill ⟵ Picture)" % (frames, frames - filled))
                 if frames else "", (" · " + fonts) if fonts else ""))
@@ -829,9 +836,21 @@ def cmd_build(spec_path, out):
 
 def cmd_chart(spec_path, out=None, into=None):
     spec = _load_json(spec_path)
+    if not into and _ext(out or "") in (".html", ".htm"):
+        # رسمٌ تفاعليّ (Chart.js المضمَّنة في المشروع) — صفحةٌ واحدةٌ بلا إنترنت
+        _paths()
+        from chart_html import build_chart_html
+        lang = _lang_of(spec, spec.get("title"), " ".join(
+            str(x) for x in (spec.get("data") or {}).get("labels", []) or []))
+        r = build_chart_html(spec, out, lang=lang, font=spec.get("font"))
+        if not r.get("ok"):
+            raise Fail("interactive chart failed: %s" % r.get("error"))
+        return ("interactive chart %s → %s · font %s · opens in Weaver Write or any "
+                "browser, works offline" % (r["type"], out, r.get("font") or "default"))
     if not into:
         if _ext(out or "") != ".png":
-            raise Fail("--out must be a .png (or use --into FILE.docx/.pptx)")
+            raise Fail("--out must be .png (image) or .html (interactive), "
+                       "or use --into FILE.docx/.pptx")
         chart_png(spec, out)
         _fn = _LAST_CHART.get("font_note") or (
             "font %s" % _LAST_CHART["font"] if _LAST_CHART.get("font") else "")

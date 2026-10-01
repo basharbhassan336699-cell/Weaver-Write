@@ -1418,6 +1418,9 @@ _MIME = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
+_HTML_PREVIEW_CSP = ("sandbox allow-scripts allow-downloads; default-src 'none'; "
+                     "script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                     "img-src data: blob:; font-src data:; media-src data: blob:")
 _PREVIEWABLE = {"text/markdown", "text/plain", "text/csv", "application/json",
                 "text/html", "application/pdf",
                 "image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
@@ -2447,6 +2450,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            if base == "text/html" and not download:
+                # صفحةُ HTML تُعرض (رسمٌ تفاعليّ): سكربتُها يعمل في صندوقٍ معتمٍ
+                # بلا شبكة — لا يصل إلى /api/… ولا إلى الإنترنت، ولو فُتحت
+                # مباشرةً في تبويب. ما فيها مضمَّنٌ كلُّه (Chart.js والخطّ).
+                self.send_header("Content-Security-Policy", _HTML_PREVIEW_CSP)
             if download or base not in _PREVIEWABLE:
                 import urllib.parse as _up
                 fn = _up.quote(os.path.basename(real))

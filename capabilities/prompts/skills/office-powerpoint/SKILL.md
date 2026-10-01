@@ -52,7 +52,9 @@ description: Create or edit a PowerPoint deck (.pptx) — professional designed 
    - `"images": true` مع cards/circles ⟵ الدوائرُ أو البطاقاتُ **أطرُ صور**.
    - `images` ١–٦ أطر صور مربّعة أو دائريّة بتعليق — للصور التي سيضيفها المستخدم.
    - `steps` خطوات ٣–٦ · `stats` أرقامٌ كبيرة ٢–٤ · `quote` اقتباس.
-   - `table` جدول · `chart` رسمٌ بألوان القالب (ومعه `points` للخلاصة).
+   - `table` جدول · `chart` رسمٌ بألوان القالب (ومعه `points` للخلاصة) — **أصليٌّ
+     في PowerPoint**: أرقامُه تُعدَّل فيه («تحرير البيانات»)، لا صورة. histogram
+     صورة؛ و`"as_image": true` لمن يريدها صورة.
    - `"layout": "section"` فاصلٌ مرقّم · `"notes"` في أيّ شريحة: ملاحظاتُ المتحدّث.
    القوالب: academic_navy · academic_green · formal_gray · modern_blue ·
    creative_purple · warm_maroon · uae_heritage · midnight_executive ·

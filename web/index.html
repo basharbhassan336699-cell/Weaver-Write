@@ -3951,6 +3951,12 @@
         body.innerHTML=''; const img=document.createElement('img'); img.className='fp-img'; img.src=url; body.appendChild(img);
       } else if(ext==='.pdf'){
         body.innerHTML=''; const fr=document.createElement('iframe'); fr.className='fp-frame'; fr.src=url; body.appendChild(fr);
+      } else if(ext==='.html'||ext==='.htm'){
+        // صفحةٌ تعمل (رسمٌ تفاعليّ) لا نصُّها — في إطارٍ معزول: سكربتاتُها تعمل،
+        // ولا تصل إلى التطبيق (أصلٌ معتم بلا allow-same-origin) ولا إلى الشبكة
+        // (الخادمُ يرسلها بـCSP sandbox · default-src 'none').
+        body.innerHTML=''; const fr=document.createElement('iframe'); fr.className='fp-frame';
+        fr.setAttribute('sandbox','allow-scripts allow-downloads'); fr.src=url; body.appendChild(fr);
       } else {
         const txt = await (await fetch(url)).text();
         if(ext==='.md'){ const d=document.createElement('div'); d.className='bubble fp-md'; d.innerHTML=renderMarkdown(txt); body.innerHTML=''; body.appendChild(d); }

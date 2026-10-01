@@ -712,13 +712,167 @@ def table(D, sd, n):
     return s
 
 
+# رسمٌ أصليٌّ في PowerPoint: أرقامُه في جدولٍ داخل الملفّ («تحرير البيانات»)،
+# لا صورة. python-pptx يكتب ذلك الجدولَ بـxlsxwriter — وليست في requirements،
+# فإن غابت عاد الرسمُ صورةً كما كان، ويُقال السبب.
+_NATIVE = {"bar": "COLUMN_CLUSTERED", "horizontal_bar": "BAR_CLUSTERED",
+           "grouped_bar": "COLUMN_CLUSTERED", "stacked_bar": "COLUMN_STACKED",
+           "line": "LINE_MARKERS", "multi_line": "LINE_MARKERS", "area": "AREA",
+           "pie": "PIE", "donut": "DOUGHNUT", "radar": "RADAR_MARKERS",
+           "scatter": "XY_SCATTER"}
+CHART_LOG = []                        # [(النوع، "native"|"image"، السبب)]
+
+
+def _palette(theme_id, k):
+    import sys
+    cb = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "chart_builder",
+                      "scripts")
+    if cb not in sys.path:
+        sys.path.insert(0, cb)
+    import build_chart as bc
+    th = bc._load_theme(theme_id)
+    return [str(c).lstrip("#").upper() for c in bc._palette(th, max(1, k))]
+
+
+def native_chart(D, s, spec, x, y, w, h):
+    """رسمٌ أصليٌّ قابلٌ للتعديل في PowerPoint، أو None (والسببُ في CHART_LOG)."""
+    kind = str(spec.get("type") or "bar")
+    if kind not in _NATIVE:
+        CHART_LOG.append((kind, "image", "type not native in PowerPoint"))
+        return None
+    try:
+        import xlsxwriter  # noqa: F401  — python-pptx يكتب بيانات الرسم بها
+    except ImportError:
+        CHART_LOG.append((kind, "image", "xlsxwriter not installed "
+                                         "(pip install XlsxWriter)"))
+        return None
+    from pptx.chart.data import CategoryChartData, XyChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+    data = spec.get("data") or {}
+    multi = kind in ("grouped_bar", "stacked_bar", "multi_line")
+    rnd = kind in ("pie", "donut")
+    if kind == "scatter":
+        cd = XyChartData()
+        se = cd.add_series(str(spec.get("name") or spec.get("title") or ""))
+        for a, b in zip(data.get("x") or [], data.get("y") or []):
+            se.add_data_point(float(a), float(b))
+        k = 1
+    else:
+        cd = CategoryChartData()
+        cd.categories = [str(v) for v in (data.get("labels") or data.get("x") or [])]
+        if multi:
+            for name, vals in (data.get("series") or {}).items():
+                cd.add_series(str(name), [float(v) for v in vals])
+            k = max(1, len(data.get("series") or {}))
+        else:
+            vals = [float(v) for v in (data.get("values") or data.get("y") or [])]
+            cd.add_series(str(spec.get("name") or spec.get("title") or ""), vals)
+            k = len(vals)
+    gf = s.shapes.add_chart(getattr(XL_CHART_TYPE, _NATIVE[kind]), Inches(x),
+                            Inches(y), Inches(w), Inches(h), cd)
+    ch = gf.chart
+    t = D.t
+    cols = _palette(spec.get("theme") or t["id"], k)
+    ch.font.size = Pt(13)
+    ch.font.name = D.fe if not D.ar else D.fa
+    ch.font.color.rgb = RGBColor.from_string(t["text"])
+    # الخطُّ للعربيّ (a:cs) في نصوص الرسم كلِّها
+    for rpr in ch._chartSpace.xpath(".//a:defRPr"):
+        cs = rpr.find(qn("a:cs"))
+        if cs is None:
+            cs = rpr.makeelement(qn("a:cs"), {})
+            rpr.append(cs)
+        cs.set("typeface", D.fa)
+    title = str(spec.get("title") or "")
+    ch.has_title = bool(title)
+    if title:
+        tf = ch.chart_title.text_frame
+        tf.text = title
+        p = tf.paragraphs[0]
+        p._p.get_or_add_pPr().set("rtl", "1" if is_rtl(title, D.ar) else "0")
+        for r in p.runs:
+            r.font.size, r.font.bold = Pt(16), True
+            r.font.color.rgb = RGBColor.from_string(t["title_c"])
+    ch.has_legend = multi or rnd
+    if ch.has_legend:
+        ch.legend.position = XL_LEGEND_POSITION.BOTTOM
+        ch.legend.include_in_layout = False
+        ch.legend.font.size = Pt(12)
+    plot = ch.plots[0]
+    if kind in ("bar", "horizontal_bar", "grouped_bar", "stacked_bar"):
+        plot.gap_width = 70
+    if not multi and kind not in ("line", "area", "radar", "scatter"):
+        plot.vary_by_categories = True
+        for i, pt in enumerate(plot.series[0].points):
+            pt.format.fill.solid()
+            pt.format.fill.fore_color.rgb = RGBColor.from_string(cols[i % len(cols)])
+    else:
+        for i, se in enumerate(plot.series):
+            c = RGBColor.from_string(cols[i % len(cols)])
+            if kind in ("line", "multi_line", "radar", "scatter"):
+                se.format.line.color.rgb = c
+                se.format.line.width = Pt(2.75)
+                try:
+                    se.marker.format.fill.solid()
+                    se.marker.format.fill.fore_color.rgb = c
+                except Exception:
+                    pass
+            else:
+                se.format.fill.solid()
+                se.format.fill.fore_color.rgb = c
+    if kind in ("bar", "horizontal_bar", "grouped_bar", "pie", "donut"):
+        plot.has_data_labels = True
+        dl = plot.data_labels
+        dl.font.size = Pt(12)
+        if rnd:
+            dl.show_percentage, dl.show_value = True, False
+            dl.number_format, dl.number_format_is_linked = "0%", False
+    if not rnd and kind not in ("radar",):
+        try:
+            ca, va = ch.category_axis, ch.value_axis
+            va.has_major_gridlines = True
+            va.major_gridlines.format.line.color.rgb = RGBColor.from_string(t["line"])
+            for ax in (ca, va):
+                ax.format.line.color.rgb = RGBColor.from_string(t["line"])
+            if D.ar and kind != "scatter":
+                # من اليمين: الفئةُ الأولى يميناً (والمحورُ يميناً تبعاً لها)
+                ca.reverse_order = True
+                if kind == "horizontal_bar":
+                    # أفقيّ: الأولى أعلى، والأعمدةُ من اليمين، ومحورُ القيم أسفل.
+                    # قِيس بالرسم: ca.crosses في python-pptx لا يُكتب في الملفّ
+                    # (فبقي المحورُ أعلى)، وva.crosses يقلب الأعمدةَ يساراً —
+                    # والصحيح c:crosses=max على محور القيم نفسِه.
+                    va.reverse_order = True
+                    vx = ch._chartSpace.xpath(".//c:valAx")[0].find(qn("c:crosses"))
+                    if vx is not None:
+                        vx.set("val", "max")
+        except Exception:
+            pass
+    CHART_LOG.append((kind, "native", ""))
+    return gf
+
+
 def chart(D, sd, n, chart_png):
-    """رسمٌ بألوان القالب؛ ومعه نقاطُ الخلاصة إن وُجدت."""
+    """رسمٌ بألوان القالب — أصليٌّ في PowerPoint (أرقامُه تُعدَّل فيه)، أو صورةٌ
+    إن طُلب (`"as_image": true`) أو تعذّر؛ ومعه نقاطُ الخلاصة إن وُجدت."""
     s = D.content_slide(sd.get("title", ""), n)
     spec = dict(sd.get("chart") or {})
     spec.setdefault("theme", D.t["id"])
     spec.setdefault("lang", D.lang)
     spec.setdefault("font", D.fa)
+    pts = sd.get("points")
+    if not (spec.get("as_image") or sd.get("as_image")):
+        aw = (W_IN - 2 * M) * (0.6 if pts else 1.0)
+        ah = BOTTOM - TOP
+        x = D.X(W_IN - M - aw, aw) if pts else M
+        gf = native_chart(D, s, spec, x, TOP, aw, ah)
+        if gf is not None:
+            if pts:
+                tw = W_IN - 2 * M - aw - 0.5
+                _points_block(D, s, pts, D.X(M, tw), TOP, tw, BOTTOM - TOP)
+            return s
+    else:
+        CHART_LOG.append((str(spec.get("type")), "image", "as_image requested"))
     png = chart_png(spec)
     try:
         from PIL import Image
@@ -840,6 +994,7 @@ def plan_count(spec):
 
 def build(spec, out, lang, chart_png, font_ar=None, font_en=None):
     """يبني العرضَ كلَّه. chart_png(spec) ⟵ مسارُ صورة PNG. يعيد عددَ الشرائح."""
+    del CHART_LOG[:]
     D = Deck(spec.get("theme"), lang, font_ar, font_en, spec.get("title", ""))
     n = 0
     sec = 0

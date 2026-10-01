@@ -102,7 +102,8 @@ LIBS = (("python-docx (Word)", "docx", True),
         ("lxml", "lxml", True),
         ("Pillow (صور)", "PIL", False),
         ("defusedxml (فكّ ooxml)", "defusedxml", True),
-        ("formulas (حسابُ المعادلات)", "formulas", False))
+        ("formulas (حسابُ المعادلات)", "formulas", False),
+        ("XlsxWriter (رسمٌ أصليّ في باوربوينت)", "xlsxwriter", False))
 have = {}
 for label, mod, needed in LIBS:
     m, info = _import(mod)

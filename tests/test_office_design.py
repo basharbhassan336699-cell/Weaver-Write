@@ -181,6 +181,89 @@ c, o = cli("build", J("cl.json", {"title": "عرض", "design": "classic", "slide
 ok("design: classic ⟵ build_pptx كما كان", c == 0 and any(
     "◀" in t for t in texts(list(Presentation(os.path.join(T, "cl.pptx")).slides)[1])))
 
+print("\n— الرسمُ الأصليّ في PowerPoint (أرقامُه تُعدَّل فيه) —")
+L3 = ["بسيطة", "متوسّطة", "حادّة"]
+NAT = {"title": "رسوم", "slides_total": 4, "cover": False, "closing": False, "slides": [
+    {"title": "أعمدة", "chart": {"type": "bar", "data": {"labels": L3,
+                                                        "values": [12, 7, 3]}}},
+    {"title": "أفقيّة", "chart": {"type": "horizontal_bar", "data": {
+        "labels": L3, "values": [12, 7, 3]}}},
+    {"title": "توزيع", "chart": {"type": "histogram", "data": {"values": [1, 2, 2, 3]}}},
+    {"title": "صورة", "chart": {"type": "bar", "as_image": True,
+                                "data": {"labels": L3, "values": [1, 2, 3]}}}]}
+try:
+    import matplotlib  # noqa: F401  — شريحتا الصورة تحتاجانها
+    HAVE_MPL = True
+except ImportError:
+    HAVE_MPL = False
+    NAT = dict(NAT, slides_total=2, slides=NAT["slides"][:2])
+DN = os.path.join(T, "nat.pptx")
+c, o = cli("build", J("nat.json", NAT), "--out", DN)
+try:
+    import xlsxwriter  # noqa: F401
+    HAVE_XW = True
+except ImportError:
+    HAVE_XW = False
+if HAVE_XW:
+    ok("رسمان أصليّان%s" % ("، وصورتان والسببُ مذكور" if HAVE_MPL else ""),
+       c == 0 and "charts: 2 native" in o and (not HAVE_MPL or (
+           "type not native" in o and "as_image requested" in o)), o[-400:])
+    ns = list(Presentation(DN).slides)
+    gf = [sh for sh in ns[0].shapes if sh.has_chart]
+    ok("شريحةُ الأعمدة: رسمٌ أصليّ لا صورة", len(gf) == 1 and not any(
+        sh.shape_type == 13 for sh in ns[0].shapes))
+    ch = gf[0].chart
+    ok("  ⟵ أرقامُه في الرسم (١٢ ٧ ٣)", list(ch.plots[0].series[0].values)
+       == [12.0, 7.0, 3.0])
+    emb = [n_ for n_ in zipfile.ZipFile(DN).namelist() if n_.startswith(
+        "ppt/embeddings/") and n_.endswith(".xlsx")]
+    ok("  ⟵ وجدولُ بياناته داخل الملفّ (تحرير البيانات في PowerPoint)", len(emb) == 2,
+       emb)
+    import io
+    from openpyxl import load_workbook
+    wb = load_workbook(io.BytesIO(zipfile.ZipFile(DN).read(emb[0])))
+    vals = [r[1].value for r in wb.active.iter_rows(min_row=2, max_row=4)]
+    ok("  ⟵ والجدولُ فيه الأرقامُ نفسُها", vals == [12, 7, 3], vals)
+    ok("العربيّ: الفئةُ الأولى يميناً (محورٌ معكوس)",
+       ch.category_axis.reverse_order is True)
+    hb = [sh for sh in ns[1].shapes if sh.has_chart][0].chart
+    vx = hb._chartSpace.xpath(".//c:valAx")[0].find(qn("c:crosses")).get("val")
+    ok("أفقيّ: الأولى أعلى، والأعمدةُ من اليمين، ومحورُ القيم أسفل (c:crosses=max)",
+       hb.category_axis.reverse_order and hb.value_axis.reverse_order and vx == "max",
+       vx)
+    if HAVE_MPL:
+        ok("histogram ⟵ صورة (ليس في PowerPoint)", any(
+            sh.shape_type == 13 for sh in ns[2].shapes))
+        ok("as_image ⟵ صورةٌ بطلب", any(sh.shape_type == 13 for sh in ns[3].shapes))
+# بلا xlsxwriter ⟵ صورةٌ كما كان، والسببُ يُقال
+blk = tempfile.mkdtemp()
+open(os.path.join(blk, "xlsxwriter.py"), "w").write("raise ImportError('blocked')\n")
+env = dict(os.environ, PYTHONPATH=blk + os.pathsep + os.environ.get("PYTHONPATH", ""))
+r = subprocess.run([sys.executable, OFFICE, "build", J("nat1.json", dict(
+    NAT, slides_total=1, slides=NAT["slides"][:1])), "--out",
+    os.path.join(T, "nat1.pptx")], capture_output=True, text=True, env=env, timeout=300)
+if HAVE_MPL:
+  ok("بلا xlsxwriter ⟵ الرسمُ صورةٌ ويُقال لماذا", r.returncode == 0
+   and "xlsxwriter not installed" in r.stdout and any(
+       sh.shape_type == 13 for sh in list(Presentation(os.path.join(
+           T, "nat1.pptx")).slides)[0].shapes), r.stdout[-300:])
+
+print("\n— الرسمُ التفاعليّ (HTML) —")
+HT = os.path.join(T, "c.html")
+c, o = cli("chart", J("h.json", {"type": "grouped_bar", "title": "حالات",
+                                 "data": {"labels": L3, "series": {"٢٠٢٣": [1, 2, 3],
+                                                                   "٢٠٢٤": [2, 3, 4]}}}),
+           "--out", HT)
+pg = open(HT, encoding="utf-8").read() if os.path.isfile(HT) else ""
+ok("chart --out .html ⟵ صفحةٌ واحدة", c == 0 and "interactive chart grouped_bar" in o
+   and pg.startswith("<!doctype html>"), o)
+ok("  ⟵ Chart.js مضمَّنةٌ فيها (بلا إنترنت)", "Chart.js" in pg or "kurkle" in pg)
+ok("  ⟵ من اليمين (dir=rtl) والبياناتُ فيها", 'dir="rtl"' in pg and "٢٠٢٣" in pg
+   and '"rtl": true' in pg)
+c, o = cli("chart", J("h2.json", {"type": "bar", "data": {"labels": ["A"], "values": [1]}}),
+           "--out", os.path.join(T, "c.svg"))
+ok("امتدادٌ آخر ⟵ رفضٌ يذكر .png و.html", c == 1 and ".html (interactive)" in o, o)
+
 shutil.rmtree(T, ignore_errors=True)
 print("\n" + "=" * 62)
 print(f" RESULT: {'PASS' if F == 0 else 'FAIL'}   ({P}/{P + F})")

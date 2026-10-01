@@ -2926,11 +2926,13 @@ _SKILLS_PAST = {
                               "aae67eee87150f33")),         # الاتّجاه والخطوط
     "office-powerpoint": frozenset(("65ddef835b011e03",
                                     "d63d0fedb6314c9b",
-                                    "248c77d172095565")),   # التصميم والعدد
+                                    "248c77d172095565",     # التصميم والعدد
+                                    "f07630d4f7f27862")),   # رسمٌ أصليّ
     "office-excel": frozenset(("8aa19b85b0724753",
                                "c24fd80195fb0e6c")),
     "office-charts": frozenset(("15078ee32e1500b8",
-                                "01b5b5cbb6be3239")),
+                                "01b5b5cbb6be3239",
+                                "25b032ec369b09f0")),       # رسمٌ تفاعليّ
 }
 
 

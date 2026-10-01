@@ -1,6 +1,6 @@
 ---
 name: office-charts
-description: Draw a chart image (bar, line, pie, donut, scatter, radar…) with correct Arabic labels, or add a chart into a Word or PowerPoint file. Only when a chart or graph is wanted. يرسم رسماً بيانياً أو يضيفه إلى ملفّ وورد أو عرض.
+description: Draw a chart (bar, line, pie, donut, scatter, radar…) with correct Arabic labels — as an image, as an interactive page (hover values, toggle series), or into a Word or PowerPoint file. Only when a chart or graph is wanted. يرسم رسماً بيانياً ثابتاً أو تفاعلياً أو يضيفه إلى ملفّ.
 ---
 
 # الرسومُ البيانيّة
@@ -42,6 +42,14 @@ matplotlib الحديث يقلب العربيّ ويقطّعه — مقيس) —
 
 ## صورةٌ وحدها
 `python3 {{WEAVER}}/pipeline/office.py chart <مجلّد العمل>/chart-spec.json --out <مجلّد العمل>/<اسم>.png`
+
+## رسمٌ تفاعليّ — صفحة HTML
+`python3 {{WEAVER}}/pipeline/office.py chart <مجلّد العمل>/chart-spec.json --out <مجلّد العمل>/<اسم>.html`
+⟵ صفحةٌ واحدةٌ تعمل بلا إنترنت (Chart.js والخطُّ داخلها)، وتُفتح في Weaver
+Write نفسِه أو أيّ متصفّح: لمسُ عنصرٍ يُظهر قيمتَه ونسبتَه، والضغطُ على الدليل
+يُخفي سلسلة، وأزرارٌ لنوع الرسم (أعمدة/خطّ/دائرة) وجدولِ البيانات وتحميلِ PNG.
+اختره حين يطلب «تفاعليّاً»، أو يريد استكشافَ الأرقام، أو لم يطلب ملفَّ وورد أو
+عرضاً. وفي المواصفة: `"subtitle"` و`"source"` (مصدرُ البيانات).
 
 ## داخل ملفٍّ موجود
 `python3 {{WEAVER}}/pipeline/office.py chart <مجلّد العمل>/chart-spec.json --into <الملفّ.docx|.pptx>`
