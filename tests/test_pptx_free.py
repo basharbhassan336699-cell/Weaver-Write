@@ -178,6 +178,24 @@ if has_pil:
 else:
     print("  ⓘ Pillow غيرُ مثبَّت — تُخطّى المعاينة")
 
+print("\n— شرائحُ في ملفّاتٍ منفصلة (حدُّ طول الردّ الواحد) —")
+os.makedirs(os.path.join(T, "slides"), exist_ok=True)
+for i, sd in enumerate(GOOD["slides"], 1):
+    json.dump(sd if i != 3 else [sd], open(os.path.join(T, "slides", "s%d.json" % i), "w",
+                                          encoding="utf-8"), ensure_ascii=False)
+SPLIT = dict(GOOD, slides=["slides/s1.json", "slides/s2.json", "slides/s3.json"])
+rc, o7 = cli("build", J("split.json", SPLIT), "--out", os.path.join(T, "split.pptx"))
+ok("مواصفةٌ تجمع ٣ ملفّات ⟵ ٣ شرائح", rc == 0 and len(Presentation(
+    os.path.join(T, "split.pptx")).slides) == 3, o7)
+rc, o8 = cli("build", J("miss.json", dict(GOOD, slides=["slides/s1.json",
+                                                        "slides/nope.json"])),
+             "--out", os.path.join(T, "miss.pptx"))
+ok("  ⟵ ملفٌّ ناقص ⟵ رفضٌ يسمّيه", rc != 0 and "nope.json" in o8, o8)
+open(os.path.join(T, "slides", "bad.json"), "w").write('{"elements": [')
+rc, o9 = cli("build", J("badj.json", dict(GOOD, slides=["slides/bad.json"])),
+             "--out", os.path.join(T, "badj.pptx"))
+ok("  ⟵ JSON مقطوع ⟵ رفضٌ يسمّي الملفّ", rc != 0 and "bad.json" in o9, o9)
+
 print("\n— العددُ والمفتاح —")
 bad_n = dict(GOOD, slides_total=5)
 rc, o3 = cli("build", J("n.json", bad_n), "--out", os.path.join(T, "n.pptx"))

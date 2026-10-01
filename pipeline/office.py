@@ -950,8 +950,38 @@ def build_excel(spec, out):
         "RTL" if lang == "ar" else "LTR", (" · " + _f) if _f else "")
 
 
+def _expand_slides(spec, base):
+    """شرائحُ من ملفّاتٍ منفصلة: عنصرٌ نصّيٌّ في "slides" مسارُ ملفٍّ (نسبةً إلى
+    المواصفة) فيه شريحةٌ أو قائمةُ شرائح أو {"slides": […]}. قِيس على الهاتف:
+    عرضٌ حرٌّ من ٨ شرائح في ملفٍّ واحد تجاوز حدَّ طول الردّ الواحد للنموذج
+    (maxTokens 8192) فانقطع ولم يُكتب شيء — ملفّاتٌ صغيرةٌ، كلٌّ في ردٍّ مستقلّ."""
+    items = spec.get("slides")
+    if not isinstance(items, list) or not any(isinstance(x, str) for x in items):
+        return spec
+    out = []
+    for it in items:
+        if not isinstance(it, str):
+            out.append(it)
+            continue
+        p = it if os.path.isabs(it) else os.path.join(base, it)
+        part = _load_json(p)
+        if isinstance(part, dict) and isinstance(part.get("slides"), list):
+            part = part["slides"]
+        if isinstance(part, dict):
+            out.append(part)
+        elif isinstance(part, list):
+            out.extend(x for x in part if isinstance(x, dict))
+        else:
+            raise Fail("%s must hold a slide object or a list of slides" % it)
+    spec = dict(spec)
+    spec["slides"] = out
+    return spec
+
+
 def cmd_build(spec_path, out):
     spec = _load_json(spec_path)
+    if _ext(out) == ".pptx":
+        spec = _expand_slides(spec, os.path.dirname(os.path.abspath(spec_path)))
     e = _ext(out)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     if e == ".docx":
