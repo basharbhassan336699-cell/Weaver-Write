@@ -480,8 +480,81 @@ def _pages_note(path, target=None):
     return s
 
 
+def _free_texts(blocks, out, depth=0):
+    """نصوصُ الكتل (لاكتشاف اللغة) — والأعمدةُ بداخلها."""
+    for b in blocks or []:
+        if not isinstance(b, dict):
+            out.append(str(b))
+            continue
+        for k in ("title", "subtitle", "text", "kicker"):
+            v = b.get(k)
+            if isinstance(v, list):
+                out += [str(x.get("text") if isinstance(x, dict) else x) for x in v]
+            elif v:
+                out.append(str(v))
+        for it in b.get("items") or []:
+            out.append(str(it.get("text") or it.get("title") or "") if isinstance(
+                it, dict) else str(it))
+        if depth < 3:
+            for col in b.get("columns") or []:
+                _free_texts(col if isinstance(col, list) else [col], out, depth + 1)
+    return out
+
+
+def build_word_free(spec, out):
+    """تصميمٌ حرٌّ لمستندٍ غير أكاديميّ (نشرة، تقريرٌ مصمَّم، كتيّب، سيرة) —
+    docx_free.py: كتلٌ يركّبها النموذج، والاتّجاهُ بأداة docx_rtl المقيسة، ومعاينة."""
+    _paths()
+    import docx_free as DF
+    blocks = spec.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
+        raise Fail("free Word design needs \"blocks\": [{\"type\": \"hero\" …}, …]")
+    lang = _lang_of(spec, spec.get("title"), *_free_texts(blocks, [])[:20])
+    main = find_font(spec.get("font") or ("Kufyan Arabic Regular" if lang == "ar"
+                                           else None))
+    latin = find_font(spec.get("font_en")) if spec.get("font_en") else None
+    f_main = main["family"] if main else None
+    f_lat = (latin or main)["family"] if (latin or main) else None
+
+    def _chart(sp):
+        return chart_png(sp, _tmp_png())
+    n, used = DF.build(spec, out, lang, _chart, f_main, f_lat)
+    _embed_word_fonts(out, [main, latin] + [find_font(f) for f in used])
+    _no_dupes(out)
+    from docx import Document
+    Document(out)
+    fonts = " · ".join(x for x in (_font_says(main, "word"),
+                                   _font_says(latin, "word")) if x)
+    lines = ["Word %s (free design): %d blocks · %s%s" % (
+        lang.upper(), n, "RTL" if lang == "ar" else "LTR",
+        (" · " + fonts) if fonts else "")]
+    pg = _pages_note(out, spec.get("pages"))
+    if pg:
+        lines[0] += " · " + pg
+    try:
+        stem = os.path.splitext(os.path.basename(out))[0]
+        pdir = os.path.join(os.path.dirname(os.path.abspath(out)),
+                            "." + stem + "-preview")
+        paths, ov, issues, npg = DF.render_check(spec, pdir, "page", lang, f_main,
+                                                 f_lat, _chart)
+        if issues:
+            lines.append("⚠ design check: %d issue%s — fix them in the spec and build "
+                         "again:" % (len(issues), "" if len(issues) == 1 else "s"))
+            lines += ["   · " + i for i in issues[:30]]
+        else:
+            lines.append("✓ design check: no small text or low contrast found")
+        lines.append("previews (open them with read and LOOK before you reply): %s  ·  "
+                     "pages: %s" % (ov, os.path.join(pdir, "page-pNN.png")))
+    except Exception as e:
+        lines.append("⚠ previews unavailable (%s: %s) — the file is built" % (
+            type(e).__name__, str(e)[:120]))
+    return "\n".join(lines)
+
+
 # ═════════════════════════════════ build ════════════════════════════════
 def build_word(spec, out):
+    if str(spec.get("design", "")).lower() == "free":
+        return build_word_free(spec, out)
     _paths()
     from docx_advanced import build_rich_docx
     sections = [dict(s) for s in (spec.get("sections") or []) if isinstance(s, dict)]
@@ -951,6 +1024,30 @@ def build_excel(spec, out):
         "RTL" if lang == "ar" else "LTR", (" · " + _f) if _f else "")
 
 
+def _expand_blocks(spec, base):
+    """كتلُ وورد الحرّ من ملفّاتٍ منفصلة — كشرائح العرض (حدُّ طول الردّ الواحد)."""
+    items = spec.get("blocks")
+    if not isinstance(items, list) or not any(isinstance(x, str) for x in items):
+        return spec
+    out = []
+    for it in items:
+        if not isinstance(it, str):
+            out.append(it)
+            continue
+        part = _load_json(it if os.path.isabs(it) else os.path.join(base, it))
+        if isinstance(part, dict) and isinstance(part.get("blocks"), list):
+            part = part["blocks"]
+        if isinstance(part, dict):
+            out.append(part)
+        elif isinstance(part, list):
+            out.extend(part)
+        else:
+            raise Fail("%s must hold a block or a list of blocks" % it)
+    spec = dict(spec)
+    spec["blocks"] = out
+    return spec
+
+
 def _expand_slides(spec, base):
     """شرائحُ من ملفّاتٍ منفصلة: عنصرٌ نصّيٌّ في "slides" مسارُ ملفٍّ (نسبةً إلى
     المواصفة) فيه شريحةٌ أو قائمةُ شرائح أو {"slides": […]}. قِيس على الهاتف:
@@ -983,6 +1080,8 @@ def cmd_build(spec_path, out):
     spec = _load_json(spec_path)
     if _ext(out) == ".pptx":
         spec = _expand_slides(spec, os.path.dirname(os.path.abspath(spec_path)))
+    elif _ext(out) == ".docx" and str(spec.get("design", "")).lower() == "free":
+        spec = _expand_blocks(spec, os.path.dirname(os.path.abspath(spec_path)))
     e = _ext(out)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     if e == ".docx":
