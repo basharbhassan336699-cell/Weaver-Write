@@ -660,7 +660,7 @@ def build_designed(spec, out):
 
 
 def _free_enabled():
-    """مفتاحُ التجربة: `WEAVER_PPTX_FREE=off` (البيئة أو config/.env) يعيد القوالب."""
+    """مفتاحٌ اختياريّ: `WEAVER_PPTX_FREE=off` (البيئة أو config/.env) يعيد القوالب."""
     v = os.environ.get("WEAVER_PPTX_FREE")
     if v is None:
         try:
@@ -677,7 +677,8 @@ def _free_enabled():
 
 def build_free(spec, out):
     """التصميمُ الحرّ (pptx_free.py): النموذجُ يصمّم كلَّ شريحةٍ بعناصرها، والأداةُ
-    تبنيها أصليّةً، وترسم صورةً لكلِّ شريحة، وتفحص بالقياس. تجريبيّ."""
+    تبنيها أصليّةً، وترسم صورةً لكلِّ شريحة، وتفحص بالقياس. الافتراضيُّ منذ أن
+    جرّبه المستخدمُ على هاتفه (عرضان مختلفان تصميماً ولوناً)؛ والقوالبُ احتياط."""
     _paths()
     import pptx_free as PF
     import pptx_design as PD
