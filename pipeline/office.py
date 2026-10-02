@@ -1177,12 +1177,35 @@ def edit_docx(path, ops, out):
             raise Fail("¶%d was deleted by an earlier op" % i)
         return paras[i]
 
+    # إدراجاتٌ متتاليةٌ بعد المرساة نفسِها تُحفظ بترتيبها: الثانيةُ بعد الأولى، لا
+    # قبلها. قِيس على ملفّ المستخدم: كلُّ فقرةٍ في عمليّةٍ «بعد ¶24» ⟵ خرج البحثُ
+    # مقلوباً (المراجعُ أوّلاً و«أولاً: …» في آخر الملفّ).
+    _chain = []                     # [(المرساةُ الأصليّة، آخرُ ما أُدرج بعدها)]
+    _orig = [None]
+
+    def _chained(last_el):
+        o = _orig[0]
+        if o is None or last_el is None:
+            return
+        for k, (oo, _l) in enumerate(_chain):
+            if oo is o:
+                _chain[k] = (o, last_el)
+                return
+        _chain.append((o, last_el))
+
     def anchor_of(op):
+        _orig[0] = None
         if op.get("after") is not None:
             a = str(op["after"])
             if a.upper().startswith("T"):
-                return tables[int(a[1:])]._tbl
-            return P(op["after"], "after")._p
+                el = tables[int(a[1:])]._tbl
+            else:
+                el = P(op["after"], "after")._p
+            _orig[0] = el
+            for oo, last in _chain:
+                if oo is el:
+                    return last
+            return el
         if op.get("before") is not None:
             b = P(op["before"], "before")._p
             prev = b.getprevious()
@@ -1231,6 +1254,7 @@ def edit_docx(path, ops, out):
                     np_ = _new_para_after(cur, tmpl, str(t or ""), style,
                                           doc_rtl=(lang == "ar"))
                     cur = np_._p
+                _chained(cur)
                 done.append("inserted %d paragraph(s)" % len(texts))
             elif kind == "delete_paragraph":
                 idx = op.get("paragraph")
@@ -1247,6 +1271,8 @@ def edit_docx(path, ops, out):
                     d, op.get("headers") or [], op.get("rows") or [], lang,
                     op.get("theme", "academic_navy"), None, op.get("totals")), anc)
                 _fix_new(d, lang, _new)
+                if _new:
+                    _chained(_new[-1])
                 done.append("table added")
             elif kind == "set_cell":
                 t = tables[int(op.get("table", 0))]
@@ -1293,6 +1319,8 @@ def edit_docx(path, ops, out):
                         d, png, str(op.get("caption", "")),
                         float(op.get("width", 5.5)), lang=lang), anc)
                     _fix_new(d, lang, _new)
+                    if _new:
+                        _chained(_new[-1])
                 finally:
                     if tmp:
                         os.remove(tmp)

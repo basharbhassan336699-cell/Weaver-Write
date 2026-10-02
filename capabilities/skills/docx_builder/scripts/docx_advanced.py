@@ -617,17 +617,35 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
             sys.path.insert(0, here)
         from docx_frontmatter import (add_cover_page, add_toc_page,
                                       should_add_cover, resolve_toc_position)
-        _card = {"no_cover": (not cover) if cover is not None else False}
-        if cover and should_add_cover(_card):
+        # غلافٌ طُلب ولو بلا بيانات («cover»: {} أو true) — قِيس: {} فارغٌ كان يُعدّ
+        # «لا غلاف» فصارت الصفحةُ الأولى «المحتويات» بدل الغلاف الذي طلبه المستخدم.
+        _want = cover is not None and cover is not False and \
+            str(cover).strip().lower() not in ("no", "none", "false", "0")
+        _card = {"no_cover": not _want}
+        if _want and should_add_cover(_card):
             _fm_cover = True
             cinfo = cover if isinstance(cover, dict) else {}
+            # حقلٌ ذُكر بلا قيمة ⟵ خانةٌ منقّطةٌ يملؤها المستخدم (كان يُحذف فيبقى
+            # العنوانُ وحده)
+            _blank = "……………………………"
+
+            def _cv(k, d=""):
+                if k in cinfo and not str(cinfo.get(k) or "").strip():
+                    return _blank
+                return cinfo.get(k, d)
+            _extra = []
+            for fld in cinfo.get("fields") or []:
+                if isinstance(fld, dict):
+                    _extra.append((fld.get("label", ""), fld.get("value", "")))
+                elif isinstance(fld, (list, tuple)) and fld:
+                    _extra.append((fld[0], fld[1] if len(fld) > 1 else ""))
             add_cover_page(doc, title, lang=lang, theme_id=theme_id, font=font,
                            institution=cinfo.get("institution", ""),
                            subtitle=cinfo.get("subtitle", subtitle),
-                           author=cinfo.get("author", ""),
-                           supervisor=cinfo.get("supervisor", ""),
-                           course=cinfo.get("course", ""),
-                           date=cinfo.get("date", ""))
+                           author=_cv("author"),
+                           supervisor=_cv("supervisor"),
+                           course=_cv("course"),
+                           date=_cv("date"), extra=_extra)
         _toc_pos = resolve_toc_position({"toc": toc,
                                          "toc_position": toc_position})
         if _toc_pos == "after_cover":
@@ -637,7 +655,7 @@ def build_rich_docx(title, sections, output_path="research.docx", lang="ar",
             _entries = None
             try:
                 from docx_frontmatter import estimate_toc_entries
-                _fm_pages = 1 + (1 if cover else 0)
+                _fm_pages = 1 + (1 if _fm_cover else 0)
                 _entries, _ = estimate_toc_entries(sections, lang,
                                                    start_page=_fm_pages + 1)
             except Exception:

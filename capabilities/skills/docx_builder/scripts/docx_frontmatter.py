@@ -87,7 +87,8 @@ _LABELS = {
 
 def add_cover_page(doc, title, lang="ar", theme_id="academic_navy", font=None,
                    institution="", subtitle="", author="", supervisor="",
-                   course="", date="", logo_path=None, page_break_after=True):
+                   course="", date="", logo_path=None, page_break_after=True,
+                   extra=None):
     """
     Build a centered, themed cover page. Only `title` is required; other lines
     appear when provided. Direction follows `lang`.
@@ -96,9 +97,13 @@ def add_cover_page(doc, title, lang="ar", theme_id="academic_navy", font=None,
     rtl = (lang == "ar")
     font = font or ("Kufyan Arabic" if rtl else "Times New Roman")
     L = _LABELS["ar" if rtl else "en"]
+    # الفراغاتُ تتقلّص بقدر الحقول — قِيس: خمسةُ حقولٍ دفعت آخرَها إلى الصفحة الثانية
+    _n = sum(1 for v in (author, supervisor, course, date) if v) + \
+        sum(1 for lab, _v in (extra or []) if lab)
+    _cut = max(0, _n - 3)
 
     # top spacing
-    for _ in range(2):
+    for _ in range(2 if _cut < 2 else 1):
         doc.add_paragraph()
 
     # institution
@@ -112,7 +117,7 @@ def add_cover_page(doc, title, lang="ar", theme_id="academic_navy", font=None,
         p.add_run().add_picture(logo_path, width=Inches(1.6))
 
     # spacer
-    for _ in range(3):
+    for _ in range(max(1, 3 - _cut)):
         doc.add_paragraph()
 
     # title (large)
@@ -127,19 +132,23 @@ def add_cover_page(doc, title, lang="ar", theme_id="academic_navy", font=None,
               space_after=8)
 
     # spacer
-    for _ in range(4):
+    for _ in range(max(1, 4 - _cut)):
         doc.add_paragraph()
 
     # author / supervisor / course / date block
     def _kv(label, value):
         if value:
-            _line(doc, f"{label}: {value}", 15, text_col, bold=False, rtl=rtl,
-                  font=font, space_after=6)
+            _line(doc, f"{label}: {value}", 15 if _n <= 5 else 13, text_col,
+                  bold=False, rtl=rtl, font=font, space_after=6 if _n <= 5 else 2)
 
     _kv(L["student"], author)
     _kv(L["supervisor"], supervisor)
     _kv(L["course"], course)
     _kv(L["date"], date)
+    # حقولٌ أخرى يطلبها النموذج (الرقم الجامعي، رمز المساق…): [(تسمية، قيمة)]
+    for lab, val in (extra or []):
+        if lab:
+            _kv(str(lab), str(val) if val else "……………………………")
 
     if page_break_after:
         doc.add_page_break()
