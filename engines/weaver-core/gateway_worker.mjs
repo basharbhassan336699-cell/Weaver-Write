@@ -17,10 +17,15 @@
 //          ⟵ {"ok":true,"json":<ما يطبعه `agent --json` حرفاً>}
 //          ⟵ {"ok":false,"error":"…"}
 //     GET  /health ⟵ {"ok":true,"running":<نوباتٌ جارية>}
+//     POST /abort  {"sessionId"} ⟵ {"ok":true,"aborted":<عددُ النوبات>}
+//          زرُّ «إيقاف» في الواجهة: يُوقف نوبةَ تلك المحادثة وحدها بطريق
+//          المحرّك نفسِه — كأنّ المستخدمَ ضغط Ctrl+C على `agent` (يُرسل
+//          chat.abort إلى البوّابة ثمّ يخرج بـ130). وغيرُها من النوبات لا يُمسّ.
 //
 // لا تستمع إلا على 127.0.0.1. وأيُّ عجزٍ في التحميل ⟵ FAIL، فيعود بايثون إلى
 // سطر الأوامر كما كان حرفاً.
 import http from "node:http";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -63,15 +68,48 @@ function captureRuntime() {
 
 let running = 0;
 
+// «عمليةٌ» لكلِّ نوبة: المحرّكُ يقبلها بدل process (`deps.process` ⟵
+// resolveAgentCliProcessLike في agent-via-gateway) ويستمع فيها لـSIGINT/SIGTERM.
+// فإشارةٌ عليها تُوقف تلك النوبةَ وحدها. وإشاراتُ العملية الحقيقيّة تُمرَّر
+// إليها كما كانت تصلها مباشرةً قبل هذا — فلا يتغيّر سلوكُ الإيقاف الكامل.
+const SIGNALS = ["SIGINT", "SIGTERM"];
+const inflight = new Set(); // {sessionId, proc}
+
+function turnProcess(sessionId) {
+  const proc = new EventEmitter();
+  proc.exitCode = undefined;
+  const fwd = SIGNALS.map((sig) => [sig, () => proc.emit(sig)]);
+  for (const [sig, h] of fwd) process.on(sig, h);
+  const entry = { sessionId, proc };
+  inflight.add(entry);
+  entry.dispose = () => {
+    for (const [sig, h] of fwd) process.off(sig, h);
+    inflight.delete(entry);
+  };
+  return entry;
+}
+
+function abortSession(sessionId) {
+  let n = 0;
+  for (const e of [...inflight]) {
+    if (sessionId && e.sessionId === sessionId) {
+      e.proc.emit("SIGINT");
+      n += 1;
+    }
+  }
+  return n;
+}
+
 async function runTurn(req) {
   const opts = { message: String(req.message || ""), json: true };
   if (req.sessionId) opts.sessionId = String(req.sessionId);
   if (req.timeout) opts.timeout = String(req.timeout);
   if (req.model) opts.model = String(req.model);
   const { rt, cap } = captureRuntime();
+  const turn = turnProcess(opts.sessionId || "");
   running += 1;
   try {
-    const response = await agentCliCommand(opts, rt);
+    const response = await agentCliCommand(opts, rt, { process: turn.proc });
     const json = cap.json !== undefined ? cap.json : response;
     if (json === undefined || json === null) {
       return { ok: false, error: cap.errors.join("\n") || "no response from agent" };
@@ -84,6 +122,7 @@ async function runTurn(req) {
     return { ok: false, error: String(msg).slice(0, 4000) };
   } finally {
     running -= 1;
+    turn.dispose();
   }
 }
 
@@ -107,6 +146,17 @@ const server = http.createServer((req, res) => {
       catch { return send(res, 400, { ok: false, error: "bad json" }); }
       if (!body.message) return send(res, 400, { ok: false, error: "missing message" });
       send(res, 200, await runTurn(body));
+    });
+    return;
+  }
+  if (req.method === "POST" && req.url === "/abort") {
+    const chunks = [];
+    req.on("data", (c) => chunks.push(c));
+    req.on("end", () => {
+      let body;
+      try { body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); }
+      catch { return send(res, 400, { ok: false, error: "bad json" }); }
+      send(res, 200, { ok: true, aborted: abortSession(String(body.sessionId || "")) });
     });
     return;
   }

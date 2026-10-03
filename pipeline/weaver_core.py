@@ -477,6 +477,13 @@ def _real_error(err):
     return lines[-1][:400] if lines else t.strip()[:400]
 
 
+# نوباتُ سطر الأوامر الجارية لكلِّ جلسة ⟵ يجدها زرُّ «إيقاف» (`abort`).
+# و`_TURN_CTX.sid` تضعه ask() حول نداء run() لنوبةِ محادثة.
+_CLI_TURNS = {}
+_CLI_TURNS_LOCK = threading.Lock()
+_TURN_CTX = threading.local()
+
+
 def run(args, timeout=180, input_text=None, cwd=None):
     """نادِ المحرّك بوسائطه. يُعيد (رمز_الخروج، المُخرَج، الخطأ)."""
     if not available():
@@ -484,6 +491,9 @@ def run(args, timeout=180, input_text=None, cwd=None):
     nb = node_bin()
     if not nb:
         return 127, "", why_unavailable()
+    _sid = getattr(_TURN_CTX, "sid", "") or ""
+    if _sid and input_text is None:
+        return _run_tracked(nb, args, timeout, cwd, _sid)
     try:
         p = subprocess.run([nb, ENTRY] + list(args or []),
                            capture_output=True, text=True, timeout=timeout,
@@ -1410,6 +1420,80 @@ def _worker_agent(req, timeout):
     return 1, "", err
 
 
+def _run_tracked(nb, args, timeout, cwd, sid):
+    """كـsubprocess.run في run() حرفاً، مع تسجيل العملية باسم جلستها
+    ليُوقفها `abort`."""
+    try:
+        p = subprocess.Popen([nb, ENTRY] + list(args or []),
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, cwd=cwd or _ROOT, env=engine_env())
+    except Exception as e:
+        return 1, "", f"{type(e).__name__}: {str(e)[:160]}"
+    with _CLI_TURNS_LOCK:
+        _CLI_TURNS.setdefault(sid, set()).add(p)
+    try:
+        try:
+            out, err = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            return 124, "", f"تجاوز المهلة ({timeout} ثانية)"
+        except Exception as e:
+            p.kill()
+            return 1, "", f"{type(e).__name__}: {str(e)[:160]}"
+    finally:
+        with _CLI_TURNS_LOCK:
+            _CLI_TURNS.get(sid, set()).discard(p)
+            if not _CLI_TURNS.get(sid):
+                _CLI_TURNS.pop(sid, None)
+    _record_run(args, p.returncode, out or "", err or "")
+    return p.returncode, (out or ""), (err or "")
+
+
+def abort(session):
+    """أوقف نوبةَ محادثةٍ جارية — زرُّ «إيقاف» في الواجهة. لا يرفع.
+
+    ⟵ {"ok": bool, "via": "worker"|"cli"|"", "aborted": int}
+
+    الطريقُ طريقُ المحرّك نفسِه: Ctrl+C على `agent` — يُرسل `chat.abort` إلى
+    البوّابة على اتّصاله هو ثمّ يخرج بـ130، فيُقطع نداءُ النموذج أيضاً.
+    ① نوبةٌ في العملية المقيمة ⟵ `/abort` (تلك الجلسة وحدها).
+    ② نوبةٌ بسطر الأوامر ⟵ SIGINT لعمليتها.
+    ولا يصلح `gateway call chat.abort` من خارج: قِيس فردّت البوّابة
+    «unauthorized» — لا يُوقف النوبةَ إلّا الاتّصالُ الذي بدأها."""
+    if not session:
+        return {"ok": False, "via": "", "aborted": 0}
+    sid = _session_id(session)
+    n, via = 0, ""
+    p, port = _WORKER.get("proc"), _WORKER.get("port")
+    if p is not None and port and p.poll() is None:
+        try:
+            import json as _j
+            import urllib.request as _u
+            rq = _u.Request("http://127.0.0.1:%d/abort" % port,
+                            data=_j.dumps({"sessionId": sid}).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST")
+            with _u.urlopen(rq, timeout=10) as r:
+                n += int(_j.loads(r.read().decode("utf-8")).get("aborted") or 0)
+            if n:
+                via = "worker"
+        except Exception:
+            pass
+    import signal as _sig
+    with _CLI_TURNS_LOCK:
+        procs = list(_CLI_TURNS.get(sid, ()))
+    for cp in procs:
+        try:
+            if cp.poll() is None:
+                cp.send_signal(_sig.SIGINT)
+                n += 1
+                via = via or "cli"
+        except Exception:
+            pass
+    return {"ok": n > 0, "via": via, "aborted": n}
+
+
 def ask(text, timeout=None, cwd=None, fallback=True, session=None):
     """اسأل — بالمحرّك إن أمكن، وإلّا بالمسار البايثونيّ.
 
@@ -1492,7 +1576,12 @@ def ask(text, timeout=None, cwd=None, fallback=True, session=None):
         if _wr is not None:
             code, out, err = _wr
         else:
-            code, out, err = run(args, timeout=_wall, cwd=cwd)
+            # جلسةُ النوبة ⟵ run() تسجّل عمليتَها ليُوقفها زرُّ «إيقاف».
+            _TURN_CTX.sid = _session_id(session) if (_via_gateway and session) else ""
+            try:
+                code, out, err = run(args, timeout=_wall, cwd=cwd)
+            finally:
+                _TURN_CTX.sid = ""
         if code == 0 and out.strip():
             return {"answer": _from_envelope(out), "engine": "weaver-core",
                     "note": ""}

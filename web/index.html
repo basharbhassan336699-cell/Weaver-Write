@@ -555,6 +555,61 @@
     opacity: 0.55;
   }
   .msg.ai .bubble del { opacity: 0.6; }
+  /* ── رسالةُ المستخدم: Markdown كردود النموذج + زرُّ نسخ ──
+     القواعدُ نفسُها منسوخةً لفقاعة المستخدم (لا يُمسّ شيءٌ من قواعد الردّ).
+     وما خلفيّتُه كخلفيّة الفقاعة (الشيفرة، رأسُ الجدول) يُعطى خلفيّةَ الصفحة
+     كي يبقى ظاهراً. */
+  .msg.user .bubble.wv-md > :first-child { margin-top: 0; }
+  .msg.user .bubble.wv-md > :last-child { margin-bottom: 0; }
+  .msg.user .bubble.wv-md p { margin: 0 0 10px; line-height: 1.7; }
+  .msg.user .bubble.wv-md h1,
+  .msg.user .bubble.wv-md h2,
+  .msg.user .bubble.wv-md h3,
+  .msg.user .bubble.wv-md h4,
+  .msg.user .bubble.wv-md h5,
+  .msg.user .bubble.wv-md h6 { margin: 18px 0 10px; line-height: 1.3; font-weight: 800; }
+  .msg.user .bubble.wv-md h1 { font-size: 1.7em; font-weight: 800; }
+  .msg.user .bubble.wv-md h2 { font-size: 1.5em; font-weight: 800; }
+  .msg.user .bubble.wv-md h3 { font-size: 1.28em; }
+  .msg.user .bubble.wv-md h4 { font-size: 1.12em; }
+  .msg.user .bubble.wv-md h5,
+  .msg.user .bubble.wv-md h6 { font-size: 1em; }
+  .msg.user .bubble.wv-md .md-table-wrap { overflow-x: auto; margin: 0 0 12px; }
+  .msg.user .bubble.wv-md table.md-table { border-collapse: collapse; width: auto; min-width: 60%; font-size: 0.95em; }
+  .msg.user .bubble.wv-md table.md-table th,
+  .msg.user .bubble.wv-md table.md-table td { border: 1px solid var(--border); padding: 7px 12px; text-align: start; vertical-align: top; }
+  .msg.user .bubble.wv-md table.md-table thead th { background: var(--surface-hover); font-weight: 700; color: var(--text); }
+  .msg.user .bubble.wv-md table.md-table tbody tr:nth-child(even) td { background: rgba(127,127,127,0.05); }
+  .msg.user .bubble.wv-md ul,
+  .msg.user .bubble.wv-md ol { margin: 0 0 10px; padding-inline-start: 1.5em; }
+  .msg.user .bubble.wv-md li { margin: 3px 0; line-height: 1.6; }
+  .msg.user .bubble.wv-md strong { font-weight: 700; }
+  .msg.user .bubble.wv-md em { font-style: italic; }
+  .msg.user .bubble.wv-md a { color: var(--accent-blue); text-decoration: underline; }
+  .msg.user .bubble.wv-md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; background: var(--surface-hover); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
+  .msg.user .bubble.wv-md .code-card { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 0 0 12px; background: var(--surface); }
+  .msg.user .bubble.wv-md .code-head { display: flex; align-items: center; justify-content: space-between; padding: 5px 10px; background: var(--surface-hover); border-bottom: 1px solid var(--border); }
+  .msg.user .bubble.wv-md .code-lang { font-size: 0.75em; color: var(--text-muted); text-transform: lowercase; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .3px; }
+  .msg.user .bubble.wv-md .code-tools { display: flex; gap: 2px; }
+  .msg.user .bubble.wv-md .code-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; }
+  .msg.user .bubble.wv-md .code-btn:hover { background: var(--bg); color: var(--text); }
+  .msg.user .bubble.wv-md .code-btn svg { width: 14px; height: 14px; stroke-width: 2; }
+  .msg.user .bubble.wv-md .code-btn.done { color: #4caf7d; }
+  .msg.user .bubble.wv-md pre.md-pre { background: var(--surface); border: 0; border-radius: 0; padding: 12px 14px; margin: 0; overflow: auto; direction: ltr; text-align: left; max-height: 340px; }
+  .msg.user .bubble.wv-md .code-card.expanded pre.md-pre { max-height: none; }
+  .msg.user .bubble.wv-md pre.md-pre code { background: none; border: 0; padding: 0; font-size: 0.88em; white-space: pre; color: var(--text); }
+  .msg.user .bubble.wv-md blockquote { margin: 0 0 10px; padding: 4px 12px; border-inline-start: 3px solid var(--accent); color: var(--text-muted); }
+  .msg.user .bubble.wv-md hr { border: 0; height: 1px; margin: 18px 0; background: var(--border); opacity: 0.55; }
+  .msg.user .bubble.wv-md del { opacity: 0.6; }
+  .msg.user .bubble.wv-md code { background: var(--bg); }
+  .msg.user .bubble.wv-md table.md-table thead th { background: var(--bg); }
+  .msg.user .bubble.wv-md .code-head { background: var(--bg); }
+  .msg.user .bubble.wv-md pre.md-pre { max-height: 260px; }
+  .msg.user.wv-ua { flex-direction: column; align-items: flex-end; }
+  [dir="rtl"] .msg.user.wv-ua { align-items: flex-start; }
+  .msg.user .wv-user-actions { padding: 2px 2px 0; opacity: .75; }
+  .msg.user .wv-user-actions .msg-action-btn { width: 26px; height: 26px; }
+  .msg.user .wv-user-actions .msg-action-btn svg { width: 14px; height: 14px; }
   /* scroll-to-bottom floating action button */
   .scroll-bottom-fab {
     position: absolute; left: 50%; transform: translateX(-50%);
@@ -1047,6 +1102,11 @@
   .send-btn:hover { opacity: 0.85; }
   .send-btn:active { transform: scale(0.92); }
   .send-btn.visible { display: flex; }
+  /* أثناء ردٍّ جارٍ في المحادثة المفتوحة: زرُّ الإرسال يصير «إيقاف» */
+  .send-btn .ico-stop { display: none; }
+  .send-btn.stop .ico-send { display: none; }
+  .send-btn.stop .ico-stop { display: block; }
+  .send-btn.stop { display: flex; }
 
   /* ── Attach ("+") menu ──────────────────────── */
   .attach-wrap { position: relative; }
@@ -2319,10 +2379,13 @@
               </select>
             </div>
 
-            <button class="send-btn" id="sendBtn" title="Send" onclick="sendMessage()">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <button class="send-btn" id="sendBtn" title="Send" onclick="wvSendOrStop()">
+              <svg class="ico-send" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="12" y1="19" x2="12" y2="5"/>
                 <polyline points="5 12 12 5 19 12"/>
+              </svg>
+              <svg class="ico-stop" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <rect x="6" y="6" width="12" height="12" rx="2"/>
               </svg>
             </button>
           </div>
@@ -3333,8 +3396,14 @@
     syncSidebar();
   }
 
-  // Re-evaluate default state when crossing the breakpoint
+  // Re-evaluate default state when crossing the breakpoint — ONLY then.
+  // كان يُعيد الفتحَ مع أيِّ تغيُّرٍ في الحجم: ظهورُ لوحة المفاتيح عند لمس
+  // حقل الإدخال يُغيّر الحجمَ ⟵ تُفتح القائمةُ المطويّةُ من تلقاء نفسها.
+  let wvWasMobile = isMobile();
   window.addEventListener('resize', () => {
+    const _m = isMobile();
+    if (_m === wvWasMobile) return;
+    wvWasMobile = _m;
     if (isMobile() && sidebarOpen) { sidebarOpen = false; syncSidebar(); }
     else if (!isMobile() && !sidebarOpen) { sidebarOpen = true; syncSidebar(); }
   });
@@ -3348,6 +3417,7 @@
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
     const sendBtn = document.getElementById('sendBtn');
     sendBtn.classList.toggle('visible', el.value.trim().length > 0);
+    if (typeof wvSyncSendBtn === 'function') wvSyncSendBtn();
   }
 
   // ── Chat session tracking (sidebar list + search) ──
@@ -3590,8 +3660,25 @@
     '</div>';
   }
 
+  // رسالةُ المستخدم: Markdown بالمُفسِّر الآمن نفسِه (يُهرَّب HTML أوّلاً)،
+  // وزرُّ نسخٍ ينسخ النصَّ كما كُتب (dataset.raw).
   function makeUserMsg(text) {
-    const d = document.createElement('div'); d.className = 'msg user';
+    const raw = text == null ? '' : String(text);
+    const d = document.createElement('div'); d.className = 'msg user wv-ua';
+    d.dataset.raw = raw;
+    try {
+      const cp = (document.documentElement.lang || 'en') === 'ar' ? 'نسخ' : 'Copy';
+      d.innerHTML = '<div class="bubble wv-md" dir="auto"></div>' +
+        '<div class="msg-actions wv-user-actions">' +
+          '<button class="msg-action-btn" data-act="copy" title="' + cp + '">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+          '</button>' +
+        '</div>';
+      d.querySelector('.bubble').innerHTML = renderMarkdown(raw);
+      return d;
+    } catch (e) {}
+    // احتياط: العرضُ القديمُ كما كان حرفاً
+    d.className = 'msg user';
     d.innerHTML = '<div class="bubble"></div>';
     // escape first (XSS-safe), then make any URL the user typed clickable too
     const esc = mdEscapeHtml(text==null?'':String(text));
@@ -4015,7 +4102,7 @@
     let el = msg.previousElementSibling, userNode = null, userText = '';
     while (el) {
       if (el.classList && el.classList.contains('user')) {
-        userNode = el; userText = (el.querySelector('.bubble') || {}).textContent || ''; break;
+        userNode = el; userText = el.dataset.raw || (el.querySelector('.bubble') || {}).textContent || ''; break;
       }
       el = el.previousElementSibling;
     }
@@ -4054,7 +4141,7 @@
       }
       const btn = e.target.closest && e.target.closest('.msg-action-btn[data-act]');
       if (!btn) return;
-      const msg = btn.closest('.msg.ai');
+      const msg = btn.closest('.msg.ai') || btn.closest('.msg.user');
       if (!msg) return;
       const act = btn.getAttribute('data-act');
       if (act === 'copy') {
@@ -4122,12 +4209,38 @@
   function wvInflightAdd(id, el) {
     if (!id) return; (WV_INFLIGHT[id] = WV_INFLIGHT[id] || []).push(el);
     try { renderChatsList(); } catch (e) {}
+    try { wvSyncSendBtn(); } catch (e) {}
   }
   function wvInflightDel(id, el) {
     if (!id || !WV_INFLIGHT[id]) return;
     WV_INFLIGHT[id] = WV_INFLIGHT[id].filter(function (x) { return x !== el; });
     if (!WV_INFLIGHT[id].length) delete WV_INFLIGHT[id];
     try { renderChatsList(); } catch (e) {}
+    try { wvSyncSendBtn(); } catch (e) {}
+  }
+  // ── زرُّ الإرسال ⟵ «إيقاف» ما دام ردٌّ يجري في المحادثة المفتوحة ──
+  function wvSyncSendBtn() {
+    const b = document.getElementById('sendBtn'); if (!b) return;
+    const busy = wvInflightHas(currentChatId);
+    b.classList.toggle('stop', busy);
+    const ar = (document.documentElement.lang || 'en') === 'ar';
+    b.title = busy ? (ar ? 'إيقاف' : 'Stop') : (ar ? 'إرسال' : 'Send');
+  }
+  function wvStopChat(id) {
+    if (!id) return;
+    (WV_INFLIGHT[id] || []).forEach(function (el) {
+      el._wvStopped = true;
+      try { el._wvAbort && el._wvAbort.abort(); } catch (e) {}
+    });
+    // والمحرّكُ على الخادم يُوقَف أيضاً — وإلّا أكمل النوبةَ وحده.
+    try {
+      fetch('/api/chat/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatId: id }) }).catch(function () {});
+    } catch (e) {}
+  }
+  function wvSendOrStop() {
+    if (wvInflightHas(currentChatId)) { wvStopChat(currentChatId); return; }
+    sendMessage();
   }
   function wvNotice(msg) {
     try {
@@ -4177,6 +4290,7 @@
     ).join('');
     box.querySelectorAll('.chat-item').forEach(el =>
       el.addEventListener('click', () => selectChat(el.getAttribute('data-id'))));
+    try { wvSyncSendBtn(); } catch (e) {}
   }
   refreshChats();
   if (typeof wvUpdateCalBadge === 'function') wvUpdateCalBadge();
@@ -4222,10 +4336,7 @@
 
     // Append the user message
     const messages = document.getElementById('messages');
-    const userMsg = document.createElement('div');
-    userMsg.className = 'msg user';
-    userMsg.innerHTML = '<div class="bubble"></div>';
-    userMsg.querySelector('.bubble').textContent = text;
+    const userMsg = makeUserMsg(text);
     if (filesToSend.length) {
       const chip = document.createElement('div');
       chip.style.cssText = 'margin-top:6px;font-size:12px;opacity:.75';
@@ -4344,6 +4455,8 @@
 
       messages.appendChild(aiMsg);
       messages.scrollTop = messages.scrollHeight;
+      const wvCtrl = (typeof AbortController === 'function') ? new AbortController() : null;
+      aiMsg._wvAbort = wvCtrl;
       wvInflightAdd(sendChatId, aiMsg);
 
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
@@ -4401,7 +4514,8 @@
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history, chatId: sendChatId, files: files, activeFile: currentActiveFile, effort: effortEl ? effortEl.value : 'medium' })
+          body: JSON.stringify({ message: text, history: history, chatId: sendChatId, files: files, activeFile: currentActiveFile, effort: effortEl ? effortEl.value : 'medium' }),
+          signal: wvCtrl ? wvCtrl.signal : undefined
         });
         const reader = res.body.getReader();
         const dec = new TextDecoder();
@@ -4421,7 +4535,17 @@
         if (!gotReply) bubble.textContent = (isAr ? '(لا يوجد رد)' : '(no reply)');
       } catch (err) {
         stepsFinishAll();
-        bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
+        if (aiMsg._wvStopped) {
+          // أوقفه المستخدم: ما كُتب حتى الآن يبقى، ومعه علامةُ الإيقاف.
+          streaming = false;
+          if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch (e) {} streamRAF = 0; }
+          const _stop = isAr ? '⏹ تم الإيقاف' : '⏹ Stopped';
+          if (!gotReply && streamBuf.trim()) assistantRaw = streamBuf + '\n\n*' + _stop + '*';
+          if (assistantRaw) bubble.innerHTML = renderMarkdown(assistantRaw);
+          else bubble.textContent = _stop;
+        } else {
+          bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
+        }
       }
       wvInflightDel(sendChatId, aiMsg);
       // persist the RAW reply (markdown) so reloads re-render the formatting;

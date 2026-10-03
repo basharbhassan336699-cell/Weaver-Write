@@ -1657,6 +1657,51 @@ def _turn_end(tok):
         return bool(st.get("overlap"))
 
 
+# زرُّ «إيقاف»: محادثاتٌ طلب المستخدمُ إيقافَها — رقمُها ⟵ وقتُ الطلب.
+# يُمحى العلَمُ مع كلِّ رسالةٍ جديدةٍ في المحادثة نفسها.
+_STOPPED = {}
+
+
+def _stop_clear(chat_id):
+    with _TURNS_LOCK:
+        _STOPPED.pop(str(chat_id or ""), None)
+
+
+def _stop_requested(chat_id):
+    with _TURNS_LOCK:
+        return str(chat_id or "") in _STOPPED
+
+
+def _stop_chat(chat_id):
+    """أوقف نوبةَ المحرّك لهذه المحادثة. والطلبُ قد يسبق بدءَ النوبة (ما
+    زال البحثُ جارياً مثلاً) ⟵ يُعاد المحاولةُ في الخلفية دقيقةً ما دام
+    العلَمُ قائماً، فلا تبدأ نوبةٌ بعد «إيقاف» ثمّ تكمل وحدها."""
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return {"ok": False, "aborted": 0}
+    with _TURNS_LOCK:
+        _STOPPED[cid] = time.time()
+
+    def _try():
+        try:
+            from pipeline import weaver_core as _wc
+            return _wc.abort(cid)
+        except Exception as e:
+            return {"ok": False, "aborted": 0, "note": type(e).__name__}
+
+    r = _try()
+    if not r.get("aborted"):
+        def _retry():
+            for _ in range(30):
+                time.sleep(2)
+                if not _stop_requested(cid):
+                    return
+                if _try().get("aborted"):
+                    return
+        _thr_turns.Thread(target=_retry, daemon=True).start()
+    return r
+
+
 def _ws_files_for_turn(new, chat_rel, overlapped, reply):
     """ما يُسلَّم لهذه المحادثة ممّا جدّ في مساحة العمل.
 
@@ -2063,6 +2108,9 @@ def _chat(message: str, history=None, timeout: int = 120, effort: str = "medium"
                                 attachments, session=session)
         if _eng is not None:
             return _eng
+        if session and _stop_requested(session):
+            # أوقفها المستخدم ⟵ لا يُعاد الطلبُ بالمسار المباشر.
+            return {"error": "stopped", "message": "stopped"}
         return _chat_direct(message, history, timeout, effort, context,
                             memory, attachments, escalate=False)
     return _chat_direct(message, history, timeout, effort, context, memory,
@@ -2729,10 +2777,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"ok": _cal_write(items)})
             return
 
+        if path == "/api/chat/stop":
+            # زرُّ «إيقاف» في الواجهة — يُوقف نوبةَ هذه المحادثة في المحرّك.
+            try:
+                self._json(dict(_stop_chat(body.get("chatId")), ok=True))
+            except Exception as e:
+                self._json({"ok": False, "error": type(e).__name__})
+            return
+
         if path == "/api/chat/stream":
             # Server-Sent Events: streams tool-use steps live and in order,
             # then the final reply. Falls back to /api/chat semantics.
             msg = (body.get("message") or "").strip()
+            _stop_clear(body.get("chatId"))
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
@@ -2918,6 +2975,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                          "for one to finish, then resend." % _lim))})
                     sse({"t": "done"})
                     return
+                if _stop_requested(body.get("chatId")):
+                    sse({"t": "done"})
+                    return
                 _turn_tok = _turn_begin()
                 try:
                     r = _chat(msg, body.get("history"),
@@ -2927,7 +2987,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 finally:
                     _overlapped = _turn_end(_turn_tok)
                 if r.get("error"):
-                    if r.get("error") == "no_key":
+                    if r.get("error") == "stopped":
+                        pass
+                    elif r.get("error") == "no_key":
                         sse({"t": "reply", "reply": (
                             "لم يتم ضبط مفتاح API بعد. أضِف مفتاحك من قسم Keys."
                             if isar else
