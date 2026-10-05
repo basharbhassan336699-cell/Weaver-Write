@@ -403,17 +403,23 @@ def _rgb(color_fmt):
 
 def _thumb_pptx(src, dst):
     from pptx import Presentation
-    from pptx.util import Emu
-    from PIL import Image, ImageDraw
     prs = Presentation(src)
     if not len(prs.slides):
         return False
+    img = _render_slide(prs, prs.slides[0], SLIDE_W)
+    if img is None:
+        return False
+    return _save(img, dst)
+
+
+def _render_slide(prs, slide, W):
+    """شريحةٌ واحدةٌ صورةً بعرض W ⟵ PIL.Image، أو None إن لم يُرسم شيء."""
+    from pptx.util import Emu
+    from PIL import Image, ImageDraw
     sw, sh = int(prs.slide_width or Emu(12192000)), int(prs.slide_height or Emu(6858000))
-    W = SLIDE_W
     H = int(W * sh / sw)
     k = W / sw
     pt = W / (sw / 12700.0)          # بكسلٌ لكلِّ نقطة
-    slide = prs.slides[0]
     bg = (255, 255, 255)
     try:
         f = slide.background.fill
@@ -512,8 +518,8 @@ def _thumb_pptx(src, dst):
                 ty += px * 1.25
                 drew = True
     if not drew:
-        return False
-    return _save(img, dst)
+        return None
+    return img
 
 
 def _thumb_xlsx(src, dst):
@@ -578,3 +584,231 @@ def make_thumb(src, dst):
     except Exception:
         return False
     return False
+
+
+# ═══════════════════════ المعاينةُ الكاملة (عند الضغط) ═══════════════════════
+#
+#   make_preview(src) ⟵ {"kind": "pages", "pages": [dataURL…]}   PDF وPowerPoint
+#                       {"kind": "html",  "html": "…"}           Word وExcel وCSV
+#                       {"kind": "text",  "text": "…", "md": bool}
+#                       {"kind": ""}                              لا معاينة
+#
+# الـHTML يُبنى هنا من الصفر وكلُّ نصٍّ فيه مُهرَّب — لا يمرّ شيءٌ من الملفّ
+# وسماً. والصورُ data: فقط. وPDF صورٌ لا إطار: كروم أندرويد لا يعرض PDF
+# داخل الصفحة (يُنزّله).
+MAX_PAGES = 30
+PAGE_PX = 900
+
+
+def _esc(t):
+    return (str(t or "").replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _data_url(im, quality=80):
+    import base64
+    buf = io.BytesIO()
+    im.convert("RGB").save(buf, "JPEG", quality=quality)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _pdf_pages(src):
+    from PIL import Image
+    pages = []
+    try:
+        import fitz
+        with fitz.open(src) as doc:
+            for i in range(min(MAX_PAGES, doc.page_count)):
+                pg = doc[i]
+                z = PAGE_PX / max(1.0, pg.rect.width)
+                pix = pg.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
+                pages.append(_data_url(Image.frombytes(
+                    "RGB", (pix.width, pix.height), pix.samples)))
+        if pages:
+            return pages
+    except Exception:
+        pass
+    if shutil.which("pdftoppm"):
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="wv-pdf-")
+        try:
+            subprocess.run(["pdftoppm", "-f", "1", "-l", str(MAX_PAGES), "-jpeg",
+                            "-scale-to-x", str(PAGE_PX), "-scale-to-y", "-1",
+                            src, os.path.join(tmp, "p")],
+                           capture_output=True, timeout=180)
+            for fn in sorted(os.listdir(tmp),
+                             key=lambda n: int(re.sub(r"\D", "", n) or 0)):
+                with Image.open(os.path.join(tmp, fn)) as im:
+                    pages.append(_data_url(im))
+        except Exception:
+            pass
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return pages
+
+
+def _pdf_text(src):
+    try:
+        from pypdf import PdfReader
+        r = PdfReader(src)
+        return "\n\n".join((p.extract_text() or "") for p in r.pages[:MAX_PAGES])
+    except Exception:
+        return ""
+
+
+def _docx_html(src):
+    import base64
+    import docx
+    d = docx.Document(src)
+    out = []
+    for el in d.element.body.iterchildren():
+        tag = el.tag.split("}")[-1]
+        if tag == "p":
+            for b in el.findall(".//" + _A + "blip")[:3]:
+                try:
+                    part = d.part.related_parts[b.get(_R + "embed")]
+                    ct = getattr(part, "content_type", "") or "image/png"
+                    if ct.startswith("image/") and "svg" not in ct:
+                        out.append('<img src="data:%s;base64,%s" alt="">' % (
+                            ct, base64.b64encode(part.blob).decode("ascii")))
+                except Exception:
+                    pass
+            parts = []
+            for r in el.findall(_W + "r"):
+                t = "".join(x.text or "" for x in r.iter(_W + "t"))
+                if not t:
+                    continue
+                rp = r.find(_W + "rPr")
+                h = _esc(t)
+                if rp is not None and rp.find(_W + "b") is not None:
+                    h = "<b>" + h + "</b>"
+                if rp is not None and rp.find(_W + "i") is not None:
+                    h = "<i>" + h + "</i>"
+                parts.append(h)
+            # روابطُ ونصٌّ داخل وسومٍ أخرى (hyperlink…) — بلا تنسيق
+            if not parts:
+                t = "".join(x.text or "" for x in el.iter(_W + "t"))
+                if t:
+                    parts.append(_esc(t))
+            if not parts:
+                continue
+            style, jcv = "", ""
+            ps = el.find(_W + "pPr")
+            if ps is not None:
+                st = ps.find(_W + "pStyle")
+                style = (st.get(_W + "val") or "").lower() if st is not None else ""
+                jc = ps.find(_W + "jc")
+                jcv = (jc.get(_W + "val") or "") if jc is not None else ""
+                if ps.find(_W + "numPr") is not None:
+                    style = style or "list"
+            align = ' style="text-align:center"' if jcv == "center" else ""
+            html = "".join(parts)
+            if "title" in style:
+                out.append('<h1 dir="auto"%s>%s</h1>' % (align, html))
+            elif re.search(r"heading\s*1$|^1$", style):
+                out.append('<h2 dir="auto"%s>%s</h2>' % (align, html))
+            elif "heading" in style:
+                out.append('<h3 dir="auto"%s>%s</h3>' % (align, html))
+            elif "list" in style:
+                out.append('<p dir="auto" class="li">• %s</p>' % html)
+            else:
+                out.append('<p dir="auto"%s>%s</p>' % (align, html))
+        elif tag == "tbl":
+            rows, texts = [], []
+            for tr in el.findall(_W + "tr"):
+                cells = []
+                for tc in tr.findall(_W + "tc"):
+                    t = "".join(x.text or "" for x in tc.iter(_W + "t"))
+                    texts.append(t)
+                    cells.append('<td dir="auto">%s</td>' % _esc(t))
+                rows.append("<tr>" + "".join(cells) + "</tr>")
+            # جدولٌ عربيٌّ يبدأ من اليمين (dir=auto على الجدول لا يكفي)
+            rtl = el.find(".//" + _W + "bidiVisual") is not None or \
+                any(_is_ar(t) for t in texts)
+            out.append('<table dir="%s">' % ("rtl" if rtl else "ltr")
+                       + "".join(rows) + "</table>")
+    return "\n".join(out)
+
+
+def _xlsx_html(src):
+    import openpyxl
+    wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
+    out = []
+    for ws in wb.worksheets[:6]:
+        rows = []
+        for r in ws.iter_rows(min_row=1, max_row=300, max_col=30, values_only=True):
+            vals = ["" if v is None else str(v) for v in r]
+            if any(v.strip() for v in vals):
+                rows.append(vals)
+        if not rows:
+            continue
+        # الأعمدةُ الفارغةُ كلُّها في الآخر لا تُعرض
+        ncol = max((max((i + 1 for i, v in enumerate(r) if v.strip()), default=0)
+                    for r in rows), default=0)
+        rows = [r[:ncol] for r in rows]
+        try:
+            rtl = bool(ws.sheet_view.rightToLeft)
+        except Exception:
+            rtl = False
+        rtl = rtl or any(_is_ar(v) for r in rows for v in r)
+        out.append('<h3 dir="auto">%s</h3>' % _esc(ws.title))
+        body = []
+        for i, r in enumerate(rows):
+            tagc = "th" if i == 0 else "td"
+            body.append("<tr>" + "".join('<%s dir="auto">%s</%s>' % (tagc, _esc(v), tagc)
+                                         for v in r) + "</tr>")
+        out.append('<table dir="%s">' % ("rtl" if rtl else "ltr")
+                   + "".join(body) + "</table>")
+    wb.close()
+    return "\n".join(out)
+
+
+def _csv_html(src, ext):
+    import csv
+    with open(src, "rb") as fh:
+        txt = fh.read(400000).decode("utf-8", "replace")
+    rows = list(csv.reader(io.StringIO(txt), delimiter="\t" if ext == ".tsv" else ","))[:500]
+    body = []
+    for i, r in enumerate(rows):
+        tagc = "th" if i == 0 else "td"
+        body.append("<tr>" + "".join('<%s dir="auto">%s</%s>' % (tagc, _esc(v), tagc)
+                                     for v in r) + "</tr>")
+    return "<table>" + "".join(body) + "</table>"
+
+
+def make_preview(src):
+    """معاينةُ الملفّ كاملاً (عند الضغط عليه). لا يرفع."""
+    ext = os.path.splitext(src)[1].lower()
+    try:
+        if ext == ".pdf":
+            pages = _pdf_pages(src)
+            if pages:
+                return {"kind": "pages", "pages": pages}
+            t = _pdf_text(src)
+            return {"kind": "text", "text": t, "md": False} if t.strip() else {"kind": ""}
+        if ext in (".pptx", ".pptm"):
+            from pptx import Presentation
+            prs = Presentation(src)
+            pages = []
+            for sl in list(prs.slides)[:MAX_PAGES]:
+                im = _render_slide(prs, sl, PAGE_PX)
+                if im is None:
+                    from PIL import Image
+                    im = Image.new("RGB", (PAGE_PX, int(PAGE_PX * 9 / 16)), (255, 255, 255))
+                pages.append(_data_url(im))
+            return {"kind": "pages", "pages": pages} if pages else {"kind": ""}
+        if ext in (".docx", ".docm"):
+            h = _docx_html(src)
+            return {"kind": "html", "html": h} if h.strip() else {"kind": ""}
+        if ext in (".xlsx", ".xlsm"):
+            h = _xlsx_html(src)
+            return {"kind": "html", "html": h} if h.strip() else {"kind": ""}
+        if ext in (".csv", ".tsv"):
+            return {"kind": "html", "html": _csv_html(src, ext)}
+        if ext in TEXT_EXT:
+            with open(src, "rb") as fh:
+                t = fh.read(400000).decode("utf-8", "replace")
+            return {"kind": "text", "text": t, "md": ext in (".md", ".markdown")}
+    except Exception:
+        return {"kind": ""}
+    return {"kind": ""}

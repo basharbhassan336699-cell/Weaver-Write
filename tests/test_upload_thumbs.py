@@ -77,6 +77,50 @@ def test_thumbs(tmp):
                             os.path.join(tmp, "z.img")) is False)
 
 
+def test_preview(tmp):
+    import thumbs
+    import docx
+    d = docx.Document()
+    d.add_heading("عنوان", 0)
+    d.add_paragraph('<script>alert(1)</script><img src=x onerror="alert(1)">')
+    t = d.add_table(rows=1, cols=2)
+    t.cell(0, 0).text = "خلية"
+    d.save(os.path.join(tmp, "v.docx"))
+    pv = thumbs.make_preview(os.path.join(tmp, "v.docx"))
+    h = pv.get("html", "")
+    check("preview: Word ⟵ صفحةٌ مقروءة", pv.get("kind") == "html" and "<h1" in h)
+    check("preview: نصُّ الملفّ مُهرَّبٌ لا يصير وسماً",
+          "<script" not in h and "<img src=x" not in h and "&lt;script&gt;" in h)
+    check("preview: جدولٌ عربيٌّ من اليمين", '<table dir="rtl">' in h)
+    try:
+        import pptx
+        pr = pptx.Presentation()
+        for i in range(3):
+            pr.slides.add_slide(pr.slide_layouts[0]).shapes.title.text = "شريحة %d" % i
+        pr.save(os.path.join(tmp, "v.pptx"))
+        pv = thumbs.make_preview(os.path.join(tmp, "v.pptx"))
+        check("preview: PowerPoint ⟵ كلُّ الشرائح صوراً",
+              pv.get("kind") == "pages" and len(pv.get("pages", [])) == 3)
+    except ImportError:
+        pass
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        wb.active.append(["المنتج", "الكمية"])
+        wb.save(os.path.join(tmp, "v.xlsx"))
+        pv = thumbs.make_preview(os.path.join(tmp, "v.xlsx"))
+        check("preview: Excel ⟵ جدولٌ بلا أعمدةٍ فارغة",
+              pv.get("kind") == "html" and pv["html"].count("<th") == 2)
+    except ImportError:
+        pass
+    with open(os.path.join(tmp, "v.md"), "w", encoding="utf-8") as fh:
+        fh.write("# x")
+    pv = thumbs.make_preview(os.path.join(tmp, "v.md"))
+    check("preview: Markdown ⟵ نصٌّ يُرسم", pv.get("kind") == "text" and pv.get("md"))
+    check("preview: نوعٌ مجهول ⟵ لا معاينة بلا استثناء",
+          thumbs.make_preview(os.path.join(tmp, "nothing.bin")) == {"kind": ""})
+
+
 def test_server(tmp):
     import server as srv
     old = srv._UPLOADS_DIR
@@ -119,6 +163,8 @@ def test_ui():
           and "attach-file-thumb" in h)
     check("ui: نافذةُ المعاينة تُخفى فعلاً",
           ".file-preview-overlay[hidden] { display: none; }" in h)
+    check("ui: الضغطُ على الملفّ يعاينه (قبل الإرسال وبعده)",
+          "wvPreviewLocal(f)" in h and "wvUploadURL('view'" in h)
     check("ui: «📎» القديمُ غيرُ المحفوظ أُزيل",
           "chip.textContent = '📎 '" not in h)
 
@@ -128,6 +174,7 @@ if __name__ == "__main__":
     tmp = tempfile.mkdtemp(prefix="wv-up-")
     try:
         test_thumbs(tmp)
+        test_preview(tmp)
         test_server(tmp)
         test_ui()
     finally:

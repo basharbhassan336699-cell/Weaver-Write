@@ -686,6 +686,26 @@
   }
   .fp-md { color: var(--text); }
   .fp-loading { color: var(--text-muted); text-align: center; padding: 30px; }
+  /* معاينةُ الملفّات المرفوعة: صفحاتٌ/شرائحُ صوراً، وWord/Excel صفحةً مقروءة */
+  .fp-page {
+    display: block; max-width: 100%; height: auto; margin: 0 auto 12px;
+    background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.28);
+  }
+  .fp-doc {
+    background: #fff; color: #222; max-width: 760px; margin: 0 auto;
+    padding: 26px 22px; border-radius: 6px; line-height: 1.75; font-size: 15px;
+    overflow-x: auto;
+  }
+  .fp-doc h1 { font-size: 1.5em; margin: 0 0 14px; }
+  .fp-doc h2 { font-size: 1.25em; margin: 18px 0 8px; }
+  .fp-doc h3 { font-size: 1.08em; margin: 14px 0 6px; }
+  .fp-doc p { margin: 0 0 8px; }
+  .fp-doc p.li { padding-inline-start: 12px; }
+  .fp-doc img { max-width: 100%; height: auto; display: block; margin: 10px auto; }
+  .fp-doc table { border-collapse: collapse; margin: 10px 0; }
+  .fp-doc td, .fp-doc th { border: 1px solid #bbb; padding: 4px 8px; font-size: .9em; vertical-align: top; }
+  .fp-doc th { background: #eef2f6; font-weight: 700; }
+  .attach-file-card { cursor: pointer; }
 
   /* artifacts chip (top bar) + badge count */
   .artifacts-chip { position: relative; }
@@ -4088,6 +4108,7 @@
     const url = '/api/output?path='+encodeURIComponent(name);
     m.querySelector('.fp-title').textContent = name;
     m.querySelector('.fp-download').href = url+'&download=1';
+    m.querySelector('.fp-download').setAttribute('download', '');
     body.innerHTML = '<div class="fp-loading">…</div>';
     m.hidden = false;
     try{
@@ -4792,26 +4813,68 @@
     });
     userMsg.insertBefore(row, userMsg.firstChild);
   }
-  function wvOpenUpload(chatId, a) {
-    const m = wvEnsurePreviewModal();
-    const body = m.querySelector('.fp-body');
-    const ext = wvExt(a.name || '');
-    m.querySelector('.fp-title').textContent = a.name || '';
-    m.querySelector('.fp-download').href = wvUploadURL('file', chatId, a, true);
+  // ── المعاينةُ الكاملة عند الضغط: كلُّ الصفحات/الشرائح، وWord صفحةً مقروءة ──
+  function wvRenderPreview(body, d, fallbackImg) {
     body.innerHTML = '';
+    const isAr = (document.documentElement.lang || 'en') === 'ar';
+    if (d && d.kind === 'pages' && d.pages && d.pages.length) {
+      d.pages.forEach(function (src) {
+        const im = document.createElement('img'); im.className = 'fp-page'; im.src = src; im.alt = '';
+        body.appendChild(im);
+      });
+    } else if (d && d.kind === 'html' && d.html) {
+      // يبنيه الخادمُ ونصُّه كلُّه مُهرَّب (web/thumbs.py)
+      const doc = document.createElement('div'); doc.className = 'fp-doc'; doc.innerHTML = d.html;
+      body.appendChild(doc);
+    } else if (d && d.kind === 'text') {
+      if (d.md) { const md = document.createElement('div'); md.className = 'bubble fp-md'; md.dir = 'auto'; md.innerHTML = renderMarkdown(d.text || ''); body.appendChild(md); }
+      else { const pre = document.createElement('pre'); pre.className = 'fp-text'; pre.dir = 'auto'; pre.textContent = d.text || ''; body.appendChild(pre); }
+    } else if (fallbackImg) {
+      const im = document.createElement('img'); im.className = 'fp-img'; im.src = fallbackImg;
+      im.onerror = function () { body.innerHTML = '<div class="fp-loading">' + (isAr ? 'لا تتوفّر معاينةٌ لهذا النوع — حمّله.' : 'No preview for this type — download it.') + '</div>'; };
+      body.appendChild(im);
+    } else {
+      body.innerHTML = '<div class="fp-loading">' + (isAr ? 'لا تتوفّر معاينةٌ لهذا النوع — حمّله.' : 'No preview for this type — download it.') + '</div>';
+    }
+  }
+  function wvPreviewShell(name, href, dlName) {
+    const m = wvEnsurePreviewModal();
+    m.querySelector('.fp-title').textContent = name || '';
+    const dl = m.querySelector('.fp-download');
+    dl.href = href; dl.setAttribute('download', dlName || '');
+    const body = m.querySelector('.fp-body');
+    body.innerHTML = '<div class="fp-loading">…</div>';
+    m.hidden = false;
+    return body;
+  }
+  // ملفٌّ فوق رسالةٍ أُرسلت
+  function wvOpenUpload(chatId, a) {
+    const body = wvPreviewShell(a.name, wvUploadURL('file', chatId, a, true), '');
     if (wvIsImageType(a)) {
+      body.innerHTML = '';
       const img = document.createElement('img'); img.className = 'fp-img';
       img.src = wvUploadURL('file', chatId, a); body.appendChild(img);
-    } else if (ext === '.pdf') {
-      const fr = document.createElement('iframe'); fr.className = 'fp-frame';
-      fr.src = wvUploadURL('file', chatId, a); body.appendChild(fr);
-    } else {
-      const img = document.createElement('img'); img.className = 'fp-img';
-      img.src = wvUploadURL('thumb', chatId, a);
-      img.onerror = function () { body.innerHTML = '<div class="fp-loading">' + wvFileEmoji(ext) + '</div>'; };
-      body.appendChild(img);
+      return;
     }
-    m.hidden = false;
+    fetch(wvUploadURL('view', chatId, a)).then(function (r) { return r.json(); })
+      .then(function (d) { wvRenderPreview(body, d, wvUploadURL('thumb', chatId, a)); })
+      .catch(function () { wvRenderPreview(body, null, wvUploadURL('thumb', chatId, a)); });
+  }
+  // ملفٌّ في حقل الإدخال قبل الإرسال
+  function wvPreviewLocal(f) {
+    let url = '';
+    try { url = URL.createObjectURL(f); } catch (e) {}
+    const body = wvPreviewShell(f.name, url || '#', f.name);
+    if (wvIsImageType(f) && url) {
+      body.innerHTML = '';
+      const img = document.createElement('img'); img.className = 'fp-img'; img.src = url; body.appendChild(img);
+      return;
+    }
+    wvReadOne(f).then(function (o) {
+      return fetch('/api/uploads/view', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(o) }).then(function (r) { return r.json(); });
+    }).then(function (d) { wvRenderPreview(body, d, f._wvThumb || ''); })
+      .catch(function () { wvRenderPreview(body, null, f._wvThumb || ''); });
   }
 
   function renderAttachChips() {
@@ -4840,7 +4903,8 @@
       } else if (f._wvThumbPending) {
         card.classList.add('thumb-pending');
       }
-      card.querySelector('.attach-file-remove').onclick = () => { attachedFiles.splice(i, 1); renderAttachChips(); };
+      card.querySelector('.attach-file-remove').onclick = (e) => { e.stopPropagation(); attachedFiles.splice(i, 1); renderAttachChips(); };
+      card.addEventListener('click', function () { wvPreviewLocal(f); });
       box.appendChild(card);
     });
   }

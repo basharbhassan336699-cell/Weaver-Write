@@ -1637,6 +1637,16 @@ def _thumb_for(src, cache_dir):
         return None, ""
 
 
+def _preview_for(src):
+    """معاينةُ الملفّ كاملاً عند الضغط عليه (web/thumbs.make_preview)."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import thumbs as _th
+        return _th.make_preview(src)
+    except Exception:
+        return {"kind": ""}
+
+
 def _uploads_remove(chat_id):
     d = _upload_dir(chat_id)
     if d and os.path.isdir(d):
@@ -2620,6 +2630,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if path == "/api/uploads/view":
+            q = parse_qs(urlparse(self.path).query)
+            fp = _upload_path(q.get("chat", [""])[0], q.get("uid", [""])[0],
+                              q.get("name", [""])[0])
+            if not fp:
+                self._json({"kind": "", "error": "not_found"}, 404)
+                return
+            self._json(_preview_for(fp))
+            return
         if path in ("/api/uploads/thumb", "/api/uploads/file"):
             q = parse_qs(urlparse(self.path).query)
             fp = _upload_path(q.get("chat", [""])[0], q.get("uid", [""])[0],
@@ -2924,6 +2943,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             eid = str(body.get("id") or "").strip()
             items = [e for e in _cal_read() if str(e.get("id")) != eid]
             self._json({"ok": _cal_write(items)})
+            return
+
+        if path == "/api/uploads/view":
+            # معاينةٌ كاملةٌ لملفٍّ في حقل الإدخال قبل الإرسال — لا يُحفظ.
+            import tempfile as _tf
+            raw = _upload_raw(body if isinstance(body, dict) else {})
+            if not raw or len(raw) > _ATTACH_SAVE_MAX:
+                self._json({"kind": ""})
+                return
+            tmp = _tf.mkdtemp(prefix="wv-view-")
+            try:
+                src = os.path.join(tmp, _attach_safe_name(body.get("name")))
+                with open(src, "wb") as fh:
+                    fh.write(raw)
+                self._json(_preview_for(src))
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
             return
 
         if path == "/api/uploads/preview":
