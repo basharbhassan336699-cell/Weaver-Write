@@ -17,6 +17,9 @@ import tempfile
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 from pipeline import weaver_core as W   # noqa: E402
+# هذا الفحصُ يحاكي المحرّكَ باستبدال run/config_patch؛ فلا يُقرأ ملفُّ
+# الإعداد الحقيقيُّ على الجهاز (القراءةُ السريعة — tests/test_cold_start.py).
+W.CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "__no_config__.json")
 
 P = F = 0
 

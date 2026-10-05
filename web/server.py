@@ -1673,11 +1673,20 @@ def _live_tail(chat_id):
         return None
 
 
-def _live_pump(tail, emit, stop, every=0.6):
+def _live_pump(tail, emit, stop, every=0.6, starting=False):
     """اقرأ ما جدّ في سجلّ الجلسة وأرسله ({"t":"live","items":[…]}) حتى يُطلب
-    التوقّف — ثمّ قراءةٌ أخيرة كي لا تضيع آخرُ نتيجة. لا يرفع."""
+    التوقّف — ثمّ قراءةٌ أخيرة كي لا تضيع آخرُ نتيجة. لا يرفع.
+    و`starting`: قيل «تجهيز المحرّك…» — فحين تسمع البوّابةُ يعود «التفكير»."""
     while True:
         done = stop.wait(every)
+        if starting and not done:
+            try:
+                from pipeline import weaver_core as _wcs
+                if _wcs.gateway_health(timeout=0.3):
+                    starting = False
+                    emit({"t": "step", "label": "Thinking"})
+            except Exception:
+                starting = False
         try:
             items = tail.poll()
         except Exception:
@@ -1685,6 +1694,8 @@ def _live_pump(tail, emit, stop, every=0.6):
         if items:
             emit({"t": "live", "items": items})
         if done:
+            # القراءةُ عملت حتى النهاية: ما وصل هو كلُّ شيء (ولو لا أدوات)
+            emit({"t": "live_end"})
             return
 
 
@@ -2169,6 +2180,15 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
             parts.append("[Working folder / مجلّد العمل]\n" + _cdir + "/ — "
                          "write every file you create in this chat here "
                          "(documents and drafts), not in the workspace root.")
+        if not _ar:
+            # قِيس على هاتف المستخدم: «Hallo» و«How are you?» جاء ردُّهما
+            # بالعربيّة — الدستورُ والذاكرةُ والسجلُّ كلُّها عربيّة حولَ رسالةٍ
+            # قصيرة. فسطرٌ صريحٌ قربَ الطلب؛ والنموذجُ يحكم لغتَها. والعربيّةُ
+            # كما كانت حرفاً.
+            parts.append("[Reply language]\nReply in the language of the request "
+                         "below, unless it asks for another language — even "
+                         "though memory, history or your instructions may be in "
+                         "Arabic.")
         parts.append(_L["req"] + "\n" + str(message or ""))
         # مهلةٌ أوسع من مهلة النداء المباشر: المحرّكُ وكيلٌ يفتح صفحاتٍ
         # ويُعيد المحاولة، فـ١٢٠ ثانيةً تكفي نداءً واحداً ولا تكفي نوبةً
@@ -3264,6 +3284,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     ("قراءة الملفات" if isar else "Reading files") if attach_text
                     else ("بحث حيّ" if isar else "Live search") if ctx
                     else ("التفكير" if isar else "Thinking"))})
+                # المحرّكُ لم يُقلع بعد (أوّلُ رسالةٍ بعد تشغيل): يُقال ذلك بدل
+                # «التفكير» — فالانتظارُ تجهيزٌ لا تفكير.
+                _starting = False
+                if _eng_on:
+                    try:
+                        from pipeline import weaver_core as _wcs
+                        if _wcs.gateway_on() and not _wcs.gateway_health(timeout=0.5):
+                            _starting = True
+                            sse({"t": "step", "label": (
+                                "تجهيز المحرّك…" if isar else "Starting the engine…")})
+                    except Exception:
+                        pass
                 # الملفُّ المرفوعُ نفسُه في مجلّد المحادثة — قبل اللقطة.
                 if _eng_on and body.get("chatId") and body.get("files"):
                     try:
@@ -3301,7 +3333,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if _tail is not None:
                         _live_th = threading.Thread(
                             target=_live_pump, args=(_tail, sse, _live_stop),
-                            daemon=True)
+                            kwargs={"starting": _starting}, daemon=True)
                         _live_th.start()
                 try:
                     r = _chat(msg, body.get("history"),
@@ -3631,6 +3663,28 @@ class _ReuseTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True       # don't block the UI while a chat is generating
 
 
+def _engine_warmup():
+    """أقلِع البوّابةَ والعمليةَ المقيمة الآن، فيجدهما أوّلُ ردٍّ جاهزتين.
+    والخطواتُ نفسُها التي تسبق أوّلَ نوبة (ask)، بأقفالها هي — فرسالةٌ تصل
+    أثناء التجهيز تنتظره ولا تُقلع ثانيةً. WEAVER_WARMUP=off تُطفئه. لا يرفع."""
+    if (os.environ.get("WEAVER_WARMUP", "on") or "on").strip().lower() in (
+            "0", "off", "false", "no"):
+        return
+    if (os.environ.get("WEAVER_ENGINE_CHAT", "1") or "1").strip() in ("0", "false", "no"):
+        return
+    try:
+        from pipeline import weaver_core as _wc
+        if not (_wc.available() and _wc.node_bin() and _wc.gateway_on()):
+            return
+        _wc.ensure_workspace()
+        _wc.model_sync()
+        ok, _why = _wc.gateway_start()
+        if ok and _wc.worker_on():
+            _wc.worker_port()
+    except Exception:
+        pass
+
+
 def serve(port=None):
     port = port or PORT
     keysync.load_env()  # load synced settings first
@@ -3638,6 +3692,12 @@ def serve(port=None):
     try:
         import threading
         threading.Thread(target=_reminder_loop, daemon=True).start()
+    except Exception:
+        pass
+    # المحرّكُ يُجهَّز في الخلفية لحظةَ التشغيل — لا عند أوّل رسالة.
+    try:
+        import threading
+        threading.Thread(target=_engine_warmup, daemon=True).start()
     except Exception:
         pass
     with _ReuseTCPServer(("127.0.0.1", port), Handler) as httpd:

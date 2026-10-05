@@ -706,12 +706,17 @@ def gateway_start(wait=None, say=None):
             pass
         # البحثُ قبل الإقلاع: مزوّدٌ لا يعمل — وليس اختيارَك — يُبدَّل ببديلٍ
         # يعمل، فتراه البوّابةُ من أوّل نوبة. واختيارُك لا يُمَسّ.
-        try:
-            if (os.environ.get("WEAVER_SEARCH_GUARD", "on") or "on").strip() \
-                    .lower() not in ("0", "off", "false", "no"):
+        # (مقيس: هذا الفحصُ — بحثٌ حقيقيٌّ ثمّ تجربةُ كلِّ مزوّدٍ مجّانيٍّ واحداً
+        # واحداً — كان يسبق أوّلَ ردٍّ بعد كلِّ تشغيل، وكلُّ محاولةٍ إقلاعُ
+        # محرّكٍ وبحثٌ عبر الشبكة. والبوّابةُ تطبّق تغييرَ البحث وهي حيّة:
+        #   [reload] config hot reload applied (tools.web)
+        # فصار في الخلفية بعد الإقلاع (_search_guard_async)، والقديمُ بالبيئة:
+        # WEAVER_SEARCH_GUARD_SYNC=1.)
+        if _search_guard_on() and _search_guard_sync():
+            try:
                 ensure_web_search(say=_say)
-        except Exception:
-            pass
+            except Exception:
+                pass
         try:
             os.makedirs(STATE, exist_ok=True)
             _log = open(GATEWAY_LOG, "ab", buffering=0)
@@ -725,12 +730,17 @@ def gateway_start(wait=None, say=None):
             #   «unauthorized: gateway token mismatch»
             # فلا تُستعمل إلّا إن لم يكن الوضعُ مضبوطاً بعد.
             _args = [nb, ENTRY, "gateway", "run"]
-            try:
-                _c, _o, _ = run(["config", "get", "gateway.mode"], timeout=60)
-                if not (_c == 0 and "local" in (_o or "")):
+            _fok, _mode = config_get_fast("gateway.mode")
+            if _fok:
+                if _mode != "local":
                     _args.append("--allow-unconfigured")
-            except Exception:
-                _args.append("--allow-unconfigured")
+            else:
+                try:
+                    _c, _o, _ = run(["config", "get", "gateway.mode"], timeout=60)
+                    if not (_c == 0 and "local" in (_o or "")):
+                        _args.append("--allow-unconfigured")
+                except Exception:
+                    _args.append("--allow-unconfigured")
             subprocess.Popen(
                 _args,
                 stdout=_log, stderr=_log, stdin=subprocess.DEVNULL,
@@ -761,27 +771,74 @@ def gateway_start(wait=None, say=None):
                     _say("✓ الإعدادُ مكتوب")
                 except Exception as _e:
                     _say("⚠ تعذّرت كتابةُ الإعداد: " + str(_e)[:120])
-                try:
-                    # ولا يُمَسُّ اختيارٌ صريحٌ للمستخدم بحال: لو اختار
-                    # مزوّداً بمعالج `configure --section web` ثمّ فشل نداءٌ
-                    # واحدٌ لانقطاعِ شبكةٍ عابر، لكان تلقائيُّنا يدوس اختيارَه
-                    # بلا أن يخبره. فالتلقائيُّ لمن لم يختر فقط.
-                    if not chosen_provider():
-                        _st = probe_search("اختبار")
-                        if not _st.get("ok"):
-                            run(["config", "set",
-                                 "tools.web.search.enabled", "true"],
-                                timeout=60)
-                            _set_search_provider(WEB_SEARCH_FREE[0],
-                                                 auto=True)
-                except Exception:
-                    pass
+                if _search_guard_sync():
+                    _search_default()
+                else:
+                    _search_guard_async()
                 return True, f"أقلعت في {time.time() - _t0:.1f} ث"
             time.sleep(1)
         # ولا يُقال «انظر السجلّ» ويُترك المستخدمُ يبحث: يُقرأ السببُ منه.
         return False, (f"لم تسمع خلال {wait} ث"
                        + (" — " + _log_reason()) if _log_reason()
                        else f"لم تسمع خلال {wait} ث — انظر {GATEWAY_LOG}")
+
+
+def _search_guard_on():
+    return (os.environ.get("WEAVER_SEARCH_GUARD", "on") or "on").strip() \
+        .lower() not in ("0", "off", "false", "no")
+
+
+def _search_guard_sync():
+    """القديمُ حرفاً (يسبق أوّلَ ردّ): WEAVER_SEARCH_GUARD_SYNC=1."""
+    return (os.environ.get("WEAVER_SEARCH_GUARD_SYNC", "") or "").strip() \
+        .lower() in ("1", "on", "true", "yes")
+
+
+def _search_default():
+    """ولا يُمَسُّ اختيارٌ صريحٌ للمستخدم بحال: لو اختار مزوّداً بمعالج
+    `configure --section web` ثمّ فشل نداءٌ واحدٌ لانقطاعِ شبكةٍ عابر، لكان
+    تلقائيُّنا يدوس اختيارَه بلا أن يخبره. فالتلقائيُّ لمن لم يختر فقط."""
+    try:
+        if not chosen_provider():
+            _st = probe_search("اختبار")
+            if not _st.get("ok"):
+                run(["config", "set", "tools.web.search.enabled", "true"],
+                    timeout=60)
+                _set_search_provider(WEB_SEARCH_FREE[0], auto=True)
+    except Exception:
+        pass
+
+
+_SEARCH_GUARD = {"running": False}
+_SEARCH_GUARD_TTL = 6 * 3600
+
+
+def _search_guard_async():
+    """فحصُ البحث في الخلفية بعد الإقلاع — مرّةً كلَّ ٦ ساعات لا في كلِّ تشغيل
+    (نتيجتُه في WEB_SEARCH_STATUS بوقتها). لا يرفع، ولا يُقلع خيطين معاً."""
+    try:
+        import json as _j
+        with open(WEB_SEARCH_STATUS, encoding="utf-8") as fh:
+            _last = float((_j.load(fh) or {}).get("ts") or 0)
+        if time.time() - _last < _SEARCH_GUARD_TTL:
+            return False
+    except Exception:
+        pass
+    if _SEARCH_GUARD["running"]:
+        return False
+    _SEARCH_GUARD["running"] = True
+
+    def _job():
+        try:
+            if _search_guard_on():
+                ensure_web_search()
+            _search_default()
+        except Exception:
+            pass
+        finally:
+            _SEARCH_GUARD["running"] = False
+    threading.Thread(target=_job, daemon=True).start()
+    return True
 
 
 def _gateway_pids():
@@ -2543,8 +2600,11 @@ def configure_model():
     _rep = (["models.providers." + CUSTOM_PROVIDER]
             if _route.get("mode") == "custom" else [])
     # ولا يُمرَّر إلا حين يلزم: فالمدمجُ يُنادى كما كان حرفاً.
-    okp, why = (config_patch(tree, replace_paths=_rep) if _rep
-                else config_patch(tree))
+    if config_has(tree, exact_paths=_rep):
+        okp, why = True, ""          # مكتوبٌ كما هو ⟵ لا إقلاعَ للمحرّك
+    else:
+        okp, why = (config_patch(tree, replace_paths=_rep) if _rep
+                    else config_patch(tree))
     for n in names:
         rows.append((n, okp, "" if okp else why))
     if okp:
@@ -2575,14 +2635,21 @@ def configure_runtime():
     #   «unauthorized: device token mismatch»
     # فيُولَّد مرّةً ويُحفَظ. ولا يُطبع.
     _tok_new = ""
-    try:
-        _c, _o, _ = run(["config", "get", "gateway.auth.token"], timeout=90)
-        _tok = (_o or "").strip().strip('"')
-        if not _tok or _tok in ("null", "undefined"):
+    _fok, _fv = config_get_fast("gateway.auth.token")
+    if _fok:
+        # الملفُّ يُقرأ: رمزٌ محفوظٌ (نصٌّ أو مرجعُ سرّ) ⟵ لا يُولَّد غيرُه
+        if _fv is _CFG_MISSING or _fv in (None, "", "null", "undefined"):
             import secrets as _s
-            _tok_new = _s.token_hex(24)     # يُكتب مع البقيّة، لا وحده
-    except Exception:
-        pass
+            _tok_new = _s.token_hex(24)
+    else:
+        try:
+            _c, _o, _ = run(["config", "get", "gateway.auth.token"], timeout=90)
+            _tok = (_o or "").strip().strip('"')
+            if not _tok or _tok in ("null", "undefined"):
+                import secrets as _s
+                _tok_new = _s.token_hex(24)     # يُكتب مع البقيّة، لا وحده
+        except Exception:
+            pass
     _tp, _ta = tools_policy()
     # وكانت هذه ثمانيَ عمليّاتِ node منفصلة — ثمانِ إقلاعاتٍ كاملةٍ للحزمة
     # في صمت. صارت كتابةً واحدةً بآليّة المحرّك نفسِه (`config patch`).
@@ -2617,7 +2684,11 @@ def configure_runtime():
         _merge(tree, _nest(path, val))
     if _tok_new:
         _merge(tree, _nest("gateway.auth.token", _tok_new))
-    okp, why = config_patch(tree)
+    # لم يتغيّر شيء ⟵ لا كتابة (كانت إقلاعَ محرّكٍ كاملاً بعد كلِّ تشغيل)
+    if not _tok_new and config_has(tree):
+        okp, why = True, ""
+    else:
+        okp, why = config_patch(tree)
     if _tok_new:
         rows.append(("رمزُ البوّابة — gateway.auth.token (مُولَّدٌ ومحفوظ)",
                      okp, "" if okp else why))
@@ -2630,12 +2701,89 @@ def configure_runtime():
     return rows
 
 
+# ── قراءةُ الإعداد من ملفّه مباشرةً ───────────────────────────────────────
+#
+# قِيس (إقلاعٌ بعد تحديث، نموذجٌ يردّ فوراً): ٤٠٫٦ ث، منها ٩ ث للبوّابة نفسِها
+# والباقي **١٥ إقلاعاً كاملاً للمحرّك** — أغلبُها `config get` لقراءة قيمةٍ
+# واحدة. وعلى الهاتف إقلاعُ المحرّك وحده ٢٠–٤٠ ث، فتصير دقائقَ قبل أوّل ردّ.
+# والإعدادُ ملفُّ JSON يقرؤه المحرّكُ نفسُه (state/openclaw.json): فيُقرأ
+# هنا مباشرةً، وإن تعذّر (غيرُ موجود، أو ليس JSON) فأمرُ المحرّك كما كان.
+CONFIG_FILE = os.path.join(_STATE_DIR, "openclaw.json")
+_CFG_MISSING = object()
+
+
+def _cfg_file():
+    """الإعدادُ كاملاً من ملفّه — أو None إن تعذّرت قراءتُه. لا يرفع."""
+    try:
+        import json as _j
+        with open(CONFIG_FILE, encoding="utf-8") as fh:
+            d = _j.load(fh)
+        return d if isinstance(d, dict) else None
+    except Exception:
+        return None
+
+
+def _cfg_lookup(d, path):
+    cur = d
+    for k in str(path).split("."):
+        if not isinstance(cur, dict) or k not in cur:
+            return _CFG_MISSING
+        cur = cur[k]
+    return cur
+
+
+def config_get_fast(path):
+    """(وُجد الملفّ، القيمة) — القيمةُ _CFG_MISSING إن لم تُضبط.
+    (False, None) ⟵ الملفُّ لا يُقرأ: فليُسأل المحرّكُ كما كان."""
+    d = _cfg_file()
+    if d is None:
+        return False, None
+    return True, _cfg_lookup(d, path)
+
+
+def _cfg_same(want, have):
+    """أيحمل الإعدادُ ما نريد كتابتَه؟ (None في المطلوب = يُحذف ⟵ يجب ألّا يوجد)."""
+    if want is None:
+        return have is _CFG_MISSING or have is None
+    if isinstance(want, dict):
+        if have is _CFG_MISSING or have is None:
+            have = {}             # فرعٌ غائب: يطابق إن كان المطلوبُ فيه حذفاً فقط
+        if not isinstance(have, dict):
+            return False
+        return all(_cfg_same(v, have.get(k, _CFG_MISSING)) for k, v in want.items())
+    return have is not _CFG_MISSING and have == want
+
+
+def config_has(tree, exact_paths=()):
+    """أفي الإعداد كلُّ ما في `tree` حرفاً؟ — فلا تُعاد كتابتُه (إقلاعُ محرّكٍ
+    كامل). والمساراتُ في `exact_paths` تُطابَق كاملةً (لا بعضاً): ما يُستبدَل
+    استبدالاً لا يكفيه أن يحوي المطلوب. وأيُّ شكٍّ ⟵ False (فيُكتب كما كان)."""
+    d = _cfg_file()
+    if d is None:
+        return False
+    try:
+        if not _cfg_same(tree, d):
+            return False
+        for p in exact_paths or ():
+            if _cfg_lookup(d, p) != _cfg_lookup(tree, p):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def chosen_provider():
     """المزوّدُ الذي **عيّنه المستخدمُ صراحةً**، أو "" إن لم يُعيّن.
 
     فرقٌ جوهريّ: `resolveWebSearchProviderId` قد تُعيد مزوّداً اكتُشف
     تلقائياً من مفتاح، وذاك ليس اختياراً. وهذه تقرأ المفتاحَ المكتوبَ في
     الإعداد — وهو ما يكتبه معالجُ `configure --section web` حين تختار."""
+    _ok, _v = config_get_fast("tools.web.search.provider")
+    if _ok:
+        if _v is _CFG_MISSING or not isinstance(_v, str):
+            return ""
+        _v = _v.strip()
+        return "" if _v in ("", "null", "undefined", "auto") else _v
     try:
         code, out, _ = run(["config", "get", "tools.web.search.provider"],
                            timeout=60)

@@ -452,6 +452,9 @@
     border-radius: 16px 16px 4px 16px;
   }
   .msg.ai { align-self: flex-start; gap: 10px; }
+  /* يأخذ عرضَه (حتى ٨٥٪) فيُحاذى الردُّ العربيُّ يميناً والإنجليزيُّ يساراً */
+  .msg.ai { width: 100%; }
+  .msg.ai .msg-wrapper { flex: 1; min-width: 0; }
   .msg.ai .bubble { color: var(--text); padding: 4px 0; }
   .msg.ai .msg-logo { flex-shrink: 0; margin-top: 2px; }
 
@@ -3741,7 +3744,7 @@
         if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
         if (m.files && m.files.length) m.files.forEach(function (f) { addFileCard(el, f); });
         if (m.toolsPending && typeof wvLoadTurnTools === 'function') {
-          wvLoadTurnTools(id, m, function () { wvRenderTools(el.querySelector('.tool-steps'), m.tools); });
+          wvLoadTurnTools(id, m, function () { if (wvToolsReal(m.tools).length) wvRenderTools(el.querySelector('.tool-steps'), m.tools); });
         }
       });
       // ردٌّ ما زال يُكتب لهذه المحادثة ⟵ يعود إلى مكانه ويكمل أمامك.
@@ -3839,7 +3842,7 @@
     // Join wrapped lines of one paragraph with <br> (GFM breaks:true), so a
     // single newline is preserved as a visible line break — exactly like the
     // chat renderers users expect. Blank lines still start a new <p>.
-    const flushPara=()=>{ if(para.length){ out.push('<p>'+para.map(mdInline).join('<br>')+'</p>'); para=[]; } };
+    const flushPara=()=>{ if(para.length){ out.push('<p dir="auto">'+para.map(mdInline).join('<br>')+'</p>'); para=[]; } };
     const closeList=()=>{ if(listTag){ out.push('</'+listTag+'>'); listTag=null; } };
     for(let idx=0; idx<lines.length; idx++){
       let line=lines[idx].replace(/\s+$/,'');
@@ -3877,7 +3880,7 @@
         const rows=[];
         while(idx<lines.length && lines[idx].indexOf('|')>=0 && lines[idx].trim()!==''){ rows.push(mdTableCells(lines[idx])); idx++; }
         idx--; // step back; loop will ++
-        let html='<div class="md-table-wrap"><table class="md-table"><thead><tr>';
+        let html='<div class="md-table-wrap"><table class="md-table" dir="auto"><thead><tr>';
         headers.forEach((h,i)=>{ const a=aligns[i]?(' style="text-align:'+aligns[i]+'"'):''; html+='<th'+a+'>'+mdInline(h)+'</th>'; });
         html+='</tr></thead><tbody>';
         rows.forEach(r=>{ html+='<tr>'; headers.forEach((_,i)=>{ const a=aligns[i]?(' style="text-align:'+aligns[i]+'"'):''; html+='<td'+a+'>'+mdInline(r[i]!=null?r[i]:'')+'</td>'; }); html+='</tr>'; });
@@ -3887,11 +3890,11 @@
       }
       if(/^\s*$/.test(line)){ flushPara(); closeList(); continue; }
       let m;
-      if((m=line.match(/^(#{1,6})\s+(.*)$/))){ flushPara(); closeList(); const n=m[1].length; out.push('<h'+n+'>'+mdInline(m[2])+'</h'+n+'>'); continue; }
+      if((m=line.match(/^(#{1,6})\s+(.*)$/))){ flushPara(); closeList(); const n=m[1].length; out.push('<h'+n+' dir="auto">'+mdInline(m[2])+'</h'+n+'>'); continue; }
       if(/^\s*([-*_])\1{2,}\s*$/.test(line)){ flushPara(); closeList(); out.push('<hr>'); continue; }
-      if((m=line.match(/^&gt;\s?(.*)$/))){ flushPara(); closeList(); out.push('<blockquote>'+mdInline(m[1])+'</blockquote>'); continue; }
-      if((m=line.match(/^\s*[-*+]\s+(.*)$/))){ flushPara(); if(listTag!=='ul'){ closeList(); out.push('<ul>'); listTag='ul'; } out.push('<li>'+mdInline(m[1])+'</li>'); continue; }
-      if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ flushPara(); if(listTag!=='ol'){ closeList(); out.push('<ol>'); listTag='ol'; } out.push('<li>'+mdInline(m[1])+'</li>'); continue; }
+      if((m=line.match(/^&gt;\s?(.*)$/))){ flushPara(); closeList(); out.push('<blockquote dir="auto">'+mdInline(m[1])+'</blockquote>'); continue; }
+      if((m=line.match(/^\s*[-*+]\s+(.*)$/))){ flushPara(); if(listTag!=='ul'){ closeList(); out.push('<ul dir="auto">'); listTag='ul'; } out.push('<li dir="auto">'+mdInline(m[1])+'</li>'); continue; }
+      if((m=line.match(/^\s*\d+[.)]\s+(.*)$/))){ flushPara(); if(listTag!=='ol'){ closeList(); out.push('<ol dir="auto">'); listTag='ol'; } out.push('<li dir="auto">'+mdInline(m[1])+'</li>'); continue; }
       para.push(line);
     }
     flushPara(); closeList();
@@ -4223,9 +4226,18 @@
                   '<div class="bubble"></div>' + wvActionsBar(lang) + '</div>';
     d.querySelector('.bubble').innerHTML = renderMarkdown(text);
     // بطاقاتُ الأدوات المحفوظةُ تُعاد كما كانت — هذا هو إصلاحُ الاختفاء.
-    if (tools && tools.length) wvRenderTools(d.querySelector('.tool-steps'), tools);
+    if (tools && wvToolsReal(tools).length) wvRenderTools(d.querySelector('.tool-steps'), tools);
     d.dataset.raw = text == null ? '' : String(text);
     return d;
+  }
+  // أدواتٌ حقيقيّة؟ «التفكير» وبطاقةُ «نوبة الوكيل» علامتان تُضافان لكلِّ ردّ —
+  // لا أدوات. فردٌّ بسيطٌ («أهلاً») لا يُعرض فوقه مربّعُ «Tool calls 2».
+  function wvToolsReal(tools) {
+    return (tools || []).filter(function (t) {
+      if (!t) return false;
+      if (t.kind === 'engine' && t.status !== 'err') return false;
+      return !/^(التفكير|Thinking|تجهيز المحرّك…|Starting the engine…)$/.test(String(t.title || '').trim());
+    });
   }
 
   // ══ عرضُ الأدوات حيّاً (Timeline) ══════════════════════════════════════
@@ -4392,7 +4404,6 @@
     const tl = aiMsg._tl; if (!tl || !tl.running) return;
     tl.running = false; clearInterval(tl.timer);
     tl.items.forEach(function (x) { if (x.k === 'tool' && x.status === 'running') x.status = 'ok'; });
-    if (!tl.items.length) aiMsg.classList.remove('wv-tl-on');   // لا خطوات حيّة ⟵ العرضُ القديم
     wvTlRender(aiMsg); wvTlSheetRefresh(aiMsg);
   }
   function wvTlHasItems(aiMsg) { return !!(aiMsg._tl && aiMsg._tl.items.length); }
@@ -5168,6 +5179,7 @@
         if (!ev || !ev.t) return;
         if (ev.t === 'step') { stepsAdd(ev.label); wvTlStep(aiMsg, ev.label); }
         else if (ev.t === 'live') { wvTlApply(aiMsg, ev.items); }
+        else if (ev.t === 'live_end') { aiMsg._tlLive = true; }
         else if (ev.t === 'tool') { stepsTool(ev.tool); if (ev.tool && ev.tool.kind === 'engine' && ev.tool.status !== 'err') engineTurn = true; }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
         // ملفٌّ إضافيٌّ كتبه الوكيلُ في النوبة نفسِها (الأوّلُ يأتي مع الجواب)
@@ -5228,6 +5240,8 @@
           bubble.textContent = (isAr ? 'تعذّر الاتصال بالخادم: ' : 'Could not reach the server: ') + err.message;
         }
       }
+      // لا خطواتٍ حيّة: المربّعُ القديمُ يعود فقط إن كان فيه أداةٌ حقيقيّة
+      if (!wvTlHasItems(aiMsg) && wvToolsReal(toolCalls).length) aiMsg.classList.remove('wv-tl-on');
       wvInflightDel(sendChatId, aiMsg);
       // persist the RAW reply (markdown) so reloads re-render the formatting;
       // fall back to the shown text for error/empty replies
@@ -5253,7 +5267,8 @@
       // الخطواتُ الحيّة تُحفظ مع الرسالة؛ وحينها لا يُطلب سجلُّ النوبة البطيء
       const wvTlSaved = wvTlSave(aiMsg);
       if (wvTlSaved) amsg.timeline = wvTlSaved;
-      if (engineTurn && !wvTlSaved) amsg.toolsPending = { since: sentAt, tries: 0 };
+      // القراءةُ الحيّةُ عملت ⟵ ما فيها هو الحقيقة (ولو صفراً): لا سجلَّ بطيءَ بعدها
+      if (engineTurn && !wvTlSaved && !aiMsg._tlLive) amsg.toolsPending = { since: sentAt, tries: 0 };
       if (currentChatId === sendChatId) {
         currentMessages.push(amsg);
         saveCurrentChat();
@@ -5262,7 +5277,7 @@
         // انتقلتَ إلى محادثةٍ أخرى: يُحفَظ في محادثته هو، ولا تُمَسّ المفتوحة.
         await wvAppendToChat(sendChatId, amsg);
       }
-      if (engineTurn && !wvTlSaved && typeof wvLoadTurnTools === 'function') {
+      if (engineTurn && !wvTlSaved && !aiMsg._tlLive && typeof wvLoadTurnTools === 'function') {
         wvLoadTurnTools(sendChatId, amsg, function () { wvRenderTools(stepsBox, amsg.tools); });
       }
     })();
