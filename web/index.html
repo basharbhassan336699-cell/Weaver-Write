@@ -686,6 +686,62 @@
   }
   .fp-md { color: var(--text); }
   .fp-loading { color: var(--text-muted); text-align: center; padding: 30px; }
+  /* ── لوحةُ المعاينة الجانبيّة (Side panel) ──
+     حاسوب: بجانب المحادثة (تنكمش المحادثة)، وزرُّ التكبير يملأ الشاشة.
+     هاتف: تملأ الشاشة. والصفحاتُ صورٌ كما تُطبع، وعلى كلٍّ رقمُها. */
+  .wv-panel {
+    flex: 0 0 auto; width: min(48vw, 760px); min-width: 340px;
+    display: flex; flex-direction: column; height: 100%;
+    background: var(--surface); border-inline-start: 1px solid var(--border);
+    position: relative; z-index: 5;
+  }
+  .wv-panel[hidden] { display: none; }
+  .app.wvp-full .main { display: none; }
+  .app.wvp-full .wv-panel { width: 100%; flex: 1 1 auto; }
+  .wvp-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .wvp-title { min-width: 0; display: flex; align-items: baseline; gap: 6px; overflow: hidden; }
+  .wvp-name { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wvp-type { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+  .wvp-tools { display: flex; gap: 2px; flex-shrink: 0; }
+  .wvp-btn {
+    width: 32px; height: 32px; border-radius: 8px; border: 0; background: transparent;
+    color: var(--text-muted); display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; text-decoration: none;
+  }
+  .wvp-btn:hover { background: var(--surface-hover); color: var(--text); }
+  .wvp-btn svg { width: 18px; height: 18px; }
+  .wvp-body { flex: 1; overflow: auto; padding: 16px; background: var(--bg); -webkit-overflow-scrolling: touch; }
+  .wvp-page {
+    position: relative; margin: 0 auto 16px; max-width: 820px; background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25), 0 0 0 1px rgba(0,0,0,.06); border-radius: 3px;
+  }
+  .wvp-page img { display: block; width: 100%; height: auto; border-radius: 3px; }
+  .wvp-num {
+    position: absolute; bottom: 10px; right: 10px; padding: 3px 10px; border-radius: 8px;
+    background: rgba(70,70,70,.82); color: #fff; font-size: 12px; direction: ltr;
+  }
+  .wvp-body .wvp-img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  .wvp-body iframe { width: 100%; height: 100%; min-height: 70vh; border: 0; background: #fff; border-radius: 4px; }
+  .wvp-msg { color: var(--text-muted); text-align: center; padding: 40px 16px; font-size: 14px; line-height: 1.7; }
+  .wvp-spin {
+    width: 26px; height: 26px; margin: 0 auto 12px; border-radius: 50%;
+    border: 3px solid var(--border); border-top-color: var(--text-muted);
+    animation: wvpSpin .8s linear infinite;
+  }
+  @keyframes wvpSpin { to { transform: rotate(360deg); } }
+  @media (max-width: 768px) {
+    .wv-panel { position: fixed; inset: 0; width: 100%; min-width: 0; z-index: 400; border: 0; }
+    .wvp-body { padding: 10px; }
+  }
+  .file-card { cursor: pointer; }
+  /* المحادثةُ تضيق حين تُفتح اللوحة: البطاقاتُ تنكمش معها ولا تُقصّ */
+  .msg.ai .msg-wrapper { min-width: 0; }
+  .msg.ai .file-card { max-width: min(420px, 100%); }
+
   /* معاينةُ الملفّات المرفوعة: صفحاتٌ/شرائحُ صوراً، وWord/Excel صفحةً مقروءة */
   .fp-page {
     display: block; max-width: 100%; height: auto; margin: 0 auto 12px;
@@ -2531,6 +2587,24 @@
     </div>
 
   </main>
+  <!-- لوحةُ المعاينة الجانبيّة: الملفُّ صفحاتٍ بجانب المحادثة -->
+  <aside class="wv-panel" id="wvPanel" hidden>
+    <div class="wvp-head">
+      <span class="wvp-title"><span class="wvp-name"></span><span class="wvp-type"></span></span>
+      <span class="wvp-tools">
+        <a class="wvp-btn wvp-dl" href="#" download title="Download">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>
+        </a>
+        <button class="wvp-btn wvp-wide" type="button" title="Expand">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+        </button>
+        <button class="wvp-btn wvp-close" type="button" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+        </button>
+      </span>
+    </div>
+    <div class="wvp-body"></div>
+  </aside>
 </div>
 
   <!-- Username modal (first launch) -->
@@ -4068,13 +4142,15 @@
       '<span class="fc-icon">'+wvFileEmoji(ext)+'</span>'+
       '<span class="fc-name"></span>'+
       '<span class="fc-actions">'+
-        (wvPreviewable(ext)?'<button class="fc-btn" data-fc="preview">'+(isAr?'معاينة':'Preview')+'</button>':'')+
+        ((wvPreviewable(ext)||wvPanelable(ext))?'<button class="fc-btn" data-fc="preview">'+(isAr?'معاينة':'Preview')+'</button>':'')+
         '<a class="fc-btn" href="'+dl+'" download>'+(isAr?'تحميل':'Download')+'</a>'+
       '</span>';
     card.querySelector('.fc-name').textContent = name;
     card.dataset.name = name;
     const pv = card.querySelector('[data-fc="preview"]');
-    if(pv) pv.addEventListener('click', ()=> wvOpenPreview(name));
+    if(pv) pv.addEventListener('click', (e)=> { e.stopPropagation(); wvOpenPreview(name); });
+    // الضغطُ على البطاقة نفسِها يفتح المعاينة (إلّا زرُّ التحميل)
+    card.addEventListener('click', (e)=> { if (e.target.closest('a')) return; wvOpenPreview(name); });
     const actions = wrap.querySelector('.msg-actions');
     if(actions) wrap.insertBefore(card, actions); else wrap.appendChild(card);
     aiMsg.dataset.file = name;
@@ -4102,6 +4178,10 @@
     return m;
   }
   async function wvOpenPreview(name){
+    // اللوحةُ الجانبيّة أوّلاً — والنافذةُ المنبثقةُ أدناه احتياطٌ كما كانت
+    const _u = '/api/output?path='+encodeURIComponent(name);
+    if (wvPanelable(wvExt(name)) && wvOpenPanel({ name: name, fileUrl: _u, download: _u+'&download=1',
+        metaUrl: '/api/pages?src=output&path='+encodeURIComponent(name), allowHtml: true })) return;
     const m = wvEnsurePreviewModal();
     const body = m.querySelector('.fp-body');
     const ext = wvExt(name);
@@ -4813,6 +4893,94 @@
     });
     userMsg.insertBefore(row, userMsg.firstChild);
   }
+  // ══ لوحةُ المعاينة الجانبيّة ═══════════════════════════════════════════
+  // opts: {name, metaUrl | metaBody, fileUrl, download, downloadName, allowHtml}
+  // الخادمُ يرسم الصفحات (web/page_render.py) ويعيد عددَها؛ وكلُّ صفحةٍ صورة.
+  var WV_PANEL_SEQ = 0;
+  function wvPanelable(ext) {
+    return ['.docx','.docm','.pdf','.pptx','.pptm','.xlsx','.xlsm','.csv','.tsv','.md','.markdown',
+            '.txt','.json','.log','.py','.js','.ts','.css','.xml','.yaml','.yml','.sql','.sh',
+            '.html','.htm','.png','.jpg','.jpeg','.gif','.webp','.bmp','.svg'].indexOf(ext) >= 0;
+  }
+  function wvClosePanel() {
+    const p = document.getElementById('wvPanel'); if (!p) return;
+    p.hidden = true; p.querySelector('.wvp-body').innerHTML = '';
+    const app = document.getElementById('app'); if (app) app.classList.remove('wvp-full');
+    WV_PANEL_SEQ++;
+  }
+  function wvOpenPanel(o) {
+    const p = document.getElementById('wvPanel'); if (!p) return false;
+    const isAr = (document.documentElement.lang || 'en') === 'ar';
+    const seq = ++WV_PANEL_SEQ;
+    const ext = wvExt(o.name || '');
+    p.querySelector('.wvp-name').textContent = o.name || '';
+    p.querySelector('.wvp-name').dir = 'auto';
+    p.querySelector('.wvp-type').textContent = '· ' + (ext ? ext.slice(1).toUpperCase() : 'FILE');
+    const dl = p.querySelector('.wvp-dl');
+    dl.href = o.download || o.fileUrl || '#'; dl.setAttribute('download', o.downloadName || '');
+    dl.title = isAr ? 'تحميل' : 'Download';
+    p.querySelector('.wvp-wide').title = isAr ? 'تكبير' : 'Expand';
+    p.querySelector('.wvp-close').title = isAr ? 'إغلاق' : 'Close';
+    const body = p.querySelector('.wvp-body');
+    body.scrollTop = 0;
+    body.innerHTML = '<div class="wvp-msg"><div class="wvp-spin"></div>' +
+      (isAr ? 'جارٍ تجهيز المعاينة…' : 'Preparing the preview…') + '</div>';
+    p.hidden = false;
+    if (!p._wired) {
+      p._wired = true;
+      p.querySelector('.wvp-close').addEventListener('click', wvClosePanel);
+      p.querySelector('.wvp-wide').addEventListener('click', function () {
+        const app = document.getElementById('app'); if (app) app.classList.toggle('wvp-full');
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' && !p.hidden) wvClosePanel();
+      });
+    }
+    if (o.imageUrl) {
+      body.innerHTML = '';
+      const im0 = document.createElement('img'); im0.className = 'wvp-img'; im0.src = o.imageUrl; im0.alt = '';
+      body.appendChild(im0);
+      return true;
+    }
+    function fail() {
+      if (seq !== WV_PANEL_SEQ) return;
+      body.innerHTML = '<div class="wvp-msg">' + (isAr ? 'لا تتوفّر معاينةٌ لهذا الملفّ — يمكنك تحميله.'
+        : 'No preview for this file — you can download it.') + '</div>';
+    }
+    const req = o.metaBody
+      ? fetch('/api/pages', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(o.metaBody) })
+      : fetch(o.metaUrl);
+    req.then(function (r) { return r.json(); }).then(function (m) {
+      if (seq !== WV_PANEL_SEQ) return;
+      if (m && m.kind === 'image' && o.fileUrl) {
+        body.innerHTML = '';
+        const im = document.createElement('img'); im.className = 'wvp-img'; im.src = o.fileUrl; im.alt = '';
+        body.appendChild(im); return;
+      }
+      if (m && m.kind === 'html' && o.allowHtml && o.fileUrl) {
+        // صفحةٌ حيّة في إطارٍ معزول (بلا allow-same-origin؛ والخادمُ يرسل CSP)
+        body.innerHTML = '';
+        const fr = document.createElement('iframe');
+        fr.setAttribute('sandbox', 'allow-scripts allow-downloads'); fr.src = o.fileUrl;
+        body.appendChild(fr); return;
+      }
+      if (!m || !m.n || !m.id) { fail(); return; }
+      body.innerHTML = '';
+      const slides = m.kind === 'slides';
+      for (let i = 1; i <= m.n; i++) {
+        const pg = document.createElement('div'); pg.className = 'wvp-page';
+        const im = document.createElement('img'); im.alt = '';
+        im.loading = i <= 2 ? 'eager' : 'lazy';
+        if (m.w && m.h) { im.width = m.w; im.height = m.h; }
+        im.src = '/api/pages/img?id=' + encodeURIComponent(m.id) + '&n=' + i;
+        const num = document.createElement('span'); num.className = 'wvp-num';
+        num.textContent = (slides ? (isAr ? 'شريحة ' : 'Slide ') : (isAr ? 'صفحة ' : 'Page ')) + i + ' / ' + m.n;
+        pg.appendChild(im); pg.appendChild(num); body.appendChild(pg);
+      }
+    }).catch(fail);
+    return true;
+  }
+
   // ── المعاينةُ الكاملة عند الضغط: كلُّ الصفحات/الشرائح، وWord صفحةً مقروءة ──
   function wvRenderPreview(body, d, fallbackImg) {
     body.innerHTML = '';
@@ -4849,6 +5017,10 @@
   }
   // ملفٌّ فوق رسالةٍ أُرسلت
   function wvOpenUpload(chatId, a) {
+    if (wvOpenPanel({ name: a.name, fileUrl: wvUploadURL('file', chatId, a),
+                      download: wvUploadURL('file', chatId, a, true),
+                      metaUrl: '/api/pages?src=upload&chat=' + encodeURIComponent(chatId || '') +
+                        '&uid=' + encodeURIComponent(a.uid || '') + '&name=' + encodeURIComponent(a.name || '') })) return;
     const body = wvPreviewShell(a.name, wvUploadURL('file', chatId, a, true), '');
     if (wvIsImageType(a)) {
       body.innerHTML = '';
@@ -4864,6 +5036,15 @@
   function wvPreviewLocal(f) {
     let url = '';
     try { url = URL.createObjectURL(f); } catch (e) {}
+    if (wvIsImageType(f) && url) {
+      if (wvOpenPanel({ name: f.name, fileUrl: url, download: url, downloadName: f.name,
+                        imageUrl: url })) return;
+    } else if (document.getElementById('wvPanel')) {
+      wvReadOne(f).then(function (o) {
+        wvOpenPanel({ name: f.name, fileUrl: url, download: url, downloadName: f.name, metaBody: o });
+      });
+      return;
+    }
     const body = wvPreviewShell(f.name, url || '#', f.name);
     if (wvIsImageType(f) && url) {
       body.innerHTML = '';

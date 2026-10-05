@@ -1647,6 +1647,22 @@ def _preview_for(src):
         return {"kind": ""}
 
 
+# ── لوحةُ المعاينة الجانبيّة: صفحاتُ أيِّ ملفٍّ صوراً (web/page_render.py) ──
+_PAGE_CACHE = os.path.join(os.path.expanduser("~"), ".weaver-write", "page-cache")
+
+
+def _pages_meta(src, name, as_text=False):
+    """{"kind","n","id"} — الصفحاتُ تُرسم مرّةً وتُحفظ. لا يرفع."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import page_render as _pr
+        if as_text and _pr.kind_of(name) == "html":
+            name = name + ".txt"          # HTML مرفوعٌ: نصُّه، لا يعمل
+        return _pr.pages_for(src, _PAGE_CACHE, name)
+    except Exception as e:
+        return {"kind": "", "n": 0, "id": "", "error": type(e).__name__}
+
+
 def _uploads_remove(chat_id):
     d = _upload_dir(chat_id)
     if d and os.path.isdir(d):
@@ -2630,6 +2646,42 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if path == "/api/pages":
+            q = parse_qs(urlparse(self.path).query)
+            srcq = q.get("src", [""])[0]
+            if srcq == "upload":
+                nm = q.get("name", [""])[0]
+                fp = _upload_path(q.get("chat", [""])[0], q.get("uid", [""])[0], nm)
+                as_text = True
+            else:
+                nm = q.get("path", [""])[0]
+                fp = _safe_output_file(nm)
+                as_text = False
+            if not fp:
+                self._json({"kind": "", "n": 0, "error": "not_found"}, 404)
+                return
+            self._json(_pages_meta(fp, os.path.basename(nm), as_text))
+            return
+        if path == "/api/pages/img":
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import page_render as _pr
+                fp = _pr.page_path(_PAGE_CACHE, q.get("id", [""])[0], q.get("n", ["1"])[0])
+            except Exception:
+                fp = ""
+            if not fp:
+                self._json({"error": "not_found"}, 404)
+                return
+            with open(fp, "rb") as fh:
+                data = fh.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=604800, immutable")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path == "/api/uploads/view":
             q = parse_qs(urlparse(self.path).query)
             fp = _upload_path(q.get("chat", [""])[0], q.get("uid", [""])[0],
@@ -2943,6 +2995,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
             eid = str(body.get("id") or "").strip()
             items = [e for e in _cal_read() if str(e.get("id")) != eid]
             self._json({"ok": _cal_write(items)})
+            return
+
+        if path == "/api/pages":
+            # صفحاتُ ملفٍّ في حقل الإدخال قبل الإرسال: يُحفظ في مجلّد المعاينات
+            # باسم بصمة محتواه (فيُعاد استعمالُه)، ويُحذف مع القديم بعد أسبوع.
+            raw = _upload_raw(body if isinstance(body, dict) else {})
+            if not raw or len(raw) > _ATTACH_SAVE_MAX:
+                self._json({"kind": "", "n": 0})
+                return
+            try:
+                h = hashlib.sha1(raw).hexdigest()[:24]
+                d = os.path.join(_PAGE_CACHE, "u-" + h)
+                os.makedirs(d, exist_ok=True)
+                nm = _attach_safe_name(body.get("name"))
+                src = os.path.join(d, nm)
+                if not os.path.isfile(src):
+                    with open(src, "wb") as fh:
+                        fh.write(raw)
+                self._json(_pages_meta(src, nm, as_text=True))
+            except Exception as e:
+                self._json({"kind": "", "n": 0, "error": type(e).__name__})
             return
 
         if path == "/api/uploads/view":

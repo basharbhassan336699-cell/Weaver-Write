@@ -391,6 +391,17 @@ def _thumb_docx(src, dst):
     return _save(p.img, dst)
 
 
+def _slide_font(family, px, bold, text):
+    """خطُّ الشريحة كما في الملفّ (أو أقربُ بديل)، وحرفٌ لا يحمله ⟵ خطٌّ يحمله."""
+    try:
+        import docx_render as DR
+        path, _rb = DR._font_path(family, "ar" if _is_ar(text) else "lat", bold, False)
+        path, text = DR._cover(path, text)
+        return DR._pil_font(path, px, bold), text
+    except Exception:
+        return _font(px, bold), text
+
+
 def _rgb(color_fmt):
     try:
         if color_fmt is not None and color_fmt.type is not None and color_fmt.rgb is not None:
@@ -484,39 +495,71 @@ def _render_slide(prs, slide, W):
             continue
         if not getattr(s, "has_text_frame", False):
             continue
-        ty = y + 3
+        # الأسطرُ أوّلاً (بخطّ الملفّ نفسِه)، ثمّ موضعُها العموديّ (أعلى/وسط/أسفل)
+        laid = []
         for para in s.text_frame.paragraphs:
             txt = "".join(r.text for r in para.runs) or para.text
             if not txt.strip():
-                ty += 4
+                laid.append(None)
                 continue
-            size, bold, col = None, False, None
+            size, bold, col, fam = None, False, None, None
             for r in para.runs:
                 try:
                     if r.font.size:
                         size = r.font.size.pt
                     bold = bold or bool(r.font.bold)
                     col = col or _rgb(r.font.color)
+                    rp = r._r.find(_A + "rPr")
+                    if rp is not None and fam is None:
+                        for tg in (("cs", "latin") if _is_ar(txt) else ("latin", "cs")):
+                            e = rp.find(_A + tg)
+                            if e is not None and e.get("typeface") and \
+                                    not e.get("typeface").startswith("+"):
+                                fam = e.get("typeface")
+                                break
                 except Exception:
                     pass
             if size is None:
                 ph = getattr(s, "is_placeholder", False)
-                size = 36 if ph and ty < H * 0.35 else 18
+                size = 36 if ph and y < H * 0.35 else 18
             px = max(6, size * pt)
-            fnt = _font(px, bold)
+            fnt, txt = _slide_font(fam, px, bold, txt)
             al = None
             try:
                 a = para.alignment
                 al = {2: "center", 3: "right", 1: "left"}.get(int(a)) if a is not None else None
             except Exception:
                 al = None
-            for ln in _wrap(d, txt, fnt, max(10, w - 6), 6):
-                if ty + px * 1.2 > y + h + px * 2 or ty > H:
-                    break
-                _text(d, (x + 3, x + w - 3, ty), ln, fnt,
-                      col or ((240, 240, 240) if dark else (30, 30, 30)), al)
-                ty += px * 1.25
-                drew = True
+            for ln in _wrap(d, txt, fnt, max(10, w - 2 * 7.2 * k * 12700), 6):
+                laid.append((ln, fnt, col, al, px))
+        tot = sum((it[4] * 1.25 if it else 4) for it in laid)
+        anchor = None
+        try:
+            anchor = s.text_frame._txBody.find(_A + "bodyPr").get("anchor")
+        except Exception:
+            anchor = None
+        if anchor is None and getattr(s, "is_placeholder", False):
+            try:
+                anchor = "ctr" if "TITLE" in str(s.placeholder_format.type) else None
+            except Exception:
+                anchor = None
+        ty = y + 3.6 * k * 12700
+        if anchor == "ctr":
+            ty = y + max(0.0, (h - tot) / 2)
+        elif anchor == "b":
+            ty = y + max(0.0, h - tot - 3.6 * k * 12700)
+        inset = 7.2 * k * 12700
+        for it in laid:
+            if it is None:
+                ty += 4
+                continue
+            ln, fnt, col, al, px = it
+            if ty > H:
+                break
+            _text(d, (x + inset, x + w - inset, ty), ln, fnt,
+                  col or ((240, 240, 240) if dark else (30, 30, 30)), al)
+            ty += px * 1.25
+            drew = True
     if not drew:
         return None
     return img
