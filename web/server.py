@@ -1663,6 +1663,31 @@ def _pages_meta(src, name, as_text=False):
         return {"kind": "", "n": 0, "id": "", "error": type(e).__name__}
 
 
+def _live_tail(chat_id):
+    """قارئُ سجلّ الجلسة (لقطتُه الآن: ما قبل النوبة لا يُعرض) — أو None."""
+    try:
+        from pipeline.live_steps import Tail
+        t = Tail(chat_id)
+        return t if t.ok else None
+    except Exception:
+        return None
+
+
+def _live_pump(tail, emit, stop, every=0.6):
+    """اقرأ ما جدّ في سجلّ الجلسة وأرسله ({"t":"live","items":[…]}) حتى يُطلب
+    التوقّف — ثمّ قراءةٌ أخيرة كي لا تضيع آخرُ نتيجة. لا يرفع."""
+    while True:
+        done = stop.wait(every)
+        try:
+            items = tail.poll()
+        except Exception:
+            items = []
+        if items:
+            emit({"t": "live", "items": items})
+        if done:
+            return
+
+
 def _uploads_remove(chat_id):
     d = _upload_dir(chat_id)
     if d and os.path.isdir(d):
@@ -3080,13 +3105,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
             self.end_headers()
 
+            _sse_lock = threading.Lock()
+
             def sse(obj):
-                try:
-                    self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False)
-                                      + "\n\n").encode("utf-8"))
-                    self.wfile.flush()
-                except Exception:
-                    pass
+                # قفل: قارئُ الخطوات الحيّة يكتب من خيطٍ آخر أثناء النوبة
+                with _sse_lock:
+                    try:
+                        self.wfile.write(("data: " + json.dumps(obj, ensure_ascii=False)
+                                          + "\n\n").encode("utf-8"))
+                        self.wfile.flush()
+                    except Exception:
+                        pass
 
             if not msg:
                 sse({"t": "error", "message": "empty"})
@@ -3263,6 +3292,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     sse({"t": "done"})
                     return
                 _turn_tok = _turn_begin()
+                # الخطواتُ حيّةً: ما يفعله المحرّكُ يُرسل لحظةَ حدوثه
+                # (pipeline/live_steps.py)، بدل انتظار سجلّ النوبة بعد انتهائها.
+                _live_stop = threading.Event()
+                _live_th = None
+                if _eng_on and body.get("chatId"):
+                    _tail = _live_tail(body.get("chatId"))   # لقطةٌ قبل النوبة
+                    if _tail is not None:
+                        _live_th = threading.Thread(
+                            target=_live_pump, args=(_tail, sse, _live_stop),
+                            daemon=True)
+                        _live_th.start()
                 try:
                     r = _chat(msg, body.get("history"),
                               effort=body.get("effort", "medium"), context=ctx,
@@ -3270,6 +3310,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                               session=body.get("chatId"))
                 finally:
                     _overlapped = _turn_end(_turn_tok)
+                    _live_stop.set()
+                    if _live_th is not None:
+                        _live_th.join(timeout=3)
                 if r.get("error"):
                     if r.get("error") == "stopped":
                         pass

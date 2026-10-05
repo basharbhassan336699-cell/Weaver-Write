@@ -686,6 +686,115 @@
   }
   .fp-md { color: var(--text); }
   .fp-loading { color: var(--text-muted); text-align: center; padding: 30px; }
+  /* ══ عرضُ الأدوات حيّاً (Timeline) ══════════════════════════════════
+     داخل الرد: كلامُ النموذج بين الأدوات نصّاً عاديّاً، والأدواتُ سطوراً
+     مطويّة (أيقونة · وصف · ›). الجاريةُ الآن: نقاطٌ برتقاليّةٌ ونصٌّ يلمع.
+     وعند الضغط: نافذةُ «Summary» — خطٌّ زمنيٌّ بكلّ خطوة، وكلُّ أداةٍ تُفتح
+     تفاصيلُها. */
+  .msg.ai.wv-tl-on .tool-steps { display: none !important; }
+  .msg.ai.wv-wait .bubble { display: none; }
+  .wv-tl { display: flex; flex-direction: column; gap: 6px; margin: 2px 0 8px; }
+  .wv-tl[hidden] { display: none; }
+  .wv-tl-note { color: var(--text); line-height: 1.7; }
+  .wv-tl-note > :first-child { margin-top: 0; }
+  .wv-tl-note > :last-child { margin-bottom: 0; }
+  .wv-tl-note p { margin: 0 0 8px; }
+  .wv-tl-row {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    padding: 6px 2px; border: 0; background: transparent; cursor: pointer;
+    color: var(--text-muted); font: inherit; font-size: 14.5px; text-align: start;
+  }
+  .wv-tl-row:hover { color: var(--text); }
+  .wv-tl-row .wv-tl-ic { width: 20px; height: 20px; flex-shrink: 0; display: inline-flex;
+    align-items: center; justify-content: center; }
+  .wv-tl-row .wv-tl-ic svg { width: 18px; height: 18px; }
+  .wv-tl-lab { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wv-tl-chev { width: 16px; height: 16px; flex-shrink: 0; opacity: .7; }
+  [dir="rtl"] .wv-tl-chev, .wv-tl-row[dir="rtl"] .wv-tl-chev { transform: scaleX(-1); }
+  .wv-tl-err { color: #d9534f; }
+  /* محادثةٌ عربيّة: السطورُ من اليمين، والوصفُ الإنجليزيُّ يُحاذى يميناً بترتيبه */
+  .wv-tl[dir="rtl"] .wv-tl-lab, .wv-sheet[dir="rtl"] .wv-node-text,
+  .wv-sheet[dir="rtl"] .wv-sheet-title { text-align: right; }
+  .wv-tl[dir="ltr"] .wv-tl-lab, .wv-sheet[dir="ltr"] .wv-node-text { text-align: left; }
+  .wv-tl[dir="rtl"] .wv-tl-chev { transform: scaleX(-1); }
+  .wv-tl-sub { font-size: 13px; color: var(--text-dim, var(--text-muted)); padding-inline-start: 32px; margin-top: -4px; }
+  .wv-dots { display: inline-flex; gap: 3px; align-items: center; }
+  .wv-dots i { width: 5px; height: 5px; border-radius: 50%; background: #D97757;
+    animation: wvDot 1.2s infinite ease-in-out; }
+  .wv-dots i:nth-child(2) { animation-delay: .15s; }
+  .wv-dots i:nth-child(3) { animation-delay: .3s; }
+  @keyframes wvDot { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .wv-shimmer {
+    background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 35%,
+      var(--text) 50%, var(--text-muted) 65%, var(--text-muted) 100%);
+    background-size: 220% 100%; -webkit-background-clip: text; background-clip: text;
+    color: transparent; animation: wvShim 1.8s linear infinite;
+  }
+  @keyframes wvShim { from { background-position: 120% 0; } to { background-position: -120% 0; } }
+  /* النافذةُ السفلية: Summary */
+  .wv-sheet-bg { position: fixed; inset: 0; z-index: 500; background: rgba(0,0,0,.5);
+    display: flex; align-items: flex-end; justify-content: center; }
+  .wv-sheet-bg[hidden] { display: none; }
+  .wv-sheet {
+    width: 100%; max-width: 640px; height: 88vh; height: 88dvh; background: var(--surface);
+    border-radius: 22px 22px 0 0; display: flex; flex-direction: column; overflow: hidden;
+    box-shadow: 0 -6px 30px rgba(0,0,0,.35); animation: wvSheetIn .22s ease;
+  }
+  @keyframes wvSheetIn { from { transform: translateY(40px); opacity: .4; } to { transform: none; opacity: 1; } }
+  @media (min-width: 769px) {
+    .wv-sheet-bg { align-items: center; }
+    .wv-sheet { border-radius: 16px; height: 82vh; }
+  }
+  .wv-sheet-grip { width: 44px; height: 5px; border-radius: 3px; background: var(--border);
+    margin: 8px auto 0; flex-shrink: 0; }
+  .wv-sheet-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; flex-shrink: 0; }
+  .wv-sheet-title { flex: 1; text-align: center; font-weight: 600; font-size: 16px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; }
+  .wv-sheet-btn { width: 34px; height: 34px; border: 0; border-radius: 9px; background: transparent;
+    color: var(--text); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+  .wv-sheet-btn:hover { background: var(--surface-hover); }
+  .wv-sheet-btn svg { width: 20px; height: 20px; }
+  .wv-sheet-btn.ghost { visibility: hidden; }
+  .wv-sheet-body { flex: 1; overflow: auto; padding: 4px 18px 28px; -webkit-overflow-scrolling: touch; }
+  .wv-node { position: relative; display: flex; gap: 14px; padding: 9px 0; }
+  .wv-node::before { content: ""; position: absolute; inset-inline-start: 13px; top: 0; bottom: 0;
+    width: 1px; background: var(--border); }
+  .wv-node:first-child::before { top: 18px; }
+  .wv-node:last-child::before { bottom: calc(100% - 18px); }
+  .wv-node-mark { position: relative; z-index: 1; width: 27px; flex-shrink: 0; display: flex;
+    justify-content: center; padding-top: 2px; }
+  .wv-node-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--text-dim, #777);
+    margin-top: 6px; box-shadow: 0 0 0 4px var(--surface); }
+  .wv-node-dot.live { background: #D97757; animation: wvDot 1.2s infinite ease-in-out; }
+  .wv-node-icon { width: 27px; height: 27px; border-radius: 8px; background: var(--bg);
+    border: 1px solid var(--border); display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text); box-shadow: 0 0 0 4px var(--surface); }
+  .wv-node-icon svg { width: 15px; height: 15px; }
+  .wv-node-text { flex: 1; min-width: 0; color: var(--text); font-size: 15px; line-height: 1.6;
+    overflow-wrap: anywhere; }
+  .wv-node.note .wv-node-text { color: var(--text-muted); }
+  .wv-node.tool .wv-node-text { font-weight: 600; cursor: pointer; }
+  .wv-node.tool .wv-node-text:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .wv-node.think .wv-node-text { color: var(--text-muted); font-style: italic; font-size: 14px; }
+  .wv-det-sec { margin: 4px 0 16px; }
+  .wv-det-k { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .4px; }
+  .wv-det-pre { background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+    max-height: 55vh; overflow: auto; color: var(--text); margin: 0; }
+  .wv-det-pre .add { color: #3fa66b; } .wv-det-pre .del { color: #d9534f; }
+  .wv-det-res { display: flex; align-items: flex-start; gap: 12px; padding: 13px 2px;
+    border-bottom: 1px solid var(--border); text-decoration: none; color: var(--text); }
+  .wv-det-res:last-child { border-bottom: 0; }
+  .wv-det-res-t { font-size: 15px; line-height: 1.5; overflow: hidden; text-overflow: ellipsis;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .wv-det-res-s { font-size: 13px; color: var(--text-muted); margin-top: 3px; }
+  .wv-det-fav { width: 26px; height: 26px; border-radius: 50%; background: var(--bg);
+    border: 1px solid var(--border); flex-shrink: 0; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 12px; font-weight: 700; color: var(--text-muted); }
+  .wv-det-meta { font-size: 13px; color: var(--text-muted); margin: -4px 0 14px; }
+
   /* ── لوحةُ المعاينة الجانبيّة (Side panel) ──
      حاسوب: بجانب المحادثة (تنكمش المحادثة)، وزرُّ التكبير يملأ الشاشة.
      هاتف: تملأ الشاشة. والصفحاتُ صورٌ كما تُطبع، وعلى كلٍّ رقمُها. */
@@ -3627,6 +3736,7 @@
           box.appendChild(_um); return;
         }
         const el = makeAiMsg(m.content, m.tools);
+        if (m.timeline && m.timeline.length) { try { wvTlRestore(el, m.timeline); } catch (e) {} }
         box.appendChild(el);
         if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
         if (m.files && m.files.length) m.files.forEach(function (f) { addFileCard(el, f); });
@@ -4116,6 +4226,405 @@
     if (tools && tools.length) wvRenderTools(d.querySelector('.tool-steps'), tools);
     d.dataset.raw = text == null ? '' : String(text);
     return d;
+  }
+
+  // ══ عرضُ الأدوات حيّاً (Timeline) ══════════════════════════════════════
+  // يصل من الخادم {"t":"live","items":[…]} لحظةَ حدوث كلِّ خطوة
+  // (pipeline/live_steps.py): كلامُ النموذج بين الأدوات، والأداةُ حين تبدأ،
+  // ونتيجتُها حين تنتهي. داخل الرد: الكلامُ نصّاً، والأدواتُ سطوراً مطويّة؛
+  // وعند الضغط نافذةُ «Summary» بخطٍّ زمنيّ، وكلُّ أداةٍ تُفتح تفاصيلُها.
+  var WV_TL_SVG = {
+    search: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+    read: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+    skill: '<path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/>',
+    write: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 18v-6"/><path d="M9 15h6"/>',
+    edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>',
+    exec: '<path d="M4 17l6-6-6-6"/><path d="M12 19h8"/>',
+    list: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+    memory: '<path d="M19 21l-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
+    browser: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>',
+    image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+    other: '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+    clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    chev: '<path d="M9 18l6-6-6-6"/>',
+    back: '<path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>',
+    close: '<path d="M18 6L6 18"/><path d="M6 6l12 12"/>'
+  };
+  WV_TL_SVG.fetch = WV_TL_SVG.search;
+  function wvTlIcon(kind, cls) {
+    if (kind === 'think') return '<span class="wv-node-dot" style="margin:0"></span>';
+    return '<svg' + (cls ? ' class="' + cls + '"' : '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      (WV_TL_SVG[kind] || WV_TL_SVG.other) + '</svg>';
+  }
+  function wvTlAr() { return (document.documentElement.lang || 'en') === 'ar'; }
+  function wvTlBase(p) { return String(p || '').split(/[\\/]/).pop(); }
+  function wvTlPath(a) { return String((a && (a.path || a.file_path || a.file || a.filePath)) || ''); }
+  function wvTlKind(it) {
+    const n = it.name || '', a = it.args || {};
+    if (n === 'web_search') return 'search';
+    if (n === 'web_fetch') return 'fetch';
+    if (n === 'read') {
+      const p = wvTlPath(a);
+      if (/(^|\/)skills\/[^\/]+\/SKILL\.md$/i.test(p)) return 'skill';
+      if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(p)) return 'image';
+      return 'read';
+    }
+    if (n === 'write') return 'write';
+    if (n === 'edit' || n === 'apply_patch') return 'edit';
+    if (n === 'exec' || n === 'process' || n === 'bash') return 'exec';
+    if (n === 'ls') return 'list';
+    if (/^memory/.test(n)) return 'memory';
+    if (n === 'browser') return 'browser';
+    if (n === 'image') return 'image';
+    return 'other';
+  }
+  function wvTlCmd(c) { return String(c || '').trim().replace(/^(cd\s+[^;&|]+(&&|;)\s*)+/, ''); }
+  function wvTlExecLabel(it, ar) {
+    const a = it.args || {};
+    if (it.name === 'process') return ar ? 'تابع عمليةً جارية' : 'Checked a running process';
+    const c = wvTlCmd(a.command || a.cmd || '');
+    let m;
+    if ((m = c.match(/office\.py\s+build\b[\s\S]*?--out\s+("?)([^"\s]+)\1/))) return (ar ? 'بنى ' : 'Built ') + wvTlBase(m[2]);
+    if ((m = c.match(/office\.py\s+edit\s+("?)([^"\s]+)\1/))) return (ar ? 'عدّل ' : 'Edited ') + wvTlBase(m[2]);
+    if (/office\.py\s+chart\b/.test(c)) return ar ? 'أنشأ رسماً بيانياً' : 'Created a chart';
+    if ((m = c.match(/office\.py\s+info\s+("?)([^"\s]+)\1/))) return (ar ? 'فحص ' : 'Inspected ') + wvTlBase(m[2]);
+    if (/office\.py\s+fonts\b/.test(c)) return ar ? 'راجع الخطوط' : 'Checked fonts';
+    if ((m = c.match(/pdf_pages\.py\s+("?)([^"\s]+)\1/))) return (ar ? 'قرأ صفحات ' : 'Read pages of ') + wvTlBase(m[2]);
+    if (/integrity_check\.py/.test(c)) return ar ? 'تحقّق من سلامة الصياغة' : 'Checked the rewrite';
+    if (/plagiarism\.py/.test(c)) return ar ? 'فحص الاقتباس' : 'Checked for plagiarism';
+    if (/rewrite_ar\.py/.test(c)) return ar ? 'أعاد صياغة النص العربي' : 'Rewrote Arabic text';
+    if ((m = c.match(/python3?\s+-m\s+pipeline\.([A-Za-z_]+)/))) return (ar ? 'شغّل محرّك ' : 'Ran engine ') + m[1];
+    if (/^pandoc\b/.test(c)) return ar ? 'حوّل المستند (pandoc)' : 'Converted with pandoc';
+    if (a.description) return String(a.description);
+    return (ar ? 'نفّذ: ' : 'Ran: ') + c.split('\n')[0].slice(0, 80);
+  }
+  function wvTlLabel(it, ar) {
+    const a = it.args || {}, d = it.details || {}, k = wvTlKind(it);
+    const P = wvTlPath(a), f = wvTlBase(P) || P;
+    const q = a.query || a.q || '';
+    switch (k) {
+      case 'search': return ar ? 'بحث عن «' + q + '»' : 'Searched for “' + q + '”';
+      case 'fetch': return (ar ? 'جلب: ' : 'Fetched: ') + (d.title || a.url || '');
+      case 'skill': { const m = P.match(/skills\/([^\/]+)\/SKILL\.md$/i); return (ar ? 'قرأ مهارة: ' : 'Read skill: ') + (m ? m[1] : f); }
+      case 'image': return (ar ? 'شاهد ' : 'Viewed ') + f;
+      case 'read': return (ar ? 'قرأ ' : 'Read ') + f;
+      case 'write': return (d.created === false ? (ar ? 'كتب ' : 'Wrote ') : (ar ? 'أنشأ ' : 'Created ')) + f;
+      case 'edit': {
+        if (it.name === 'apply_patch') {
+          const fs = [], re = /\*\*\* (?:Add|Update|Delete) File: (.+)/g; let x;
+          const src = String(a.input || a.patch || '');
+          while ((x = re.exec(src))) fs.push(wvTlBase(x[1].trim()));
+          return (ar ? 'عدّل ' : 'Edited ') + (fs.join(ar ? '، ' : ', ') || (ar ? 'ملفات' : 'files'));
+        }
+        return (ar ? 'عدّل ' : 'Edited ') + f;
+      }
+      case 'exec': return wvTlExecLabel(it, ar);
+      case 'list': return (ar ? 'استعرض ' : 'Listed ') + ((f && f !== '.' && f !== './') ? f : (ar ? 'الملفات' : 'files'));
+      case 'memory': return it.name === 'memory_search'
+        ? (ar ? 'بحث في الذاكرة عن «' + q + '»' : 'Searched memory for “' + q + '”')
+        : (ar ? 'قرأ من الذاكرة' : 'Read memory');
+      case 'browser': return (ar ? 'المتصفّح: ' : 'Browser: ') + [a.action, a.url || a.targetUrl || ''].filter(Boolean).join(' ');
+    }
+    let first = '';
+    for (const key in a) { if (typeof a[key] === 'string') { first = a[key]; break; } }
+    return (it.name || 'tool') + (first ? ': ' + String(first).slice(0, 60) : '');
+  }
+  function wvTlSummary(tools, ar) {
+    const cnt = {}, order = [];
+    tools.forEach(function (t) { const k = wvTlKind(t); if (!cnt[k]) { cnt[k] = 0; order.push(k); } cnt[k]++; });
+    const EN = { search: ['searched the web', 'searched the web %d times'], fetch: ['opened a page', 'opened %d pages'],
+      read: ['read a file', 'read %d files'], skill: ['read a skill', 'read %d skills'], image: ['viewed an image', 'viewed %d images'],
+      write: ['created a file', 'created %d files'], edit: ['edited a file', 'edited %d files'], exec: ['ran a command', 'ran %d commands'],
+      list: ['listed files', 'listed files %d times'], memory: ['checked memory', 'checked memory %d times'],
+      browser: ['used the browser', 'used the browser %d times'], other: ['used a tool', 'used %d tools'] };
+    const AR = { search: 'بحث في الويب', fetch: 'فتح صفحات', read: 'قراءة ملفات', skill: 'قراءة مهارات', image: 'مشاهدة صور',
+      write: 'إنشاء ملفات', edit: 'تعديل ملفات', exec: 'تنفيذ أوامر', list: 'استعراض ملفات', memory: 'الذاكرة',
+      browser: 'المتصفّح', other: 'أدوات' };
+    const parts = order.map(function (k) {
+      return ar ? AR[k] + (cnt[k] > 1 ? ' (' + cnt[k] + ')' : '')
+                : (cnt[k] > 1 ? EN[k][1].replace('%d', cnt[k]) : EN[k][0]);
+    });
+    const s = parts.join(ar ? '، ' : ', ');
+    return ar ? s : s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  function wvTlInit(aiMsg) {
+    const wrap = aiMsg.querySelector('.msg-wrapper'), bubble = aiMsg.querySelector('.bubble');
+    let box = aiMsg.querySelector('.wv-tl');
+    if (!box) { box = document.createElement('div'); box.className = 'wv-tl'; box.hidden = true; wrap.insertBefore(box, bubble); }
+    const tl = { items: [], running: true, step: '', box: box, timer: 0 };
+    aiMsg._tl = tl;
+    tl.timer = setInterval(function () { if (tl.running) wvTlRender(aiMsg); else clearInterval(tl.timer); }, 5000);
+    return tl;
+  }
+  function wvTlStep(aiMsg, label) {
+    const tl = aiMsg._tl; if (!tl) return;
+    // «التفكير» العامّة ⟵ بلغة الواجهة كبقيّة السطور؛ وغيرُها (بحثٌ حيّ…) كما هي
+    tl.step = /^(التفكير|Thinking)$/.test(String(label || '').trim()) ? '' : (label || '');
+    wvTlRender(aiMsg);
+  }
+  // اتّجاهُ الخطّ الزمنيّ من لغة المحادثة (كلامُ النموذج أو رسالةُ المستخدم)
+  function wvTlRtl(aiMsg) {
+    const tl = aiMsg._tl;
+    const note = tl && tl.items.filter(function (x) { return x.k !== 'tool'; })[0];
+    let sample = note ? note.text : '';
+    if (!sample) {
+      let el = aiMsg.previousElementSibling;
+      while (el && !(el.classList && el.classList.contains('user'))) el = el.previousElementSibling;
+      sample = el ? (el.dataset.raw || el.textContent || '') : '';
+    }
+    return /[؀-ۿ]/.test(sample);
+  }
+  function wvTlApply(aiMsg, items) {
+    const tl = aiMsg._tl || wvTlInit(aiMsg);
+    (items || []).forEach(function (e) {
+      if (e.k === 'note' || e.k === 'think') { tl.items.push({ k: e.k, text: e.text || '' }); }
+      else if (e.k === 'call') { tl.items.push({ k: 'tool', id: e.id, name: e.name, args: e.args || {}, status: 'running', t0: Date.now() }); }
+      else if (e.k === 'result') {
+        let t = null;
+        for (let i = tl.items.length - 1; i >= 0; i--) { const x = tl.items[i]; if (x.k === 'tool' && x.id === e.id) { t = x; break; } }
+        if (!t) { t = { k: 'tool', id: e.id, name: e.name, args: {}, t0: Date.now() }; tl.items.push(t); }
+        t.status = e.ok === false ? 'err' : 'ok'; t.text = e.text || ''; t.details = e.details || {};
+      }
+    });
+    wvTlRender(aiMsg); wvTlSheetRefresh(aiMsg);
+  }
+  function wvTlFinish(aiMsg) {
+    const tl = aiMsg._tl; if (!tl || !tl.running) return;
+    tl.running = false; clearInterval(tl.timer);
+    tl.items.forEach(function (x) { if (x.k === 'tool' && x.status === 'running') x.status = 'ok'; });
+    if (!tl.items.length) aiMsg.classList.remove('wv-tl-on');   // لا خطوات حيّة ⟵ العرضُ القديم
+    wvTlRender(aiMsg); wvTlSheetRefresh(aiMsg);
+  }
+  function wvTlHasItems(aiMsg) { return !!(aiMsg._tl && aiMsg._tl.items.length); }
+  function wvTlGroups(items) {
+    const out = []; let g = null;
+    items.forEach(function (it, i) {
+      if (it.k === 'note') { g = null; out.push({ note: it, i: i }); }
+      else { if (!g) { g = { tools: [], i: i }; out.push(g); } g.tools.push(it); }
+    });
+    return out;
+  }
+  function wvTlRender(aiMsg) {
+    const tl = aiMsg._tl; if (!tl) return;
+    const box = tl.box, ar = wvTlAr();
+    const groups = wvTlGroups(tl.items);
+    box.dir = wvTlRtl(aiMsg) ? 'rtl' : 'ltr';
+    box.innerHTML = '';
+    groups.forEach(function (g) {
+      if (g.note) {
+        const d = document.createElement('div'); d.className = 'wv-tl-note'; d.dir = 'auto';
+        d.innerHTML = renderMarkdown(g.note.text); box.appendChild(d); return;
+      }
+      const tools = g.tools.filter(function (x) { return x.k === 'tool'; });
+      const run = tools.filter(function (x) { return x.status === 'running'; }).pop();
+      const row = document.createElement('button'); row.type = 'button'; row.className = 'wv-tl-row';
+      let ic, lab, err = '';
+      if (run && tl.running) {
+        ic = '<span class="wv-dots"><i></i><i></i><i></i></span>';
+        lab = '<span class="wv-shimmer">' + wvEsc(wvTlLabel(run, ar)) + '</span>';
+      } else if (tools.length === 1) {
+        ic = wvTlIcon(wvTlKind(tools[0])); lab = wvEsc(wvTlLabel(tools[0], ar));
+        if (tools[0].status === 'err') err = ' wv-tl-err';
+      } else if (!tools.length) {
+        ic = wvTlIcon('think'); lab = wvEsc(ar ? 'فكّر' : 'Thought');
+      } else {
+        ic = wvTlIcon('clock'); lab = wvEsc(wvTlSummary(tools, ar));
+      }
+      row.innerHTML = '<span class="wv-tl-ic' + err + '">' + ic + '</span><span class="wv-tl-lab' + err + '" dir="auto">' +
+        lab + '</span>' + wvTlIcon('chev', 'wv-tl-chev');
+      row.addEventListener('click', function () { wvTlOpenSheet(aiMsg, g.i); });
+      box.appendChild(row);
+      if (run && tl.running && Date.now() - (run.t0 || Date.now()) > 20000) {
+        const sub = document.createElement('div'); sub.className = 'wv-tl-sub';
+        sub.textContent = ar ? 'ما زال يعمل…' : 'Still working on it…'; box.appendChild(sub);
+      }
+    });
+    const anyRun = tl.items.some(function (x) { return x.k === 'tool' && x.status === 'running'; });
+    if (tl.running && !anyRun) {
+      const row = document.createElement('button'); row.type = 'button'; row.className = 'wv-tl-row';
+      row.innerHTML = '<span class="wv-tl-ic"><span class="wv-dots"><i></i><i></i><i></i></span></span>' +
+        '<span class="wv-tl-lab" dir="auto"><span class="wv-shimmer">' + wvEsc(tl.step || (ar ? 'يفكّر' : 'Thinking')) + '</span></span>';
+      row.addEventListener('click', function () { wvTlOpenSheet(aiMsg, -1); });
+      box.appendChild(row);
+    }
+    box.hidden = !box.childNodes.length;
+  }
+  function wvTlCut(v, n) {
+    if (typeof v === 'string') return v.length > n ? v.slice(0, n) + '…' : v;
+    if (Array.isArray(v)) return v.slice(0, 30).map(function (x) { return wvTlCut(x, n); });
+    if (v && typeof v === 'object') { const o = {}; Object.keys(v).slice(0, 30).forEach(function (k) { o[k] = wvTlCut(v[k], n); }); return o; }
+    return v;
+  }
+  // يُحفظ مع الرسالة (مختصراً) فيعود كما كان عند فتح المحادثة
+  function wvTlSave(aiMsg) {
+    const tl = aiMsg._tl; if (!tl || !tl.items.length) return null;
+    return tl.items.map(function (x) {
+      if (x.k !== 'tool') return { k: x.k, text: String(x.text || '').slice(0, 3000) };
+      return { k: 'tool', id: x.id, name: x.name, args: wvTlCut(x.args || {}, 2000),
+               status: x.status === 'running' ? 'ok' : x.status, text: String(x.text || '').slice(0, 3000),
+               details: wvTlCut(x.details || {}, 2000) };
+    });
+  }
+  function wvTlRestore(aiMsg, items) {
+    const tl = wvTlInit(aiMsg);
+    tl.items = (items || []).map(function (x) { return Object.assign({}, x); });
+    tl.running = false; clearInterval(tl.timer);
+    aiMsg.classList.add('wv-tl-on');
+    wvTlRender(aiMsg);
+  }
+
+  // ── نافذةُ «Summary» ──
+  var WV_SHEET = null;
+  function wvTlSheetEl() {
+    if (WV_SHEET) return WV_SHEET;
+    const bg = document.createElement('div'); bg.className = 'wv-sheet-bg'; bg.hidden = true;
+    bg.innerHTML = '<div class="wv-sheet" role="dialog"><div class="wv-sheet-grip"></div>' +
+      '<div class="wv-sheet-head"><button class="wv-sheet-btn wv-sh-back ghost" type="button"></button>' +
+      '<div class="wv-sheet-title"></div><button class="wv-sheet-btn wv-sh-close" type="button">' + wvTlIcon('close') + '</button></div>' +
+      '<div class="wv-sheet-body"></div></div>';
+    document.body.appendChild(bg);
+    bg.addEventListener('click', function (e) { if (e.target === bg) wvTlCloseSheet(); });
+    bg.querySelector('.wv-sh-close').addEventListener('click', wvTlCloseSheet);
+    bg.querySelector('.wv-sh-back').addEventListener('click', function () {
+      if (bg._st) { bg._st.detail = null; wvTlSheetPaint(true); }
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || bg.hidden) return;
+      if (bg._st && bg._st.detail) { bg._st.detail = null; wvTlSheetPaint(true); } else wvTlCloseSheet();
+    });
+    WV_SHEET = bg; return bg;
+  }
+  function wvTlOpenSheet(aiMsg, focus) {
+    if (!aiMsg._tl) return;
+    const bg = wvTlSheetEl(); bg._st = { msg: aiMsg, detail: null, focus: focus }; bg.hidden = false;
+    wvTlSheetPaint(true);
+  }
+  function wvTlCloseSheet() { if (WV_SHEET) { WV_SHEET.hidden = true; WV_SHEET._st = null; } }
+  function wvTlSheetRefresh(aiMsg) {
+    if (WV_SHEET && !WV_SHEET.hidden && WV_SHEET._st && WV_SHEET._st.msg === aiMsg) wvTlSheetPaint(false);
+  }
+  function wvTlSheetPaint(jump) {
+    const bg = WV_SHEET, st = bg && bg._st; if (!st) return;
+    const tl = st.msg._tl, ar = wvTlAr();
+    const sheet = bg.querySelector('.wv-sheet'), body = bg.querySelector('.wv-sheet-body');
+    const title = bg.querySelector('.wv-sheet-title'), back = bg.querySelector('.wv-sh-back');
+    // اتّجاهُ النافذة من لغة الخطوات نفسِها (عربيّة ⟵ من اليمين)
+    sheet.dir = wvTlRtl(st.msg) ? 'rtl' : 'ltr';
+    if (st.detail) {
+      back.classList.remove('ghost'); back.innerHTML = wvTlIcon('back');
+      if (sheet.dir === 'rtl') back.firstChild.style.transform = 'scaleX(-1)';
+      title.textContent = wvTlLabel(st.detail, ar); title.dir = 'auto';
+      if (jump !== false || !body._det) { body.innerHTML = ''; wvTlDetail(body, st.detail, ar); body.scrollTop = 0; body._det = st.detail; }
+      return;
+    }
+    body._det = null;
+    back.classList.add('ghost'); back.innerHTML = '';
+    title.textContent = ar ? 'الملخّص' : 'Summary'; title.dir = 'auto';
+    const keep = body.scrollTop; body.innerHTML = '';
+    tl.items.forEach(function (it, i) {
+      const n = document.createElement('div'); n.dataset.i = i;
+      if (it.k === 'tool') {
+        n.className = 'wv-node tool';
+        const running = it.status === 'running' && tl.running;
+        n.innerHTML = '<div class="wv-node-mark">' + (running ? '<span class="wv-node-dot live"></span>'
+          : '<span class="wv-node-icon">' + wvTlIcon(wvTlKind(it)) + '</span>') + '</div><div class="wv-node-text" dir="auto"></div>';
+        const t = n.querySelector('.wv-node-text');
+        t.textContent = wvTlLabel(it, ar) + (it.status === 'err' ? (ar ? ' — تعذّر' : ' — failed') : '');
+        if (running) t.classList.add('wv-shimmer');
+        if (it.status === 'err') t.classList.add('wv-tl-err');
+        t.addEventListener('click', function () { st.detail = it; wvTlSheetPaint(true); });
+      } else {
+        n.className = 'wv-node ' + (it.k === 'think' ? 'think' : 'note');
+        n.innerHTML = '<div class="wv-node-mark"><span class="wv-node-dot"></span></div><div class="wv-node-text" dir="auto"></div>';
+        n.querySelector('.wv-node-text').textContent = it.k === 'think' ? String(it.text || '').slice(0, 500) : it.text;
+      }
+      body.appendChild(n);
+    });
+    if (tl.running && !tl.items.some(function (x) { return x.k === 'tool' && x.status === 'running'; })) {
+      const n = document.createElement('div'); n.className = 'wv-node note';
+      n.innerHTML = '<div class="wv-node-mark"><span class="wv-node-dot live"></span></div>' +
+        '<div class="wv-node-text" dir="auto"><span class="wv-shimmer">' + wvEsc(tl.step || (ar ? 'يفكّر' : 'Thinking')) + '</span></div>';
+      body.appendChild(n);
+    }
+    if (!body.childNodes.length) body.innerHTML = '<div class="wvp-msg">' + (ar ? 'لا خطوات بعد.' : 'No steps yet.') + '</div>';
+    if (jump && st.focus >= 0) {
+      const el = body.querySelector('[data-i="' + st.focus + '"]');
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center' });
+    } else if (!jump) body.scrollTop = keep;
+  }
+  // تفاصيلُ أداةٍ واحدة
+  function wvTlDetail(body, it, ar) {
+    const a = it.args || {}, d = it.details || {}, k = wvTlKind(it);
+    function sec(label, node) {
+      const s = document.createElement('div'); s.className = 'wv-det-sec';
+      if (label) { const h = document.createElement('div'); h.className = 'wv-det-k'; h.textContent = label; s.appendChild(h); }
+      s.appendChild(node); body.appendChild(s);
+    }
+    function pre(text, diff) {
+      const p = document.createElement('pre'); p.className = 'wv-det-pre'; p.dir = 'auto';
+      if (diff) {
+        String(text).split('\n').forEach(function (l) {
+          const sp = document.createElement('span');
+          if (/^\+(?!\+\+)/.test(l)) sp.className = 'add'; else if (/^-(?!--)/.test(l)) sp.className = 'del';
+          sp.textContent = l + '\n'; p.appendChild(sp);
+        });
+      } else p.textContent = String(text == null ? '' : text);
+      return p;
+    }
+    function meta(t) { if (!t) return; const m = document.createElement('div'); m.className = 'wv-det-meta'; m.dir = 'auto'; m.textContent = t; body.appendChild(m); }
+    if (it.status === 'running') meta(ar ? 'يعمل الآن…' : 'Running…');
+    if (it.status === 'err') meta(ar ? 'تعذّرت هذه الخطوة.' : 'This step failed.');
+    if (k === 'search') {
+      const res = d.results || [];
+      if (!res.length) { if (it.text) sec('', pre(it.text)); else meta(ar ? 'لا نتائج.' : 'No results.'); return; }
+      res.forEach(function (r) {
+        const el = document.createElement('a'); el.className = 'wv-det-res'; el.href = r.url || '#';
+        el.target = '_blank'; el.rel = 'noopener noreferrer';
+        el.innerHTML = '<span class="wv-det-fav"></span><span style="min-width:0;flex:1"><div class="wv-det-res-t" dir="auto"></div><div class="wv-det-res-s" dir="auto"></div></span>';
+        const site = String(r.site || '');
+        el.querySelector('.wv-det-fav').textContent = (site.replace(/^www\./, '')[0] || '•').toUpperCase();
+        el.querySelector('.wv-det-res-t').textContent = r.title || r.url || '';
+        el.querySelector('.wv-det-res-s').textContent = site;
+        body.appendChild(el);
+      });
+      return;
+    }
+    if (k === 'fetch') {
+      const u = d.finalUrl || d.url || a.url || '';
+      if (u) { const l = document.createElement('a'); l.href = u; l.target = '_blank'; l.rel = 'noopener noreferrer'; l.textContent = u; l.style.wordBreak = 'break-all'; sec(ar ? 'الرابط' : 'URL', l); }
+      if (it.text) sec(ar ? 'المحتوى' : 'Content', pre(it.text));
+      return;
+    }
+    if (k === 'exec') {
+      if (it.name !== 'process') sec(ar ? 'الأمر' : 'Command', pre(a.command || a.cmd || ''));
+      else sec(ar ? 'المدخلات' : 'Input', pre(JSON.stringify(a, null, 2)));
+      const parts = [];
+      if (d.exitCode != null) parts.push((ar ? 'رمز الخروج: ' : 'Exit code: ') + d.exitCode);
+      if (d.durationMs != null) parts.push((d.durationMs / 1000).toFixed(1) + (ar ? ' ث' : ' s'));
+      meta(parts.join(' · '));
+      if (it.text) sec(ar ? 'المخرجات' : 'Output', pre(it.text));
+      return;
+    }
+    if (k === 'write') { meta(wvTlPath(a)); sec(ar ? 'المحتوى' : 'Content', pre(a.content != null ? a.content : (it.text || ''))); return; }
+    if (k === 'edit') {
+      meta(wvTlPath(a));
+      const diff = d.patch || d.diff || a.input || '';
+      if (diff) sec(ar ? 'التغييرات' : 'Changes', pre(diff, true));
+      else if (Array.isArray(a.edits)) a.edits.forEach(function (e) {
+        sec(ar ? 'قبل' : 'Before', pre(e.oldText || e.old_string || '')); sec(ar ? 'بعد' : 'After', pre(e.newText || e.new_string || ''));
+      });
+      else {
+        if (a.oldText || a.old_string) sec(ar ? 'قبل' : 'Before', pre(a.oldText || a.old_string));
+        if (a.newText || a.new_string) sec(ar ? 'بعد' : 'After', pre(a.newText || a.new_string));
+      }
+      if (it.text) sec(ar ? 'النتيجة' : 'Result', pre(it.text));
+      return;
+    }
+    if (k === 'read' || k === 'skill' || k === 'image' || k === 'list') {
+      meta(wvTlPath(a)); if (it.text) sec('', pre(it.text)); return;
+    }
+    sec(ar ? 'المدخلات' : 'Input', pre(JSON.stringify(a, null, 2)));
+    if (it.text) sec(ar ? 'النتيجة' : 'Result', pre(it.text));
   }
 
   // Redo the last exchange: drop this AI reply and its user message, then
@@ -4623,6 +5132,9 @@
       const wvCtrl = (typeof AbortController === 'function') ? new AbortController() : null;
       aiMsg._wvAbort = wvCtrl;
       wvInflightAdd(sendChatId, aiMsg);
+      // الخطواتُ حيّةً: سطرُ «يفكّر…» الآن، ثمّ كلُّ أداةٍ لحظةَ بدئها
+      wvTlInit(aiMsg);
+      aiMsg.classList.add('wv-tl-on', 'wv-wait');
 
       let assistantRaw = '';  // raw markdown to persist (so reloads re-render)
       let assistantFile = '';  // produced file name (for the artifacts card)
@@ -4643,6 +5155,7 @@
       }
       function applyReply(reply) {
         gotReply = true;
+        aiMsg.classList.remove('wv-wait'); wvTlFinish(aiMsg);
         streaming = false;
         if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch (e) {} streamRAF = 0; }
         if (reply) { assistantRaw = reply; bubble.innerHTML = renderMarkdown(reply); }
@@ -4653,17 +5166,18 @@
       }
       function handleEvent(ev) {
         if (!ev || !ev.t) return;
-        if (ev.t === 'step') { stepsAdd(ev.label); }
+        if (ev.t === 'step') { stepsAdd(ev.label); wvTlStep(aiMsg, ev.label); }
+        else if (ev.t === 'live') { wvTlApply(aiMsg, ev.items); }
         else if (ev.t === 'tool') { stepsTool(ev.tool); if (ev.tool && ev.tool.kind === 'engine' && ev.tool.status !== 'err') engineTurn = true; }
         else if (ev.t === 'detail') { stepsDetail(ev.detail); }
         // ملفٌّ إضافيٌّ كتبه الوكيلُ في النوبة نفسِها (الأوّلُ يأتي مع الجواب)
         else if (ev.t === 'file') { if (ev.path) { addFileCard(aiMsg, ev.path); extraFiles.push(wvBasename(ev.path)); } }
         // LIVE STREAM: show the reply as it is written (like OpenClaw).
-        else if (ev.t === 'delta_start') { streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
+        else if (ev.t === 'delta_start') { aiMsg.classList.remove('wv-wait'); streaming = true; streamBuf = ''; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.innerHTML = ''; }
         else if (ev.t === 'delta') { if (streaming) { streamBuf += (ev.detail || ''); if (!streamRAF) streamRAF = requestAnimationFrame(renderStreamLive); } }
         else if (ev.t === 'reply') { stepsFinishAll(); applyReply(ev.reply); if (ev.output_path) { addFileCard(aiMsg, ev.output_path); assistantFile = wvBasename(ev.output_path); if (currentChatId === sendChatId) currentActiveFile = ev.output_path; if (typeof wvOfferCalendar === 'function') wvOfferCalendar(text, sendChatId, aiMsg); } }
-        else if (ev.t === 'error') { stepsFinishAll(); streaming = false; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
-        else if (ev.t === 'done') { stepsFinishAll(); }
+        else if (ev.t === 'error') { aiMsg.classList.remove('wv-wait'); wvTlFinish(aiMsg); stepsFinishAll(); streaming = false; if (streamRAF) { try { cancelAnimationFrame(streamRAF); } catch(e){} streamRAF = 0; } bubble.textContent = (isAr ? 'خطأ: ' : 'Error: ') + (ev.message || ''); }
+        else if (ev.t === 'done') { stepsFinishAll(); wvTlFinish(aiMsg); }
       }
       try {
         const effortEl = document.getElementById('effortSelect');
@@ -4671,8 +5185,8 @@
         // في النافذة السفلية، وقد تبلغ آلافَ الأحرف — فإرسالُها يزدحم
         // بها السياقُ ويُدفع ثمنُها في كلّ رسالة بلا فائدة.
         const history = currentMessages.slice(0, -1).slice(-200).map(function (m) {
-          if (!m || (!m.tools && !m.attachments)) return m;
-          var c = {}; for (var k in m) if (k !== 'tools' && k !== 'attachments') c[k] = m[k];
+          if (!m || (!m.tools && !m.attachments && !m.timeline)) return m;
+          var c = {}; for (var k in m) if (k !== 'tools' && k !== 'attachments' && k !== 'timeline') c[k] = m[k];
           return c;
         });
         const files = filesToSend.length ? await readAttachedFiles(filesToSend) : [];
@@ -4698,7 +5212,9 @@
           }
         }
         if (!gotReply) bubble.textContent = (isAr ? '(لا يوجد رد)' : '(no reply)');
+        aiMsg.classList.remove('wv-wait'); wvTlFinish(aiMsg);
       } catch (err) {
+        aiMsg.classList.remove('wv-wait'); wvTlFinish(aiMsg);
         stepsFinishAll();
         if (aiMsg._wvStopped) {
           // أوقفه المستخدم: ما كُتب حتى الآن يبقى، ومعه علامةُ الإيقاف.
@@ -4734,7 +5250,10 @@
       // تجهيزُها ٣١ ثانيةً على الهاتف، والمجرى إن انقطع أضاعها. والعلامةُ
       // «معلّقة» تُحفظ مع الرسالة، فإن أُغلقت الصفحةُ قبل وصولها طُلبت
       // حين تُفتح المحادثةُ مرّةً أخرى.
-      if (engineTurn) amsg.toolsPending = { since: sentAt, tries: 0 };
+      // الخطواتُ الحيّة تُحفظ مع الرسالة؛ وحينها لا يُطلب سجلُّ النوبة البطيء
+      const wvTlSaved = wvTlSave(aiMsg);
+      if (wvTlSaved) amsg.timeline = wvTlSaved;
+      if (engineTurn && !wvTlSaved) amsg.toolsPending = { since: sentAt, tries: 0 };
       if (currentChatId === sendChatId) {
         currentMessages.push(amsg);
         saveCurrentChat();
@@ -4743,7 +5262,7 @@
         // انتقلتَ إلى محادثةٍ أخرى: يُحفَظ في محادثته هو، ولا تُمَسّ المفتوحة.
         await wvAppendToChat(sendChatId, amsg);
       }
-      if (engineTurn && typeof wvLoadTurnTools === 'function') {
+      if (engineTurn && !wvTlSaved && typeof wvLoadTurnTools === 'function') {
         wvLoadTurnTools(sendChatId, amsg, function () { wvRenderTools(stepsBox, amsg.tools); });
       }
     })();
