@@ -19,6 +19,8 @@ weaver_memory.db
 outputs/
 # saved chats/messages (persist on disk, never committed or wiped by updates)
 config/chats/
+# uploaded files of each chat (shown with their message)
+config/uploads/
 
 # ── OS / editor noise ──
 .DS_Store

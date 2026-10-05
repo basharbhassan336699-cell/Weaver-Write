@@ -28,6 +28,7 @@ import socketserver
 import re
 import time
 import base64
+import shutil
 import hashlib
 import secrets
 import urllib.parse
@@ -1541,6 +1542,110 @@ def _attach_save(files, chat_id):
     return out
 
 
+# ── الملفّاتُ المرفوعة تُعرض مع رسالتها — وتبقى ─────────────────────────
+#
+# كانت الواجهةُ تكتب «📎 اسم الملف» داخل الفقاعة ولا تحفظه مع الرسالة، فيختفي
+# عند الانتقال إلى محادثةٍ أخرى. والملفُّ نفسُه لم يكن يُحفظ إلا في مسار
+# المحرّك. الآن: كلُّ ملفٍّ مرفوعٍ يُحفظ لمحادثته هنا (في كلِّ المسارات)،
+# والرسالةُ تحفظ اسمَه ورقمَه، وصورتُه المصغّرةُ تُرسم ممّا فيه (web/thumbs.py).
+_UPLOADS_DIR = os.path.join(_ROOT, "config", "uploads")
+
+
+def _upload_dir(chat_id, create=False):
+    k = re.sub(r"[^A-Za-z0-9_-]", "-", str(chat_id or "").strip())[:48]
+    if not k.strip("-"):
+        return ""
+    d = os.path.join(_UPLOADS_DIR, k)
+    if create:
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            return ""
+    return d
+
+
+def _upload_key(uid, name):
+    u = re.sub(r"[^A-Za-z0-9_-]", "", str(uid or ""))[:32]
+    n = _attach_safe_name(name)
+    return (u + "-" + n) if u else n
+
+
+def _upload_raw(f):
+    """محتوى ملفٍّ مرفوعٍ كما أرسلته الواجهة (dataURL أو نصّ) ⟵ bytes أو None."""
+    if f.get("data"):
+        try:
+            return base64.b64decode(str(f["data"]).split(",")[-1])
+        except Exception:
+            return None
+    if isinstance(f.get("text"), str) and f["text"] \
+            and not f["text"].startswith(_ATTACH_TOO_BIG):
+        return f["text"].encode("utf-8")
+    return None
+
+
+def _uploads_store(files, chat_id):
+    """احفظ ما رُفع مع الرسالة في config/uploads/<المحادثة>/. لا يرفع."""
+    d = _upload_dir(chat_id, create=True)
+    if not d:
+        return []
+    out = []
+    for f in [x for x in (files or [])[:5] if isinstance(x, dict)]:
+        raw = _upload_raw(f)
+        if not raw or len(raw) > _ATTACH_SAVE_MAX:
+            continue
+        key = _upload_key(f.get("uid"), f.get("name"))
+        try:
+            dst = os.path.join(d, key)
+            if not os.path.isfile(dst):
+                with open(dst, "wb") as fh:
+                    fh.write(raw)
+            out.append(key)
+        except Exception:
+            continue
+    return out
+
+
+def _upload_path(chat_id, uid, name):
+    d = _upload_dir(chat_id)
+    if not d:
+        return ""
+    fp = os.path.join(d, _upload_key(uid, name))
+    try:
+        if os.path.realpath(fp).startswith(os.path.realpath(d) + os.sep) \
+                and os.path.isfile(fp):
+            return fp
+    except Exception:
+        pass
+    return ""
+
+
+def _thumb_for(src, cache_dir):
+    """صورةٌ مصغّرةٌ لـsrc (تُحفظ وتُعاد) ⟵ (bytes، النوع) أو (None، "")."""
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        dst = os.path.join(cache_dir, os.path.basename(src) + ".img")
+        if not (os.path.isfile(dst) and
+                os.path.getmtime(dst) >= os.path.getmtime(src)):
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import thumbs as _th
+            if not _th.make_thumb(src, dst):
+                return None, ""
+        with open(dst, "rb") as fh:
+            data = fh.read()
+        return data, ("image/jpeg" if data[:2] == b"\xff\xd8" else "image/png")
+    except Exception:
+        return None, ""
+
+
+def _uploads_remove(chat_id):
+    d = _upload_dir(chat_id)
+    if d and os.path.isdir(d):
+        try:
+            shutil.rmtree(d)
+        except Exception:
+            pass
+
+
 def _attach_saved_note(paths, isar):
     """سطرٌ يسبق المرفقات: أين الملفُّ نفسُه، ليعمل عليه النموذج."""
     if not paths:
@@ -2515,6 +2620,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if path in ("/api/uploads/thumb", "/api/uploads/file"):
+            q = parse_qs(urlparse(self.path).query)
+            fp = _upload_path(q.get("chat", [""])[0], q.get("uid", [""])[0],
+                              q.get("name", [""])[0])
+            if not fp:
+                self._json({"error": "not_found"}, 404)
+                return
+            if path == "/api/uploads/thumb":
+                data, ctype = _thumb_for(fp, os.path.join(os.path.dirname(fp),
+                                                          ".thumbs"))
+                if not data:
+                    self._json({"error": "no_thumb"}, 404)
+                    return
+                inline = True
+            else:
+                try:
+                    with open(fp, "rb") as fh:
+                        data = fh.read()
+                except OSError:
+                    self._json({"error": "read_failed"}, 500)
+                    return
+                ext = os.path.splitext(fp)[1].lower()
+                ctype = _MIME.get(ext, "application/octet-stream")
+                # يُعرض داخل الصفحة: الصورُ (عدا svg) وPDF فقط. وغيرُها تنزيل —
+                # ملفُّ HTML مرفوعٌ لا يعمل داخل التطبيق.
+                inline = (ctype.split(";")[0] in ("image/png", "image/jpeg",
+                                                  "image/gif", "image/webp",
+                                                  "application/pdf")
+                          and q.get("download", ["0"])[0] not in ("1", "true"))
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if not inline:
+                fn = urllib.parse.quote(os.path.basename(fp).split("-", 1)[-1]
+                                        if "-" in os.path.basename(fp) else
+                                        os.path.basename(fp))
+                self.send_header("Content-Disposition",
+                                 f"attachment; filename*=UTF-8''{fn}")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if path == "/api/chats":
             self._json({"chats": _chats_index()})
             return
@@ -2700,6 +2848,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/api/chats/delete":
             _chat_remove((body.get("id") or "").strip())
+            _uploads_remove((body.get("id") or "").strip())
             self._json({"ok": True})
             return
         if path == "/api/windows/save":
@@ -2777,6 +2926,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"ok": _cal_write(items)})
             return
 
+        if path == "/api/uploads/preview":
+            # صورةٌ مصغّرةٌ لملفٍّ في حقل الإدخال قبل الإرسال — لا يُحفظ.
+            import tempfile as _tf
+            raw = _upload_raw(body if isinstance(body, dict) else {})
+            if not raw or len(raw) > _ATTACH_SAVE_MAX:
+                self._json({"ok": False})
+                return
+            tmp = _tf.mkdtemp(prefix="wv-prev-")
+            try:
+                src = os.path.join(tmp, _attach_safe_name(body.get("name")))
+                with open(src, "wb") as fh:
+                    fh.write(raw)
+                data, ctype = _thumb_for(src, os.path.join(tmp, ".t"))
+                if not data:
+                    self._json({"ok": False})
+                else:
+                    self._json({"ok": True, "thumb": "data:%s;base64,%s" % (
+                        ctype, base64.b64encode(data).decode("ascii"))})
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            return
+
         if path == "/api/chat/stop":
             # زرُّ «إيقاف» في الواجهة — يُوقف نوبةَ هذه المحادثة في المحرّك.
             try:
@@ -2790,6 +2961,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # then the final reply. Falls back to /api/chat semantics.
             msg = (body.get("message") or "").strip()
             _stop_clear(body.get("chatId"))
+            try:
+                _uploads_store(body.get("files"), body.get("chatId"))
+            except Exception:
+                pass
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-store")

@@ -653,6 +653,8 @@
     background: rgba(0,0,0,0.55);
     display: flex; align-items: center; justify-content: center; padding: 16px;
   }
+  /* «hidden» كان لا يُخفيها (display:flex يغلبه) فتبقى فوق الصفحة وتحجب اللمس */
+  .file-preview-overlay[hidden] { display: none; }
   .file-preview-overlay .fp-modal {
     width: min(860px, 96vw); height: min(88vh, 900px);
     display: flex; flex-direction: column;
@@ -1239,6 +1241,57 @@
     padding: 0;
   }
   .attach-file-remove svg { width: 12px; height: 12px; }
+  /* بطاقةُ الملفّ في حقل الإدخال: صورةٌ ممّا فيه، والاسمُ تحتها */
+  .attach-file-card.has-thumb { padding: 0; justify-content: flex-end; overflow: visible; min-height: 96px; }
+  .attach-file-thumb {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: top center;
+    border-radius: 13px; background: #fff;
+  }
+  .attach-file-thumb.is-img { object-position: center; }
+  .attach-file-card.has-thumb .attach-file-name {
+    position: relative; width: 100%; padding: 14px 6px 5px; font-size: 10.5px;
+    color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.72));
+    border-radius: 0 0 13px 13px; -webkit-line-clamp: 1;
+  }
+  .attach-file-card.has-thumb .attach-file-badge { z-index: 1; }
+  .attach-file-card.has-thumb .attach-file-remove { z-index: 2; }
+  .attach-file-card.thumb-pending { opacity: .7; }
+  /* الملفّاتُ فوق رسالتك */
+  .wv-user-files {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px;
+    justify-content: flex-end; max-width: 100%;
+  }
+  [dir="rtl"] .wv-user-files { justify-content: flex-start; }
+  .wv-uf {
+    position: relative; width: 104px; height: 104px; padding: 0;
+    border-radius: 14px; overflow: hidden; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface);
+    display: flex; align-items: center; justify-content: center;
+    font: inherit; color: var(--text);
+  }
+  .wv-uf img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; object-position: top center; background: #fff;
+  }
+  .wv-uf.is-img img { object-position: center; }
+  .wv-uf-icon { font-size: 30px; line-height: 1; }
+  .wv-uf-badge {
+    position: absolute; top: 6px; right: 6px; z-index: 1;
+    font-size: 9px; font-weight: 700; letter-spacing: .3px;
+    padding: 2px 6px; border-radius: 6px;
+    background: rgba(0,0,0,.6); color: #fff;
+  }
+  [dir="rtl"] .wv-uf-badge { right: auto; left: 6px; }
+  .wv-uf.is-img .wv-uf-badge { display: none; }
+  .wv-uf-name {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 1;
+    padding: 14px 6px 5px; font-size: 10.5px; line-height: 1.25;
+    color: #fff; background: linear-gradient(transparent, rgba(0,0,0,.72));
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  }
+  .wv-uf.is-img .wv-uf-name { display: none; }
+  .wv-uf.no-thumb .wv-uf-name { color: var(--text); background: none; }
   [dir="rtl"] .attach-file-remove { left: auto; right: -8px; }
 
   .attach-file-name {
@@ -3474,7 +3527,11 @@
       box.innerHTML = '';
       currentActiveFile = null;
       currentMessages.forEach(m => {
-        if (m.role === 'user') { box.appendChild(makeUserMsg(m.content)); return; }
+        if (m.role === 'user') {
+          const _um = makeUserMsg(m.content);
+          if (m.attachments && m.attachments.length) { try { wvAddUserFiles(_um, m.attachments, id); } catch (e) {} }
+          box.appendChild(_um); return;
+        }
         const el = makeAiMsg(m.content, m.tools);
         box.appendChild(el);
         if (m.file) { addFileCard(el, m.file); currentActiveFile = m.file; }   // re-create the artifact card; track latest file
@@ -4337,12 +4394,12 @@
     // Append the user message
     const messages = document.getElementById('messages');
     const userMsg = makeUserMsg(text);
-    if (filesToSend.length) {
-      const chip = document.createElement('div');
-      chip.style.cssText = 'margin-top:6px;font-size:12px;opacity:.75';
-      chip.textContent = '📎 ' + filesToSend.map(f => f.name).join('، ');
-      userMsg.querySelector('.bubble').appendChild(chip);
-    }
+    // الملفّاتُ المرفوعة: بطاقاتٌ بصورةٍ ممّا فيها، تُحفظ مع الرسالة (attachments)
+    // فتبقى عند الانتقال بين المحادثات. (الخمسةُ الأولى — هي ما يُرسَل.)
+    const wvAtts = filesToSend.slice(0, 5).map(function (f) {
+      if (!f._wvUid) f._wvUid = wvNewUid();
+      return { name: f.name, type: f.type || '', size: f.size || 0, uid: f._wvUid };
+    });
     messages.appendChild(userMsg);
 
     // Track this as a chat session (title comes from the first message, like real chat apps)
@@ -4354,7 +4411,14 @@
     }
     // المحادثةُ التي أُرسلت منها هذه الرسالة — يُحفَظ ردُّها فيها وإن انتقلتَ.
     const sendChatId = currentChatId;
-    currentMessages.push({ role: 'user', content: text });
+    if (wvAtts.length) {
+      try {
+        wvAddUserFiles(userMsg, wvAtts, sendChatId,
+                       filesToSend.slice(0, 5).map(function (f) { return f._wvThumb || ''; }));
+      } catch (e) {}
+    }
+    currentMessages.push(wvAtts.length ? { role: 'user', content: text, attachments: wvAtts }
+                                       : { role: 'user', content: text });
     // Persist immediately so the chat survives even before the reply arrives
     saveCurrentChat();
 
@@ -4506,8 +4570,8 @@
         // في النافذة السفلية، وقد تبلغ آلافَ الأحرف — فإرسالُها يزدحم
         // بها السياقُ ويُدفع ثمنُها في كلّ رسالة بلا فائدة.
         const history = currentMessages.slice(0, -1).slice(-200).map(function (m) {
-          if (!m || !m.tools) return m;
-          var c = {}; for (var k in m) if (k !== 'tools') c[k] = m[k];
+          if (!m || (!m.tools && !m.attachments)) return m;
+          var c = {}; for (var k in m) if (k !== 'tools' && k !== 'attachments') c[k] = m[k];
           return c;
         });
         const files = filesToSend.length ? await readAttachedFiles(filesToSend) : [];
@@ -4626,7 +4690,7 @@
 
   function handleAttachFiles(fileList) {
     if (!fileList || !fileList.length) return;
-    Array.from(fileList).forEach(f => attachedFiles.push(f));
+    Array.from(fileList).forEach(f => { f._wvUid = wvNewUid(); attachedFiles.push(f); wvMakeLiveThumb(f); });
     renderAttachChips();
     document.getElementById('attachMenu').classList.remove('show');
     document.getElementById('mainInput').focus();
@@ -4664,9 +4728,90 @@
         out.push({ name: f.name, type: f.type, text: '(الملف كبير جداً — تجاوز 8 ميغابايت)' });
         continue;
       }
-      try { out.push(await wvReadOne(f)); } catch (e) { out.push({ name: f.name, type: f.type }); }
+      try { const _o = await wvReadOne(f); if (f._wvUid) _o.uid = f._wvUid; out.push(_o); }
+      catch (e) { out.push({ name: f.name, type: f.type }); }
     }
     return out;
+  }
+
+  // ── صورٌ مصغّرةٌ للملفّات: في حقل الإدخال، وفوق رسالتك (وتبقى معها) ──
+  function wvNewUid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  function wvIsImageType(f) {
+    return /^image\/(png|jpe?g|gif|webp|bmp)$/i.test((f && f.type) || '') ||
+           /\.(png|jpe?g|gif|webp|bmp)$/i.test((f && f.name) || '');
+  }
+  function wvMakeLiveThumb(f) {
+    if (wvIsImageType(f)) {
+      try { f._wvThumb = URL.createObjectURL(f); } catch (e) {}
+      return;
+    }
+    if (f.size && f.size > 8 * 1024 * 1024) return;
+    f._wvThumbPending = true;
+    wvReadOne(f).then(function (o) {
+      return fetch('/api/uploads/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(o) }).then(function (r) { return r.json(); });
+    }).then(function (d) {
+      f._wvThumbPending = false;
+      if (d && d.ok && d.thumb) f._wvThumb = d.thumb;
+      if (attachedFiles.indexOf(f) >= 0) renderAttachChips();
+    }).catch(function () { f._wvThumbPending = false; if (attachedFiles.indexOf(f) >= 0) renderAttachChips(); });
+  }
+  function wvUploadURL(kind, chatId, a, download) {
+    return '/api/uploads/' + kind + '?chat=' + encodeURIComponent(chatId || '') +
+      '&uid=' + encodeURIComponent(a.uid || '') + '&name=' + encodeURIComponent(a.name || '') +
+      (download ? '&download=1' : '');
+  }
+  function wvAddUserFiles(userMsg, atts, chatId, live) {
+    if (!userMsg || !atts || !atts.length) return;
+    const row = document.createElement('div');
+    row.className = 'wv-user-files';
+    atts.forEach(function (a, i) {
+      const ext = wvExt(a.name || '');
+      const isImg = wvIsImageType(a);
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'wv-uf' + (isImg ? ' is-img' : '');
+      tile.title = a.name || '';
+      const img = document.createElement('img');
+      img.alt = ''; img.loading = 'lazy';
+      const server = wvUploadURL('thumb', chatId, a);
+      img.src = (live && live[i]) || server;
+      img.onerror = function () {
+        if (img.src.indexOf('/api/uploads/thumb') < 0) { img.src = server; return; }
+        tile.classList.add('no-thumb'); img.remove();
+      };
+      const icon = document.createElement('span'); icon.className = 'wv-uf-icon'; icon.textContent = wvFileEmoji(ext);
+      const badge = document.createElement('span'); badge.className = 'wv-uf-badge';
+      badge.textContent = (ext || '.file').slice(1).toUpperCase();
+      const nm = document.createElement('span'); nm.className = 'wv-uf-name'; nm.textContent = a.name || ''; nm.dir = 'auto';
+      tile.appendChild(icon); tile.appendChild(img); tile.appendChild(badge); tile.appendChild(nm);
+      tile.addEventListener('click', function () { wvOpenUpload(chatId, a); });
+      row.appendChild(tile);
+    });
+    userMsg.insertBefore(row, userMsg.firstChild);
+  }
+  function wvOpenUpload(chatId, a) {
+    const m = wvEnsurePreviewModal();
+    const body = m.querySelector('.fp-body');
+    const ext = wvExt(a.name || '');
+    m.querySelector('.fp-title').textContent = a.name || '';
+    m.querySelector('.fp-download').href = wvUploadURL('file', chatId, a, true);
+    body.innerHTML = '';
+    if (wvIsImageType(a)) {
+      const img = document.createElement('img'); img.className = 'fp-img';
+      img.src = wvUploadURL('file', chatId, a); body.appendChild(img);
+    } else if (ext === '.pdf') {
+      const fr = document.createElement('iframe'); fr.className = 'fp-frame';
+      fr.src = wvUploadURL('file', chatId, a); body.appendChild(fr);
+    } else {
+      const img = document.createElement('img'); img.className = 'fp-img';
+      img.src = wvUploadURL('thumb', chatId, a);
+      img.onerror = function () { body.innerHTML = '<div class="fp-loading">' + wvFileEmoji(ext) + '</div>'; };
+      body.appendChild(img);
+    }
+    m.hidden = false;
   }
 
   function renderAttachChips() {
@@ -4682,8 +4827,19 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
         <span class="attach-file-badge">${ext}</span>
-        <span class="attach-file-name">${f.name}</span>
+        <span class="attach-file-name"></span>
       `;
+      card.querySelector('.attach-file-name').textContent = f.name;
+      card.querySelector('.attach-file-name').dir = 'auto';
+      if (f._wvThumb) {
+        card.classList.add('has-thumb');
+        const im = document.createElement('img');
+        im.className = 'attach-file-thumb' + (wvIsImageType(f) ? ' is-img' : '');
+        im.src = f._wvThumb; im.alt = '';
+        card.insertBefore(im, card.firstChild);
+      } else if (f._wvThumbPending) {
+        card.classList.add('thumb-pending');
+      }
       card.querySelector('.attach-file-remove').onclick = () => { attachedFiles.splice(i, 1); renderAttachChips(); };
       box.appendChild(card);
     });

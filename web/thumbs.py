@@ -1,0 +1,580 @@
+"""thumbs.py — صورةٌ مصغّرةٌ لما في الملفّ المرفوع (لا أيقونةٌ عامّة).
+
+    make_thumb(src, dst) ⟵ True إن كُتبت صورةٌ PNG/JPEG في dst، وإلّا False.
+
+لا يرفع أبداً: ما لا يُرسم يعود False فتعرض الواجهةُ بطاقةَ الاسم كما كانت.
+
+· صورة          ⟵ مصغَّرةٌ منها (مع تدوير الكاميرا EXIF).
+· PDF           ⟵ الصفحةُ الأولى (PyMuPDF، أو pdftoppm، أو نصُّها مرسوماً).
+· docx/pptx/xlsx ⟵ الصورةُ المصغّرةُ المحفوظةُ في الملفّ نفسِه إن وُجدت
+                  (docProps/thumbnail — يحفظها PowerPoint عادةً)، وإلّا رسمٌ
+                  تقريبيٌّ للصفحة/الشريحة/الجدول الأوّل من محتواه الحقيقيّ.
+· نصٌّ وشيفرة    ⟵ أسطرُه الأولى على صفحة.
+
+العربيُّ يُرسم متّصلاً من اليمين: raqm إن وُجد، وإلّا arabic-reshaper + bidi.
+"""
+import io
+import os
+import re
+import shutil
+import subprocess
+import zipfile
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_FONTS = os.path.join(os.path.dirname(_HERE), "engines", "fonts-core", "arabic")
+
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+TEXT_EXT = {".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".log", ".py",
+            ".js", ".ts", ".html", ".htm", ".css", ".xml", ".yaml", ".yml",
+            ".ini", ".cfg", ".sql", ".sh", ".c", ".cpp", ".h", ".java", ".go",
+            ".rs"}
+
+PAGE_W, PAGE_H = 360, 509          # A4
+SLIDE_W = 480
+_AR = re.compile("[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-﻿]")
+_FCACHE = {}
+_RAQM = None
+
+
+def _raqm():
+    global _RAQM
+    if _RAQM is None:
+        try:
+            from PIL import features
+            _RAQM = bool(features.check("raqm"))
+        except Exception:
+            _RAQM = False
+    return _RAQM
+
+
+def _font(px, bold=False):
+    from PIL import ImageFont
+    px = max(6, int(round(px)))
+    key = (px, bold)
+    if key in _FCACHE:
+        return _FCACHE[key]
+    path = os.path.join(_FONTS, "Tajawal-Bold.ttf" if bold else "Tajawal-Regular.ttf")
+    f = None
+    try:
+        if _raqm():
+            f = ImageFont.truetype(path, px, layout_engine=ImageFont.Layout.RAQM)
+        else:
+            f = ImageFont.truetype(path, px)
+    except Exception:
+        try:
+            f = ImageFont.load_default()
+        except Exception:
+            f = None
+    _FCACHE[key] = f
+    return f
+
+
+def _is_ar(t):
+    return bool(_AR.search(t or ""))
+
+
+def _vis(t):
+    """النصُّ كما يُرسم: raqm يتولّى التشكيل والاتّجاه، وإلّا يُشكَّل هنا."""
+    if _raqm() or not _is_ar(t):
+        return t
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        return get_display(arabic_reshaper.reshape(t))
+    except Exception:
+        return t
+
+
+def _tlen(draw, t, font):
+    try:
+        return draw.textlength(_vis(t), font=font)
+    except Exception:
+        return len(t) * (getattr(font, "size", 10) * 0.55)
+
+
+def _wrap(draw, text, font, width, max_lines=99):
+    words = str(text or "").replace("\t", " ").split()
+    lines, cur = [], ""
+    for w in words:
+        cand = (cur + " " + w).strip()
+        if cur and _tlen(draw, cand, font) > width:
+            lines.append(cur)
+            cur = w
+            if len(lines) >= max_lines:
+                return lines
+        else:
+            cur = cand
+    if cur:
+        lines.append(cur)
+    # كلمةٌ واحدةٌ أعرضُ من السطر ⟵ تُقصّ
+    out = []
+    for ln in lines[:max_lines]:
+        while _tlen(draw, ln, font) > width and len(ln) > 1:
+            ln = ln[:-1]
+        out.append(ln)
+    return out
+
+
+def _text(draw, xy_box, line, font, fill, align=None):
+    """سطرٌ داخل [x0, x1]: العربيُّ يميناً افتراضاً، واللاتينيُّ يساراً."""
+    x0, x1, y = xy_box
+    w = _tlen(draw, line, font)
+    if align is None:
+        align = "right" if _is_ar(line) else "left"
+    if align == "center":
+        x = x0 + (x1 - x0 - w) / 2
+    elif align == "right":
+        x = x1 - w
+    else:
+        x = x0
+    try:
+        draw.text((x, y), _vis(line), font=font, fill=fill)
+    except Exception:
+        pass
+
+
+# ───────────────────────────── الصفحة ─────────────────────────────
+class _Page:
+    def __init__(self, w=PAGE_W, h=PAGE_H, margin=26, bg=(255, 255, 255)):
+        from PIL import Image, ImageDraw
+        self.img = Image.new("RGB", (w, h), bg)
+        self.d = ImageDraw.Draw(self.img)
+        self.w, self.h, self.m = w, h, margin
+        self.y = margin
+
+    @property
+    def full(self):
+        return self.y >= self.h - self.m
+
+    def para(self, text, px=11, bold=False, color=(40, 40, 40), align=None,
+             gap=None, max_lines=40):
+        text = str(text or "").strip()
+        if not text:
+            self.y += px * 0.6
+            return
+        f = _font(px, bold)
+        lh = px * 1.45
+        for ln in _wrap(self.d, text, f, self.w - 2 * self.m, max_lines):
+            if self.y + lh > self.h - self.m:
+                self.y = self.h
+                return
+            _text(self.d, (self.m, self.w - self.m, self.y), ln, f, color, align)
+            self.y += lh
+        self.y += px * 0.5 if gap is None else gap
+
+    def image(self, im, max_h_frac=0.4):
+        if self.full:
+            return
+        try:
+            im = im.convert("RGB")
+            mw = self.w - 2 * self.m
+            mh = min(self.h * max_h_frac, self.h - self.m - self.y)
+            if mh < 20:
+                self.y = self.h
+                return
+            im.thumbnail((int(mw), int(mh)))
+            x = int(self.m + (mw - im.width) / 2)
+            self.img.paste(im, (x, int(self.y)))
+            self.y += im.height + 8
+        except Exception:
+            pass
+
+    def table(self, rows, px=9, header_fill=(232, 236, 242), max_rows=8):
+        rows = [r for r in rows if any(str(c or "").strip() for c in r)][:max_rows]
+        if not rows or self.full:
+            return
+        ncol = max(len(r) for r in rows) or 1
+        ncol = min(ncol, 6)
+        f = _font(px)
+        fb = _font(px, True)
+        cw = (self.w - 2 * self.m) / ncol
+        rh = px * 2
+        ar = any(_is_ar(str(c)) for r in rows for c in r)
+        for ri, r in enumerate(rows):
+            if self.y + rh > self.h - self.m:
+                self.y = self.h
+                return
+            for ci in range(ncol):
+                cx = (ncol - 1 - ci) if ar else ci
+                x0 = self.m + cx * cw
+                box = [x0, self.y, x0 + cw, self.y + rh]
+                if ri == 0:
+                    self.d.rectangle(box, fill=header_fill)
+                self.d.rectangle(box, outline=(170, 175, 185))
+                val = str(r[ci] if ci < len(r) and r[ci] is not None else "")
+                val = val.replace("\n", " ").strip()
+                font = fb if ri == 0 else f
+                while val and _tlen(self.d, val, font) > cw - 6:
+                    val = val[:-1]
+                _text(self.d, (x0 + 3, x0 + cw - 3, self.y + px * 0.35), val,
+                      font, (30, 30, 30))
+            self.y += rh
+        self.y += 8
+
+
+# ───────────────────────────── الأنواع ─────────────────────────────
+def _save(im, dst, photo=False):
+    im = im.convert("RGB")
+    if photo:
+        im.save(dst, "JPEG", quality=82)
+    else:
+        im.save(dst, "PNG", optimize=True)
+    return True
+
+
+def _thumb_image(src, dst):
+    from PIL import Image, ImageOps
+    with Image.open(src) as im:
+        try:
+            im = ImageOps.exif_transpose(im)
+        except Exception:
+            pass
+        if im.mode in ("RGBA", "LA", "P"):
+            im = im.convert("RGBA")
+            bg = Image.new("RGB", im.size, (255, 255, 255))
+            bg.paste(im, mask=im.split()[-1])
+            im = bg
+        im.thumbnail((480, 480))
+        return _save(im, dst, photo=True)
+
+
+_GENERIC = None
+
+
+def _generic_thumbs():
+    """بصماتُ الصور المصغّرة العامّة في قوالب python-docx وpython-pptx."""
+    global _GENERIC
+    if _GENERIC is None:
+        import hashlib
+        _GENERIC = set()
+        for mod, rel in (("docx", "templates/default.docx"),
+                         ("pptx", "templates/default.pptx")):
+            try:
+                m = __import__(mod)
+                tp = os.path.join(os.path.dirname(m.__file__), rel)
+                with zipfile.ZipFile(tp) as z:
+                    for n in z.namelist():
+                        if n.lower().startswith("docprops/thumbnail"):
+                            _GENERIC.add(hashlib.md5(z.read(n)).hexdigest())
+            except Exception:
+                pass
+    return _GENERIC
+
+
+def _embedded_thumb(src, dst):
+    """docProps/thumbnail.* داخل ملفّ Office — كما حفظه برنامجُه (Word أو
+    PowerPoint)، لا الصورةَ العامّةَ من قالب مكتبة."""
+    try:
+        import hashlib
+        with zipfile.ZipFile(src) as z:
+            names = [n for n in z.namelist()
+                     if n.lower().startswith("docprops/thumbnail")]
+            if not names:
+                return False
+            data = z.read(names[0])
+        if hashlib.md5(data).hexdigest() in _generic_thumbs():
+            return False
+        from PIL import Image
+        im = Image.open(io.BytesIO(data))
+        im.load()
+        if im.width < 60 or im.height < 60:
+            return False
+        im.thumbnail((480, 480))
+        return _save(im, dst)
+    except Exception:
+        return False
+
+
+def _thumb_pdf(src, dst):
+    try:
+        import fitz  # PyMuPDF
+        with fitz.open(src) as doc:
+            if doc.page_count:
+                pg = doc[0]
+                z = PAGE_W / max(1.0, pg.rect.width)
+                pix = pg.get_pixmap(matrix=fitz.Matrix(z, z), alpha=False)
+                from PIL import Image
+                im = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                return _save(im, dst)
+    except Exception:
+        pass
+    if shutil.which("pdftoppm"):
+        try:
+            base = dst + ".pp"
+            subprocess.run(["pdftoppm", "-f", "1", "-l", "1", "-png",
+                            "-scale-to-x", str(PAGE_W), "-scale-to-y", "-1", "-singlefile", src, base],
+                           capture_output=True, timeout=60)
+            if os.path.isfile(base + ".png"):
+                from PIL import Image
+                with Image.open(base + ".png") as im:
+                    _save(im, dst)
+                os.remove(base + ".png")
+                return True
+        except Exception:
+            pass
+    try:
+        from pypdf import PdfReader
+        r = PdfReader(src)
+        txt = (r.pages[0].extract_text() or "") if r.pages else ""
+    except Exception:
+        txt = ""
+    if not txt.strip():
+        return False
+    p = _Page()
+    for ln in txt.splitlines():
+        p.para(ln, px=10, gap=1)
+        if p.full:
+            break
+    return _save(p.img, dst)
+
+
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _thumb_docx(src, dst):
+    import docx
+    from PIL import Image
+    d = docx.Document(src)
+    p = _Page()
+    body = d.element.body
+    for el in body.iterchildren():
+        if p.full:
+            break
+        tag = el.tag.split("}")[-1]
+        if tag == "p":
+            # صورةٌ في الفقرة؟
+            blips = el.findall(".//" + _A + "blip")
+            for b in blips[:1]:
+                rid = b.get(_R + "embed")
+                try:
+                    part = d.part.related_parts[rid]
+                    p.image(Image.open(io.BytesIO(part.blob)))
+                except Exception:
+                    pass
+            text = "".join(t.text or "" for t in el.iter(_W + "t"))
+            if not text.strip():
+                if not blips:
+                    p.y += 4
+                continue
+            style = ""
+            try:
+                ps = el.find(_W + "pPr")
+                st = ps.find(_W + "pStyle") if ps is not None else None
+                style = (st.get(_W + "val") or "").lower() if st is not None else ""
+                jc = ps.find(_W + "jc") if ps is not None else None
+                jcv = (jc.get(_W + "val") or "") if jc is not None else ""
+            except Exception:
+                jcv = ""
+            align = "center" if jcv == "center" else None
+            runs = el.findall(_W + "r")
+            all_bold = bool(runs) and all(
+                r.find(_W + "rPr") is not None and
+                r.find(_W + "rPr").find(_W + "b") is not None for r in runs)
+            if "title" in style:
+                p.para(text, px=20, bold=True, color=(20, 40, 80), align=align or "center")
+            elif "heading1" in style or style == "1":
+                p.para(text, px=15, bold=True, color=(20, 50, 100), align=align)
+            elif "heading" in style:
+                p.para(text, px=12.5, bold=True, color=(30, 60, 110), align=align)
+            else:
+                p.para(text, px=10, bold=all_bold, align=align, max_lines=8)
+        elif tag == "tbl":
+            rows = []
+            for tr in el.findall(_W + "tr"):
+                rows.append(["".join(t.text or "" for t in tc.iter(_W + "t"))
+                             for tc in tr.findall(_W + "tc")])
+            p.table(rows)
+    if p.y <= p.m + 2:
+        return False
+    return _save(p.img, dst)
+
+
+def _rgb(color_fmt):
+    try:
+        if color_fmt is not None and color_fmt.type is not None and color_fmt.rgb is not None:
+            v = str(color_fmt.rgb)
+            return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))
+    except Exception:
+        pass
+    return None
+
+
+def _thumb_pptx(src, dst):
+    from pptx import Presentation
+    from pptx.util import Emu
+    from PIL import Image, ImageDraw
+    prs = Presentation(src)
+    if not len(prs.slides):
+        return False
+    sw, sh = int(prs.slide_width or Emu(12192000)), int(prs.slide_height or Emu(6858000))
+    W = SLIDE_W
+    H = int(W * sh / sw)
+    k = W / sw
+    pt = W / (sw / 12700.0)          # بكسلٌ لكلِّ نقطة
+    slide = prs.slides[0]
+    bg = (255, 255, 255)
+    try:
+        f = slide.background.fill
+        c = _rgb(f.fore_color) if f.type == 1 else None
+        bg = c or bg
+    except Exception:
+        pass
+    img = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(img)
+    dark = sum(bg) < 300
+
+    def shapes(coll):
+        for s in coll:
+            if getattr(s, "shape_type", None) == 6:     # مجموعة
+                try:
+                    yield from shapes(s.shapes)
+                except Exception:
+                    pass
+            else:
+                yield s
+
+    drew = False
+    for s in shapes(slide.shapes):
+        try:
+            x, y = int((s.left or 0) * k), int((s.top or 0) * k)
+            w, h = int((s.width or 0) * k), int((s.height or 0) * k)
+        except Exception:
+            continue
+        try:
+            if getattr(s, "shape_type", None) == 13:     # صورة
+                im = Image.open(io.BytesIO(s.image.blob)).convert("RGB")
+                if w > 2 and h > 2:
+                    img.paste(im.resize((w, h)), (x, y))
+                    drew = True
+                continue
+        except Exception:
+            pass
+        try:
+            if s.fill.type == 1:
+                c = _rgb(s.fill.fore_color)
+                if c:
+                    d.rectangle([x, y, x + w, y + h], fill=c)
+                    drew = True
+        except Exception:
+            pass
+        if getattr(s, "has_table", False):
+            try:
+                rows = [[c.text for c in r.cells] for r in s.table.rows][:6]
+                ncol = max(len(r) for r in rows)
+                cw, rh = w / max(1, ncol), max(8, h / max(1, len(rows)))
+                fnt = _font(max(6, rh * 0.45))
+                for ri, r in enumerate(rows):
+                    for ci, val in enumerate(r):
+                        bx = [x + ci * cw, y + ri * rh, x + (ci + 1) * cw, y + (ri + 1) * rh]
+                        d.rectangle(bx, outline=(150, 150, 150),
+                                    fill=(225, 230, 240) if ri == 0 else None)
+                        _text(d, (bx[0] + 2, bx[2] - 2, bx[1] + 1), str(val)[:40], fnt,
+                              (30, 30, 30))
+                drew = True
+            except Exception:
+                pass
+            continue
+        if not getattr(s, "has_text_frame", False):
+            continue
+        ty = y + 3
+        for para in s.text_frame.paragraphs:
+            txt = "".join(r.text for r in para.runs) or para.text
+            if not txt.strip():
+                ty += 4
+                continue
+            size, bold, col = None, False, None
+            for r in para.runs:
+                try:
+                    if r.font.size:
+                        size = r.font.size.pt
+                    bold = bold or bool(r.font.bold)
+                    col = col or _rgb(r.font.color)
+                except Exception:
+                    pass
+            if size is None:
+                ph = getattr(s, "is_placeholder", False)
+                size = 36 if ph and ty < H * 0.35 else 18
+            px = max(6, size * pt)
+            fnt = _font(px, bold)
+            al = None
+            try:
+                a = para.alignment
+                al = {2: "center", 3: "right", 1: "left"}.get(int(a)) if a is not None else None
+            except Exception:
+                al = None
+            for ln in _wrap(d, txt, fnt, max(10, w - 6), 6):
+                if ty + px * 1.2 > y + h + px * 2 or ty > H:
+                    break
+                _text(d, (x + 3, x + w - 3, ty), ln, fnt,
+                      col or ((240, 240, 240) if dark else (30, 30, 30)), al)
+                ty += px * 1.25
+                drew = True
+    if not drew:
+        return False
+    return _save(img, dst)
+
+
+def _thumb_xlsx(src, dst):
+    import openpyxl
+    wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
+    ws = wb.worksheets[0]
+    rows = []
+    for r in ws.iter_rows(min_row=1, max_row=16, max_col=6, values_only=True):
+        rows.append(["" if v is None else str(v) for v in r])
+    wb.close()
+    rows = [r for r in rows if any(c.strip() for c in r)]
+    if not rows:
+        return False
+    p = _Page(w=PAGE_H, h=PAGE_W, margin=14)
+    p.para(ws.title, px=11, bold=True, color=(30, 110, 60), gap=4)
+    p.table(rows, px=9, header_fill=(220, 238, 226), max_rows=16)
+    return _save(p.img, dst)
+
+
+def _thumb_text(src, dst, ext):
+    with open(src, "rb") as fh:
+        raw = fh.read(20000)
+    txt = raw.decode("utf-8", "replace")
+    p = _Page()
+    if ext in (".csv", ".tsv"):
+        sep = "\t" if ext == ".tsv" else ","
+        import csv
+        rows = list(csv.reader(io.StringIO(txt), delimiter=sep))[:8]
+        p.table(rows)
+        return _save(p.img, dst)
+    for ln in txt.splitlines()[:60]:
+        m = re.match(r"^(#{1,6})\s+(.*)$", ln) if ext in (".md", ".markdown") else None
+        if m:
+            p.para(m.group(2), px=17 - 2 * len(m.group(1)), bold=True, color=(20, 50, 100))
+        else:
+            p.para(ln, px=10, gap=1, max_lines=4)
+        if p.full:
+            break
+    return _save(p.img, dst)
+
+
+def make_thumb(src, dst):
+    """اكتب صورةً مصغّرةً لـsrc في dst. لا يرفع."""
+    ext = os.path.splitext(src)[1].lower()
+    try:
+        if ext in IMAGE_EXT:
+            return _thumb_image(src, dst)
+        if ext == ".pdf":
+            return _thumb_pdf(src, dst)
+        if ext in (".docx", ".pptx", ".xlsx", ".docm", ".pptm", ".xlsm"):
+            # المحتوى أوّلاً: python-docx وpython-pptx يضعان في كلِّ ملفٍّ
+            # صورةً مصغّرةً عامّةً من قالبهما (لا علاقةَ لها بالمحتوى) — قِيس.
+            fn = {".doc": _thumb_docx, ".ppt": _thumb_pptx, ".xls": _thumb_xlsx}[ext[:4]]
+            try:
+                if fn(src, dst):
+                    return True
+            except Exception:
+                pass
+            return _embedded_thumb(src, dst)
+        if ext in TEXT_EXT:
+            return _thumb_text(src, dst, ext)
+    except Exception:
+        return False
+    return False
