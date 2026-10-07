@@ -55,11 +55,23 @@ def _load_settings():
     return key, base, model
 
 
+def _thinking_off(base, model):
+    """كما يفعل التطبيق: نموذجٌ يفكّر (DeepSeek…) قد يصرف السقفَ كلَّه في تفكيرٍ
+    مخفيّ فيعود `content` فارغاً — فيبدو أعمى وهو ليس كذلك."""
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+        from core.llm import reasoning_payload
+        prov = os.environ.get("WEAVER_PROVIDER", "")
+        return reasoning_payload(prov, base, model) or {}
+    except Exception:
+        return {}
+
+
 def _ask_color(base, key, model, b64, timeout=60):
     """Send one image + a one-word color question. Returns (reply, error)."""
-    payload = json.dumps({
+    body = {
         "model": model,
-        "max_tokens": 40,
+        "max_tokens": 300,
         "temperature": 0,
         "messages": [{
             "role": "user",
@@ -71,7 +83,9 @@ def _ask_color(base, key, model, b64, timeout=60):
                  "image_url": {"url": "data:image/png;base64," + b64}},
             ],
         }],
-    }).encode("utf-8")
+    }
+    body.update(_thinking_off(base, model))
+    payload = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         base + "/chat/completions", data=payload, method="POST",
         headers={"Content-Type": "application/json",
@@ -89,7 +103,9 @@ def _ask_color(base, key, model, b64, timeout=60):
     except Exception as e:
         return "", str(e)
     try:
-        return (data["choices"][0]["message"]["content"] or ""), None
+        msg = data["choices"][0]["message"]
+        return (msg.get("content") or msg.get("reasoning_content")
+                or msg.get("reasoning") or ""), None
     except Exception:
         c = data.get("content")
         if isinstance(c, list):
@@ -100,12 +116,23 @@ def _ask_color(base, key, model, b64, timeout=60):
     return "", "unexpected response shape: " + json.dumps(data)[:300]
 
 
+def _setting_vision():
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "config"))
+        import keysync  # type: ignore
+        return (keysync.get_settings().get("WEAVER_MODEL_VISION") or "").strip()
+    except Exception:
+        return ""
+
+
 def main():
     key, base, model = _load_settings()
     if not key or not base:
         print("✗ لا يوجد مفتاح/مزوّد مضبوط. أضِف مفتاحك أولاً من قسم Keys.")
         return 2
-    print(f"المزوّد: {base}\nالنموذج: {model or '(افتراضي)'}\n")
+    print(f"المزوّد: {base}\nالنموذج: {model or '(افتراضي)'}")
+    print("WEAVER_MODEL_VISION = %s\n" % (os.environ.get("WEAVER_MODEL_VISION")
+                                         or _setting_vision() or "(غير مضبوط)"))
     checks = [("أحمر", "red", _RED), ("أزرق", "blue", _BLUE)]
     got = 0
     hard_error = None
@@ -119,7 +146,7 @@ def main():
                 hard_error = err
             continue
         ok = en in reply.lower() or ar in reply
-        print(f"• صورة {ar}: ردّ النموذج = {reply.strip()!r} → "
+        print(f"• صورة {ar}: ردّ النموذج = {reply.strip()[:200]!r} → "
               + ("صحيح ✅" if ok else "غير صحيح ❌"))
         if ok:
             got += 1
