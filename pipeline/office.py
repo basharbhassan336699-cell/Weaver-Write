@@ -551,6 +551,367 @@ def build_word_free(spec, out):
     return "\n".join(lines)
 
 
+# ═══════════════════ البحثُ الأكاديميّ: تنسيقُ المستخدم وفحصُه ═══════════════════
+#
+# قِيس على هاتف المستخدم (بحثٌ دستوريٌّ من ١٥ صفحة): طلب «Times New Roman، ١٦
+# للعناوين و١٤ للنصّ، تباعد ١٫٢٥، بلا خطٍّ تحت العناوين، الجداول من اليمين» —
+# والأداةُ أحجامُ عناوينها ثابتة (١٨/١٥/١٣) ولا تباعدَ فيها، فترك النموذجُ
+# الأداةَ وكتب سكربتَ python-docx من عنده، طويلاً، فانقطع عند حدّ الردّ
+# الواحد مرّةً بعد مرّة، وما خرج نسي فيه المراجعَ والتقسيمات. فهنا:
+#   "format"  ⟵ ما طلبه بالأرقام، يُطبَّق على المستند بعد بنائه
+#   "outline" ⟵ عددُ المباحث والمطالب المطلوب، يُفحص
+#   وفحصٌ بعد البناء لِما يُنسى: المراجع، مطابقةُ الاستشهادات، الشرطات، الأسلوب
+# وكلُّه اختياريّ: مواصفةٌ بلا "format" تُبنى كما كانت حرفاً.
+
+def _expand_sections(spec, base):
+    """أقسامُ البحث من ملفّاتٍ منفصلة — كالكتل والشرائح (حدُّ طول الردّ الواحد):
+    عنصرٌ نصّيٌّ في "sections" مسارُ ملفٍّ فيه قسمٌ أو قائمةُ أقسام أو
+    {"sections": […]}. و"references" تقبل كذلك مسارَ ملفٍّ فيه قائمة."""
+    spec = dict(spec)
+    items = spec.get("sections")
+    if isinstance(items, list) and any(isinstance(x, str) for x in items):
+        out = []
+        for it in items:
+            if not isinstance(it, str):
+                out.append(it)
+                continue
+            part = _load_json(it if os.path.isabs(it) else os.path.join(base, it))
+            if isinstance(part, dict) and isinstance(part.get("sections"), list):
+                part = part["sections"]
+            if isinstance(part, dict):
+                out.append(part)
+            elif isinstance(part, list):
+                out.extend(x for x in part if isinstance(x, dict))
+            else:
+                raise Fail("%s must hold a section or a list of sections" % it)
+        spec["sections"] = out
+    refs = spec.get("references")
+    if isinstance(refs, str) and refs.strip().lower().endswith(".json"):
+        part = _load_json(refs if os.path.isabs(refs) else os.path.join(base, refs))
+        if isinstance(part, dict):
+            part = part.get("references")
+        if not isinstance(part, list):
+            raise Fail("%s must hold a list of references" % refs)
+        spec["references"] = part
+    return spec
+
+
+_PAGE_SIZES = {"a4": (21.0, 29.7), "letter": (21.59, 27.94),
+               "a5": (14.8, 21.0), "legal": (21.59, 35.56)}
+
+
+def _num(v):
+    try:
+        f = float(str(v).strip())
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _heading_level(p):
+    """مستوى العنوان من نمط الفقرة (Heading N / Title)، أو 0."""
+    try:
+        name = (p.style.name or "") if p.style is not None else ""
+    except Exception:
+        name = ""
+    m = re.match(r"(?i)heading\s*(\d)", name)
+    return int(m.group(1)) if m else 0
+
+
+def _run_size(r, pt):
+    """الحجمُ للّاتينيّ والعربيّ معاً: Word يقرأ العربيَّ من szCs لا sz —
+    `run.font.size` وحده يترك النصَّ العربيَّ بحجمه القديم."""
+    from docx.shared import Pt
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    r.font.size = Pt(pt)
+    rpr = r._r.get_or_add_rPr()
+    cs = rpr.find(qn("w:szCs"))
+    if cs is None:
+        cs = OxmlElement("w:szCs")
+        rpr.append(cs)
+    cs.set(qn("w:val"), str(int(round(pt * 2))))
+
+
+def _body_start(d, sections):
+    """أوّلُ فقرةٍ من متن البحث: عنوانُ القسم الأوّل (ما قبله غلافٌ وفهرس)."""
+    first = ""
+    for s in sections or []:
+        if str(s.get("heading") or "").strip():
+            first = str(s["heading"]).strip()
+            break
+    ps = d.paragraphs
+    if first:
+        for i, p in enumerate(ps):
+            if _heading_level(p) and p.text.strip() == first:
+                return i
+    for i, p in enumerate(ps):
+        if _heading_level(p):
+            return i
+    return 0
+
+
+def _refs_start(d, start, has_refs, lang):
+    """فقرةُ عنوان «المراجع» التي يضيفها البناء (آخرُ عنوانٍ بهذا الاسم)."""
+    if not has_refs:
+        return len(d.paragraphs)
+    want = "المراجع" if lang == "ar" else "References"
+    ps = d.paragraphs
+    for i in range(len(ps) - 1, start - 1, -1):
+        if _heading_level(ps[i]) and ps[i].text.strip() == want:
+            return i
+    return len(ps)
+
+
+def _dash_fix(text):
+    """«—» و«–» ⟵ «-»: بين رقمين ملتصقةً (1955-1956)، وبين كلمتين بمسافتين."""
+    t = re.sub(r"(?<=\d)\s*[—–]\s*(?=\d)", "-", str(text))
+    return re.sub(r"\s*[—–]\s*", " - ", t)
+
+
+def _apply_word_format(path, spec, sections, lang):
+    """ما طلبه المستخدمُ بالأرقام ⟵ على المستند المبنيّ. يعيد سطرَ وصفٍ أو ""."""
+    fmt = spec.get("format") if isinstance(spec.get("format"), dict) else {}
+    page = spec.get("page") if isinstance(spec.get("page"), dict) else {}
+    psize = page.get("size") or spec.get("page_size")
+    dashes = str(fmt.get("dashes") or spec.get("dashes") or "").strip()
+    if not fmt and not psize and not page.get("margins_cm") and dashes != "-":
+        return ""
+    from docx import Document
+    from docx.shared import Cm, Pt, RGBColor
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    d = Document(path)
+    done = []
+    # الصفحة
+    if psize:
+        wh = _PAGE_SIZES.get(str(psize).strip().lower())
+        if wh:
+            for sec in d.sections:
+                sec.page_width, sec.page_height = Cm(wh[0]), Cm(wh[1])
+            done.append("page %s" % str(psize).upper())
+    mg = _num(page.get("margins_cm"))
+    if mg:
+        for sec in d.sections:
+            sec.left_margin = sec.right_margin = Cm(mg)
+            sec.top_margin = sec.bottom_margin = Cm(mg)
+        done.append("margins %gcm" % mg)
+    start = _body_start(d, sections)
+    end = _refs_start(d, start, bool(spec.get("references")), lang)
+    ps = d.paragraphs
+    body = _num(fmt.get("body_size"))
+    hs = fmt.get("heading_sizes", fmt.get("heading_size"))
+    hsize = {}
+    if isinstance(hs, dict):
+        hsize = {int(k): _num(v) for k, v in hs.items() if str(k).isdigit()}
+    elif isinstance(hs, (list, tuple)):
+        hsize = {i + 1: _num(v) for i, v in enumerate(hs)}
+    elif _num(hs):
+        hsize = {i: _num(hs) for i in range(1, 7)}
+    ls = _num(fmt.get("line_spacing"))
+    under = fmt.get("heading_underline")
+    hcol = str(fmt.get("heading_color") or "").lstrip("#")
+    refsz = _num(fmt.get("references_size")) or body
+    for i in range(start, len(ps)):
+        p = ps[i]
+        lv = _heading_level(p)
+        in_refs = i > end
+        if ls:
+            p.paragraph_format.line_spacing = ls
+        for r in p.runs:
+            if lv and hsize.get(lv):
+                _run_size(r, hsize[lv])
+            elif not lv and in_refs and refsz:
+                _run_size(r, refsz)
+            elif not lv and not in_refs and body:
+                _run_size(r, body)
+            if lv and under is False:
+                r.font.underline = False
+            if lv and len(hcol) == 6:
+                try:
+                    r.font.color.rgb = RGBColor.from_string(hcol.upper())
+                except Exception:
+                    pass
+            if dashes == "-" and not in_refs and ("—" in r.text or "–" in r.text):
+                r.text = _dash_fix(r.text)
+    if body:
+        done.append("body %gpt" % body)
+    if hsize:
+        done.append("headings " + "/".join("H%d %gpt" % (k, v) for k, v in
+                                           sorted(hsize.items()) if v and k <= 4))
+    if ls:
+        done.append("line spacing %g" % ls)
+    if under is False:
+        done.append("headings not underlined")
+    if dashes == "-":
+        done.append("dashes → -")
+    # الجداول
+    tsz = _num(fmt.get("table_size"))
+    tdir = str(fmt.get("table_direction") or "").strip().lower()
+    for t in d.tables:
+        if tdir in ("rtl", "ltr"):
+            tblPr = t._tbl.tblPr
+            bv = tblPr.find(qn("w:bidiVisual"))
+            if tdir == "rtl" and bv is None:
+                tblPr.append(OxmlElement("w:bidiVisual"))
+            elif tdir == "ltr" and bv is not None:
+                tblPr.remove(bv)
+        for row in t.rows:
+            for c in row.cells:
+                for p in c.paragraphs:
+                    if ls:
+                        p.paragraph_format.line_spacing = ls
+                    for r in p.runs:
+                        if tsz:
+                            _run_size(r, tsz)
+                        if dashes == "-" and ("—" in r.text or "–" in r.text):
+                            r.text = _dash_fix(r.text)
+    if d.tables and (tsz or tdir in ("rtl", "ltr")):
+        done.append("tables %s%s" % (tdir.upper() if tdir in ("rtl", "ltr") else "",
+                                     (" %gpt" % tsz) if tsz else ""))
+    d.save(path)
+    return ("format: " + " · ".join(done)) if done else ""
+
+
+_CITE = re.compile(r"\(([^()\n]{2,120}?)[،,]\s*((?:1[5-9]|20)\d\d[a-zأ-ي]?|n\.\s?d\.(?:-[a-z])?|"
+                   r"د\.\s?ت\.?)(?:\s*[،,;؛][^()]*)?\)")
+
+
+def _cite_key(author):
+    """أوّلُ اسمٍ ذي معنىً من «الخطيب وعلوان» / «Smith & Lee» / «Knoll et al.»."""
+    a = re.split(r"\s+(?:و|&|and|et al\.?)\s+|\s*[;؛]\s*|\s+وآخرون|\s+et al", author)[0]
+    a = re.sub(r"^(?:انظر|ينظر|see|cf\.)\s+", "", a.strip(), flags=re.I)
+    toks = [t for t in re.split(r"[\s,،.]+", a) if len(t) > 1]
+    return toks[0] if toks else ""
+
+
+def _norm_ar(s):
+    s = re.sub(r"[ً-ْـ]", "", str(s or ""))
+    return s.replace("أ", "ا").replace("إ", "ا").replace("آ", "ا").replace(
+        "ة", "ه").replace("ى", "ي").lower()
+
+
+def _word_check(path, spec, sections, lang):
+    """ما يُنسى عادةً ⟵ أسطرٌ يراها النموذجُ قبل أن يقول «تمّ»."""
+    from docx import Document
+    d = Document(path)
+    lines, bad = [], 0
+    start = _body_start(d, sections)
+    refs = [str(r) for r in (spec.get("references") or []) if str(r).strip()]
+    end = _refs_start(d, start, bool(refs), lang)
+    ps = d.paragraphs
+    body_ps = [p for i, p in enumerate(ps[start:end], start)
+               if not _heading_level(p) and p.text.strip()]
+    text = "\n\n".join(p.text.strip() for p in body_ps)
+    # ① المراجع ومطابقةُ الاستشهادات
+    cites = _CITE.findall(text)
+    if not refs:
+        if cites:
+            bad += 1
+            lines.append("✗ references: %d in-text citations but NO references list — "
+                         "add \"references\" and build again" % len(cites))
+        else:
+            lines.append("· references: none in the spec (add \"references\" if the "
+                         "request needs a list)")
+    else:
+        nref = [_norm_ar(r) for r in refs]
+        miss = []
+        for au, yr in cites:
+            k = _norm_ar(_cite_key(au))
+            y = _norm_ar(re.sub(r"[a-zأ-ي]$", "", yr) if yr[:2].isdigit() else yr)
+            if not k:
+                continue
+            if not any(k in r and (y[:4] in r if y[:2].isdigit() else True)
+                       for r in nref):
+                tag = "(%s, %s)" % (au.strip()[:40], yr)
+                if tag not in miss:
+                    miss.append(tag)
+        if miss:
+            bad += 1
+            lines.append("✗ citations with no matching reference (name + year): %s"
+                         % " · ".join(miss[:8]) + (" …" if len(miss) > 8 else ""))
+        else:
+            lines.append("✓ references: %d · %d in-text citations, all matched"
+                         % (len(refs), len(cites)))
+    # ② الهيكل: المباحثُ والمطالبُ وما تحتها
+    outl = []
+    for s in sections or []:
+        if str(s.get("heading") or "").strip():
+            try:
+                outl.append((max(1, min(int(s.get("level", 1) or 1), 4)),
+                             str(s["heading"]).strip()))
+            except Exception:
+                outl.append((1, str(s["heading"]).strip()))
+    want = spec.get("outline") if isinstance(spec.get("outline"), dict) else {}
+    tree = []                                    # [(h1, [(h2, n_h3)])]
+    for lv, h in outl:
+        if lv == 1:
+            tree.append([h, []])
+        elif lv == 2 and tree:
+            tree[-1][1].append([h, 0])
+        elif lv >= 3 and tree and tree[-1][1]:
+            tree[-1][1][-1][1] += 1
+    chapters = [t for t in tree if t[1]]
+    shape = " · ".join("%s: %d%s" % (c[0][:28], len(c[1]),
+                                     "(%s)" % ",".join(str(x[1]) for x in c[1])
+                                     if any(x[1] for x in c[1]) else "")
+                       for c in chapters)
+    if want:
+        probs = []
+        nc = _num(want.get("chapters"))
+        pc = _num(want.get("per_chapter"))
+        sm = _num(want.get("sub_min"))
+        if nc and len(chapters) != int(nc):
+            probs.append("%d chapters (level 1 with level-2 children), %d requested"
+                         % (len(chapters), int(nc)))
+        for c in chapters:
+            if pc and len(c[1]) != int(pc):
+                probs.append("«%s» has %d level-2 sections, %d requested"
+                             % (c[0][:40], len(c[1]), int(pc)))
+            for h2, n3 in c[1]:
+                if sm and n3 < int(sm):
+                    probs.append("«%s» has %d level-3 subdivisions, at least %d "
+                                 "requested" % (h2[:40], n3, int(sm)))
+        if probs:
+            bad += 1
+            lines.append("✗ outline: " + " · ".join(probs[:8]))
+        else:
+            lines.append("✓ outline: %s" % (shape or "ok"))
+    elif chapters:
+        lines.append("· outline: %s" % shape)
+    # ③ الشرطاتُ الطويلة
+    nd = sum(p.text.count("—") + p.text.count("–") for p in body_ps)
+    if nd:
+        lines.append("⚠ %d long dash%s (— –) in the text — use \"-\" or a comma, or set "
+                     "\"format\": {\"dashes\": \"-\"}" % (nd, "" if nd == 1 else "es"))
+    # ④ الأسلوب (دستورُ الكتابة) وتنويعُ الفقرات
+    try:
+        from pipeline import soul_check as sc
+    except Exception:
+        try:
+            import soul_check as sc
+        except Exception:
+            sc = None
+    if sc is not None and text.strip():
+        r = sc.check(text)
+        items = ["%s «%s» %s" % (v["rule"], v["term"], v["where"])
+                 for v in r.get("violations", []) if v.get("rule") != "فارغ"]
+        items += ["%s «%s» %s" % (v["rule"], v["term"], v["where"])
+                  for v in r.get("warnings", [])]
+        if items:
+            lines.append("⚠ style (SOUL): " + " · ".join(i.strip() for i in items[:8]))
+    plen = [len(p.text.split()) for p in body_ps if len(p.text.split()) >= 25]
+    for i in range(2, len(plen)):
+        a, b, c = plen[i - 2:i + 1]
+        if max(a, b, c) - min(a, b, c) <= max(8, int(0.12 * max(a, b, c))):
+            lines.append("⚠ style: 3 consecutive paragraphs of near-equal length "
+                         "(%d/%d/%d words) — vary them" % (a, b, c))
+            break
+    head = ("✗ check: %d problem%s — fix and build again before you say it is done"
+            % (bad, "" if bad == 1 else "s")) if bad else "✓ check"
+    return "\n".join([head] + ["   " + x for x in lines])
+
+
 # ═════════════════════════════════ build ════════════════════════════════
 def build_word(spec, out):
     if str(spec.get("design", "")).lower() == "free":
@@ -604,16 +965,25 @@ def build_word(spec, out):
     d.save(out)
     _embed_word_fonts(out, [main, latin])
     _no_dupes(out)
+    fmt_note = _apply_word_format(out, spec, sections, lang)
     d = Document(out)
     imgs = sum(1 for n in zipfile.ZipFile(out).namelist()
                if n.startswith("word/media/"))
     fonts = " · ".join(x for x in (_font_says(main, "word"),
                                    _font_says(latin, "word")) if x)
     pages = _pages_note(out, spec.get("pages"))
-    return "Word %s: %d paragraphs · %d tables · %d images · %s%s%s" % (
+    res = "Word %s: %d paragraphs · %d tables · %d images · %s%s%s" % (
         lang.upper(), len(d.paragraphs), len(d.tables), imgs,
         "RTL" if lang == "ar" else "LTR", (" · " + fonts) if fonts else "",
         (" · " + pages) if pages else "")
+    if fmt_note:
+        res += "\n   " + fmt_note
+    try:
+        res += "\n" + _word_check(out, spec, sections, lang)
+    except Exception as e:
+        res += "\n⚠ check unavailable (%s: %s) — the file is built" % (
+            type(e).__name__, str(e)[:120])
+    return res
 
 
 def _slide_kind(s):
@@ -1082,6 +1452,8 @@ def cmd_build(spec_path, out):
         spec = _expand_slides(spec, os.path.dirname(os.path.abspath(spec_path)))
     elif _ext(out) == ".docx" and str(spec.get("design", "")).lower() == "free":
         spec = _expand_blocks(spec, os.path.dirname(os.path.abspath(spec_path)))
+    elif _ext(out) == ".docx":
+        spec = _expand_sections(spec, os.path.dirname(os.path.abspath(spec_path)))
     e = _ext(out)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     if e == ".docx":

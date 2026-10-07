@@ -2163,10 +2163,33 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
             parts.append(_L["mem"] + "\n" + str(memory).strip()[:4000])
         if context and str(context).strip():
             parts.append(_L["ctx"] + "\n" + str(context).strip()[:4000])
-        for h in (history or [])[-6:]:
-            if isinstance(h, dict) and h.get("content"):
-                parts.append(f"{h.get('role', 'user')}: "
-                             + str(h["content"])[:1200])
+        # طلباتُ المستخدم المفصّلةُ الأقدم: قِيس على هاتفه — بحثٌ طلب فيه الخطَّ
+        # والحجمَ والتقسيماتِ والمراجعَ في رسالةٍ طويلة، ثمّ «أكمل» بضعَ مرّات،
+        # فخرجت تلك الرسالةُ من آخر ستّ، ونُسيت المراجعُ والتقسيمات. فما كان من
+        # رسائله طويلاً (تعليماتٌ لا «أكمل») قبل الستّ الأخيرة يبقى، الأحدثُ أوّلاً
+        # حتى ٤٠٠٠ حرف، بترتيبه. والطولُ وحده المعيار — لا كلماتٌ مفتاحيّة.
+        _hist = [h for h in (history or []) if isinstance(h, dict)
+                 and h.get("content")]
+        _pin, _room = [], 4000
+        for h in reversed(_hist[:-6]):
+            c = str(h["content"]).strip()
+            if h.get("role", "user") != "user" or len(c) < 200:
+                continue
+            if len(c) > _room:
+                break
+            _pin.insert(0, c)
+            _room -= len(c)
+        if _pin:
+            parts.append(("[طلباتك السابقة المفصّلة في هذه المحادثة — ما زالت "
+                          "مطلوبة ما لم يغيّرها طلبٌ أحدث]" if _ar else
+                          "[Earlier detailed requests in this chat — still in "
+                          "force unless a newer request changed them]")
+                         + "\n" + "\n---\n".join(_pin))
+        for h in _hist[-6:]:
+            # رسالةُ المستخدم تصل أطول (تعليماتُه)، وردُّ النموذج كما كان
+            _cap = 3000 if h.get("role", "user") == "user" else 1200
+            parts.append(f"{h.get('role', 'user')}: "
+                         + str(h["content"])[:_cap])
         if attachments and str(attachments).strip():
             parts.append(_L["att"] + "\n" + str(attachments).strip()[:8000])
         # مجلّدُ عمل هذه المحادثة: ملفّاتُها ومسوّداتُ مهاراتها فيه وحدَه.
