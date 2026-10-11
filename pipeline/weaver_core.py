@@ -129,7 +129,7 @@ def _load_settings():
     except Exception:
         pass
     for k in ("WEAVER_API_KEY", "WEAVER_BASE_URL", "WEAVER_MODEL",
-              "WEAVER_PROVIDER"):
+              "WEAVER_PROVIDER", "WEAVER_IMAGE_MODEL"):
         v = (os.environ.get(k) or "").strip()
         if v:
             out[k] = v                       # البيئةُ تعلو، كـload_env
@@ -2274,6 +2274,28 @@ def engine_route():
         return {"mode": "", "why": "%s: %s" % (type(e).__name__, str(e)[:120])}
 
 
+def image_model_id(route=None):
+    """نموذجُ الصور المنفصل (`WEAVER_IMAGE_MODEL`) على المنصّة نفسِها، أو "".
+
+    قِيس على هاتف المستخدم (tools/test_vision.py، مفتاحُه نفسُه):
+        deepseek-v4-pro               صورةٌ حمراءُ وزرقاء ⟵ «White» و«White»
+        deepseek-v4-flash-vision-exp  ⟵ «Red» و«Blue» ✓
+    فنموذجُ الكتابة نصّيٌّ عبر الـAPI، وللمنصّة نموذجٌ آخرُ يرى. والمحرّكُ
+    يدعم ذلك بعينه: نموذجٌ رئيسيٌّ بلا رؤية + `agents.defaults.imageModel`
+    ⟵ أداةُ `view_image` تمرّر الصورةَ إلى نموذج الصور وتعيد وصفَها نصّاً.
+    للمزوّد المخصَّص وحده (هو الذي نكتب نماذجَه)، ولا شيءَ إن لم يُضبط."""
+    try:
+        r = route or engine_route()
+        if r.get("mode") != "custom":
+            return ""
+        im = _setting("WEAVER_IMAGE_MODEL")
+        if im.startswith(CUSTOM_PROVIDER + "/"):
+            im = im[len(CUSTOM_PROVIDER) + 1:]
+        return "" if (not im or im == r.get("model")) else im
+    except Exception:
+        return ""
+
+
 def custom_provider_tree(route=None, key_present=True):
     """شجرةُ `models.providers.weaver` — بشكل ما يكتبه معالجُ المحرّك.
 
@@ -2290,6 +2312,11 @@ def custom_provider_tree(route=None, key_present=True):
     # الصور»، وحلّلها بكسلاتٍ في ١٠ أدوات. `WEAVER_MODEL_VISION=on` يعلن
     # الصور؛ ومطفأٌ افتراضياً (منصّةٌ لا تقبل الصور ترفض الطلب حين تُرسَل).
     vision = _setting("WEAVER_MODEL_VISION").lower() in ("1", "on", "true", "yes")
+    # نموذجُ صورٍ منفصل ⟵ الرئيسيُّ يُعلَن نصّيّاً (هو كذلك فعلاً)، فلا تُرسَل
+    # إليه صورٌ لا يراها، ويستعين المحرّكُ بنموذج الصور عبر view_image.
+    img = image_model_id(r)
+    if img:
+        vision = False
     model = {"id": mid, "name": mid + " (Weaver Write)",
              "input": ["text", "image"] if vision else ["text"],
              "reasoning": False,
@@ -2304,7 +2331,13 @@ def custom_provider_tree(route=None, key_present=True):
         pass
     if r.get("api") == "openai-completions":
         model["compat"] = {"maxTokensField": "max_tokens"}
-    prov = {"baseUrl": r["base_url"], "api": r["api"], "models": [model]}
+    models = [model]
+    if img:
+        im = dict(model)
+        im.update({"id": img, "name": img + " (Weaver Write · images)",
+                   "input": ["text", "image"]})
+        models.append(im)
+    prov = {"baseUrl": r["base_url"], "api": r["api"], "models": models}
     if key_present:
         prov["apiKey"] = "${" + CUSTOM_KEY_ENV + "}"
     return {"models": {"mode": "merge",
@@ -2365,7 +2398,12 @@ def _model_fingerprint():
     # لمن لم يفعّلها: بصمتُه كما كانت حرفاً.
     if _setting("WEAVER_MODEL_VISION").lower() in ("1", "on", "true", "yes"):
         boot += "|vision"
+    _img = image_model_id(r)
+    if _img:
+        boot += "|image:" + _img
     fp = {"boot": boot, "model": r.get("ref", "")}
+    if _img:
+        fp["image"] = _img
     # خارجَ boot: تغييرُها يُعيد الكتابةَ بلا إعادةِ إقلاع. ولا مفتاحَ حين
     # لا عقوبة — فبصمةُ من لم يضبطها كما كانت حرفاً، ولا كتابةَ زائدة.
     pen = penalty_params()
@@ -2539,7 +2577,10 @@ def tools_policy():
     want = (os.environ.get("WEAVER_TOOL_PROFILE", "") or "lean").strip().lower()
     if want in ("full", "coding", "messaging"):
         return want, []
-    return "minimal", list(TOOLS_LEAN_ALLOW)
+    # نموذجُ صورٍ منفصل ⟵ أداتُه (view_image) في القائمة، وإلّا لم يرَها النموذج.
+    # قِيس: imageModel مكتوبٌ والأداةُ غائبةٌ عن طلب النموذج تحت «minimal».
+    return "minimal", list(TOOLS_LEAN_ALLOW) + (
+        ["view_image"] if image_model_id() else [])
 
 
 def configure_model():
@@ -2578,6 +2619,16 @@ def configure_model():
         _merge(tree, custom_provider_tree(_route, key_present=bool(creds)))
         names.append("models.providers.%s = %s  (%s)" % (
             CUSTOM_PROVIDER, _route.get("base_url", ""), _route.get("api", "")))
+    # نموذجُ الصور: يُكتب إن ضُبط، ويُحذف إن أُزيل بعد أن كُتب (null يحذف).
+    _img = image_model_id(_route)
+    if _img:
+        _merge(tree, {"agents": {"defaults": {"imageModel": {
+            "primary": CUSTOM_PROVIDER + "/" + _img}}}})
+        names.append("agents.defaults.imageModel.primary = %s/%s"
+                     % (CUSTOM_PROVIDER, _img))
+    elif _applied_fingerprint().get("image"):
+        _merge(tree, {"agents": {"defaults": {"imageModel": None}}})
+        names.append("agents.defaults.imageModel = (حُذف)")
     for env_name, key in (creds or {}).items():
         _merge(tree, _nest("env.vars." + env_name, key))
         names.append("env.vars." + env_name + " = ***" + key[-4:])

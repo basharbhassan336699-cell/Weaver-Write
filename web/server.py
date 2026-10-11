@@ -555,6 +555,15 @@ def _extract_bytes(data: bytes, name: str) -> str:
         return ""
 
 
+def _image_model_on():
+    """أمضبوطٌ نموذجُ صورٍ منفصلٌ للمحرّك؟ لا يرفع."""
+    try:
+        from pipeline import weaver_core as _wc
+        return bool(_wc.image_model_id())
+    except Exception:
+        return False
+
+
 def _attach_extract(files):
     """Turn the request's attached files into one text block the model can act
     on. Each entry may carry already-extracted `text` (text files read on the
@@ -583,6 +592,10 @@ def _attach_extract(files):
                          f"{txt[:_ATTACH_MAX_CHARS]}")
         elif txt:
             parts.append(f"[{tag}: {name}]\n{txt[:_ATTACH_MAX_CHARS]}")
+        elif ext in _IMAGE_EXTS and _image_model_on():
+            # نموذجُ صورٍ مضبوط (WEAVER_IMAGE_MODEL): الصورةُ تُرى بأداة view_image
+            parts.append(f"[{tag} — صورة: {name}] (لا نصَّ فيها عبر OCR. لترى "
+                         f"محتواها ⟵ أداةُ view_image على ملفّها في مجلّد العمل.)")
         elif ext in _IMAGE_EXTS:
             parts.append(f"[{tag} — صورة: {name}] (تعذّرت قراءة نصّ من الصورة عبر "
                          f"OCR — إمّا لا تحوي نصاً، أو OCR غير مُفعّل على الجهاز. "
