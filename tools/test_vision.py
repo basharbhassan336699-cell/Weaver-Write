@@ -13,6 +13,9 @@ word. Verdict:
 
 Usage (in the project root, with your key already saved in config/.env):
     python tools/test_vision.py
+    python tools/test_vision.py --model deepseek-v4-flash-vision-exp
+(--model tries another model on the same provider and key, e.g. a separate
+vision model, without changing any setting.)
 
 No new dependencies; uses the same provider settings as the app.
 """
@@ -127,6 +130,10 @@ def _setting_vision():
 
 def main():
     key, base, model = _load_settings()
+    if "--model" in sys.argv[1:]:
+        i = sys.argv.index("--model")
+        if i + 1 < len(sys.argv) and sys.argv[i + 1].strip():
+            model = sys.argv[i + 1].strip()
     if not key or not base:
         print("✗ لا يوجد مفتاح/مزوّد مضبوط. أضِف مفتاحك أولاً من قسم Keys.")
         return 2
