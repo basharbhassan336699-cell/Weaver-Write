@@ -169,4 +169,15 @@ server.keepAliveTimeout = 5000;
 server.listen(0, "127.0.0.1", () => {
   process.stdout.write("READY " + server.address().port + "\n");
 });
+// تخرج حين يموت من أقلعها (خادمُ Weaver). كان `pkill -f "weaver serve"` في كلِّ
+// تحديثٍ يقتل الخادمَ ويترك هذه العمليةَ يتيمةً في الذاكرة — وكلُّ تحديثٍ يزيد
+// واحدة، على هاتفٍ ذاكرتُه 3.7 GB. وخادمٌ جديدٌ يُقلع عمليةً جديدةً لنفسه.
+const PARENT = process.ppid;
+setInterval(() => {
+  let alive = process.ppid === PARENT;
+  if (alive) {
+    try { process.kill(PARENT, 0); } catch { alive = false; }
+  }
+  if (!alive) process.exit(0);
+}, 5000).unref();
 process.on("unhandledRejection", () => {});

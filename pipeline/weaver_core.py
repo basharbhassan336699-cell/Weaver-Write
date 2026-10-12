@@ -655,6 +655,69 @@ def gateway_health(timeout=2):
             pass
 
 
+# ── كودُ المحرّك تغيّر؟ ⟵ إعادةُ إقلاعٍ وحدها، لا في كلِّ تحديث ─────────────
+#
+# كان أمرُ التحديث يُطفئ البوّابةَ في كلِّ مرّة (`--gateway stop`)، فيعود أوّلُ
+# ردٍّ بعده إلى إقلاعٍ كامل — قِيس على هاتف المستخدم: «http server listening
+# (14 plugins …; 74.3s)» ثمّ نحو ٢٣ ث تجهيزاً لأوّل نوبة. وقِيس هنا أنّ ما
+# تغيّره التحديثاتُ عادةً يصل البوّابةَ الحيّة بلا إقلاع: SOUL.md ونصُّ المهارة
+# فوراً، وقائمةُ المهارات خلال ثوانٍ، وإعدادُ النموذج بـmodel_sync (يُطفئها هو
+# حين يلزم). ويبقى ما لا يصل إلا بإقلاع: كودُ المحرّك نفسُه (runtime/، يُركّبه
+# install.sh ولا يتتبّعه git). فبصمتُه (إصدارُه وأحدثُ تعديلٍ في ملفّاته) تُحفظ
+# عند الإقلاع وتُقارن قبل الاستعمال: تغيّرت ⟵ تُطفأ وتُقلع على الجديد؛ لم
+# تتغيّر ⟵ تبقى حيّة. وتُحسب مرّةً لكلِّ عمليّة (٦٠٠٠ ملفّ؛ ٤٠ مللي ث هنا).
+ENGINE_BOOTED = os.path.join(STATE, "engine.booted")
+_ENGINE_FP = {}
+
+
+def engine_code_fp(fresh=False):
+    """بصمةُ كود المحرّك المركَّب، أو "" عند العجز. لا يرفع."""
+    if not fresh and "v" in _ENGINE_FP:
+        return _ENGINE_FP["v"]
+    v = ""
+    try:
+        import json
+        rt = os.path.dirname(ENTRY)
+        pj = os.path.join(rt, "package.json")
+        with open(pj, encoding="utf-8") as fh:
+            ver = (json.load(fh).get("version") or "?")
+        newest = max([os.stat(ENTRY).st_mtime, os.stat(pj).st_mtime] +
+                     [e.stat().st_mtime for e in os.scandir(os.path.join(rt, "dist"))
+                      if e.is_file()])
+        v = "%s@%d" % (ver, int(newest))
+    except Exception:
+        v = ""
+    _ENGINE_FP["v"] = v
+    return v
+
+
+def _engine_booted(fp=None):
+    """اقرأ البصمةَ المحفوظة، أو احفظ `fp`."""
+    try:
+        if fp is None:
+            with open(ENGINE_BOOTED, encoding="utf-8") as fh:
+                return fh.read().strip()
+        os.makedirs(STATE, exist_ok=True)
+        with open(ENGINE_BOOTED, "w", encoding="utf-8") as fh:
+            fh.write(fp)
+    except Exception:
+        pass
+    return ""
+
+
+def engine_code_changed():
+    """أتعمل البوّابةُ الحيّةُ على كودٍ أقدمَ من المستودع؟ بلا بصمةٍ محفوظة
+    (أوّلُ تشغيلٍ بعد هذا الإصلاح) تُحفظ الحاليّةُ ولا يُعدّ تغييراً."""
+    cur = engine_code_fp()
+    if not cur:
+        return False
+    old = _engine_booted()
+    if not old:
+        _engine_booted(cur)
+        return False
+    return old != cur
+
+
 def gateway_start(wait=None, say=None):
     """أقلِع البوّابةَ في الخلفية وانتظرها حتى تسمع. يعيد (نجح، سبب).
 
@@ -674,7 +737,10 @@ def gateway_start(wait=None, say=None):
                 pass
     with _gw_lock:
         if gateway_health():
-            return True, "كانت حيّةً سلفاً"
+            if not engine_code_changed():
+                return True, "كانت حيّةً سلفاً"
+            _say("… كودُ المحرّك تغيّر — إعادةُ إقلاع البوّابة")
+            gateway_stop()
         nb = node_bin()
         if not (available() and nb):
             return False, why_unavailable()
@@ -757,6 +823,9 @@ def gateway_start(wait=None, say=None):
                 _say("  … %d ث" % int(_el))
             if gateway_health():
                 _say("✓ أقلعت في %.1f ث" % _el)
+                _fpc = engine_code_fp(fresh=True)
+                if _fpc:
+                    _engine_booted(_fpc)
                 # إقلاعةٌ جديدة ⟶ تُضمَن صلاحيةُ البحث مرّةً واحدة. والبوّابةُ
                 # تحمل بيئتَها من لحظة إقلاعها، فهذا أوانُه الصحيح.
                 try:
