@@ -148,7 +148,7 @@ def test_pinned_requests():
 def test_skill():
     s = open(os.path.join(ROOT, "capabilities", "prompts", "skills", "office-word",
                           "SKILL.md"), encoding="utf-8").read()
-    check("المهارة: قسماً قسماً", "sections/s01.json" in s and "refs.json" in s)
+    check("المهارة: قسماً قسماً (أجزاءُ Markdown)", "sections/s01.md" in s and "refs.md" in s)
     check("المهارة: لا سكربتَ بدلَ الأداة", "لا تكتب سكربتَ python-docx بدلَ الأداة" in s)
     check("المهارة: format و outline", '"format"' in s and '"outline"' in s)
     check("المهارة: لا تسلّم ملفّاً عليه ✗", "لا تسلّم" in s)

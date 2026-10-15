@@ -566,7 +566,11 @@ _gw_lock = threading.Lock()
 # فالنتيجةُ التي يراها المستخدم: جوابٌ واثقٌ لا يعرف شيئاً عن اليوم. لا
 # لأنّ البحثَ معطوب — بل لأنّنا نقتل النوبةَ قبل أن يبحث.
 _AGENT_GRACE = 90          # إقلاعُ البوّابة وفتحُ العملية على هاتف
-_AGENT_DEADLINE_DEFAULT = 600
+# وكانت ٦٠٠ (افتراضيُّ المحرّك). قِيس على الهاتف: بحثُ ١٥ صفحة ⟵ «Request timed
+# out before a response was generated» والملفُّ عند ١١ — كتابةُ الأجزاء والبناءُ
+# والفحصُ لا تتّسع لها عشرُ دقائق على هاتف، فكيف بخمسين صفحة. ٣٠ دقيقة، وزرُّ
+# «إيقاف» بيد المستخدم، و`WEAVER_AGENT_DEADLINE` تضبطها.
+_AGENT_DEADLINE_DEFAULT = 1800
 
 
 def agent_deadline():
@@ -3043,10 +3047,126 @@ def seed_workspace(timeout=180):
         return _bad
 
 
+# ── ملفّاتُ التعريف التي يقرؤها النموذجُ في كلِّ رسالة ─────────────────────
+#
+# قِيس: AGENTS.md وIDENTITY.md وUSER.md في مساحة العمل هي قوالبُ المحرّك
+# الافتراضيّة — مساعدٌ شخصيٌّ عامٌّ بالإنجليزيّة (Discord وWhatsApp، البريدُ
+# والتقويم والطقس، «كن مبادراً»)، وقوالبُ فارغة («اختر لنفسك اسماً»). ~٢٤٠٠
+# رمزٍ في كلِّ رسالة لا كلمةَ فيها عن عمل Weaver Write، ولا أنّ متطلّباتِ
+# المستخدم التزامٌ للمهمّة كلِّها. فتُستبدَل بنسخنا (capabilities/prompts/
+# workspace/) — **ما دامت قالبَ المحرّك** أو نسخةً سابقةً منّا. وما حرّرتَه أنت
+# (أو كتب فيه النموذجُ تفضيلاتِك في USER.md) لا يُمَسّ. ونسخةٌ احتياطيّةٌ
+# `<الاسم>.openclaw` مرّةً واحدة. `WEAVER_WS_PROMPTS=off` تمنع ذلك.
+WS_PROMPTS_SRC = os.path.join(_ROOT, "capabilities", "prompts", "workspace")
+_WS_PROMPTS = ("AGENTS.md", "IDENTITY.md", "USER.md")
+# علامةُ قالب المحرّك — يُعرف بها ولو أضاف إليه المحرّكُ سطراً (IDENTITY: Theme)
+_WS_STOCK_MARK = {"AGENTS.md": "# AGENTS.md - Your Workspace",
+                  "IDENTITY.md": "Fill this in during your first conversation"}
+# نسخُنا السابقة (sha256 أوّلُ ١٦ بعد strip) — تُضاف هنا عند تعديل أيّ منها
+_WS_PROMPTS_PAST = {}
+
+
+def _ws_src(name):
+    return os.path.join(WS_PROMPTS_SRC, name[:-3] + ".weaver.md")
+
+
+def _stock_template(name):
+    """قالبُ المحرّك كما يكتبه في مساحة العمل (بلا الواجهة)، أو ""."""
+    t = _read(os.path.join(RUNTIME, "docs", "reference", "templates", name))
+    if t.lstrip().startswith("---"):
+        _t = t.lstrip()
+        _end = _t.find("\n---", 3)
+        if _end > 0:
+            t = _t[_end + 4:].lstrip()
+    return t
+
+
+def ws_prompt_state(name):
+    """which: weaver · weaver-old · openclaw · missing · custom. لا يرفع."""
+    cur = _read(os.path.join(workspace_dir(), name))
+    src = _read(_ws_src(name))
+    if not cur.strip():
+        which = "missing"
+    elif src.strip() and cur.strip() == src.strip():
+        which = "weaver"
+    elif _soul_hash(cur) in _WS_PROMPTS_PAST.get(name, ()):
+        which = "weaver-old"
+    elif cur.strip() == _stock_template(name).strip() or (
+            _WS_STOCK_MARK.get(name) and _WS_STOCK_MARK[name] in cur):
+        which = "openclaw"
+    else:
+        which = "custom"
+    return {"name": name, "which": which, "src_ok": bool(src.strip())}
+
+
+def ws_prompts_on():
+    return (os.environ.get("WEAVER_WS_PROMPTS", "on") or "on").strip().lower() \
+        not in ("0", "off", "false", "no")
+
+
+def ws_prompts_apply():
+    """ركّب ملفّاتِ التعريف حيث تلزم. يعيد [(اسم، الحالة، ما جرى)]. لا يرفع."""
+    rows = []
+    for name in _WS_PROMPTS:
+        try:
+            st = ws_prompt_state(name)
+            if not st["src_ok"] or st["which"] in ("weaver", "custom"):
+                rows.append((name, st["which"], "—"))
+                continue
+            path = os.path.join(workspace_dir(), name)
+            bak = path + ".openclaw"
+            cur = _read(path)
+            if cur.strip() and st["which"] == "openclaw" and not os.path.isfile(bak):
+                with open(bak, "w", encoding="utf-8") as fh:
+                    fh.write(cur)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(_read(_ws_src(name)))
+            rows.append((name, st["which"], "رُكِّب"))
+        except Exception as e:
+            rows.append((name, "error", "%s: %s" % (type(e).__name__, str(e)[:100])))
+    return rows
+
+
+# مرّةً لكلِّ عمليّة: الدستورُ والمهاراتُ وملفّاتُ التعريف تُرقّى إلى نسخة
+# المستودع. كانت تُركَّب عند البذر الأوّل وحده — فكلُّ تحديثٍ لمهارةٍ أو للدستور
+# بعده لا يصل الهاتفَ إلا بأمرٍ يدويّ (`--skills apply`). كلُّها لا تدهس تحريرَك.
+_WS_SYNCED = {"done": False, "rows": []}
+
+
+def workspace_sync(say=None):
+    if _WS_SYNCED["done"]:
+        return _WS_SYNCED["rows"]
+    _WS_SYNCED["done"] = True
+    rows = []
+    try:
+        if soul_on():
+            ok, why = soul_apply()
+            rows.append(("SOUL.md", ok, why))
+        if skills_on():
+            _ok, srows = skills_apply()
+            rows += [("skills/" + n, ok, w) for n, ok, w in srows
+                     if w != "مُركَّبةٌ سلفاً"]
+        if ws_prompts_on():
+            rows += [(n, which != "error", "%s ⟵ %s" % (which, w))
+                     for n, which, w in ws_prompts_apply()]
+    except Exception as e:
+        rows.append(("workspace", False, "%s: %s" % (type(e).__name__, str(e)[:120])))
+    _WS_SYNCED["rows"] = rows
+    if say:
+        for n, ok, w in rows:
+            try:
+                say("%s %s: %s" % ("✓" if ok else "⚠", n, w))
+            except Exception:
+                pass
+    return rows
+
+
 def ensure_workspace(say=None):
-    """ابذر مرّةً واحدةً إن لزم. رخيصةٌ حين لا يلزم: فحصُ ملفٍّ لا غير."""
+    """ابذر مرّةً واحدةً إن لزم. رخيصةٌ حين لا يلزم: فحصُ ملفٍّ لا غير.
+    ومرّةً لكلِّ عمليّةٍ تُرقّى ملفّاتُنا فيها (workspace_sync)."""
     if _WS_SEEDED["done"] or workspace_seeded():
         _WS_SEEDED["done"] = True
+        workspace_sync(say)
         return True, "مبذورة"
     r = seed_workspace()
     _WS_SEEDED["done"] = bool(r.get("ok"))
@@ -3060,6 +3180,10 @@ def ensure_workspace(say=None):
                     else ("⚠ الدستور: " + str(_why2)[:120]))
             except Exception:
                 pass
+    if r.get("ok") and ws_prompts_on():
+        ws_prompts_apply()
+    if r.get("ok"):
+        _WS_SYNCED["done"] = True
     if r.get("ok") and skills_on():
         _ok3, _rows3 = skills_apply()
         if say:
@@ -3294,7 +3418,8 @@ _SKILLS_PAST = {
                               "79dd5e23f2d0952d",           # الطول والأرقام
                               "9b62f8a5fe56c067",           # الغلافُ والترتيب
                               "968f96f96648f1e0",           # التصميمُ الحرّ
-                              "40fecf605ea9de64")),         # قسماً قسماً والفحص
+                              "40fecf605ea9de64",           # قسماً قسماً والفحص
+                              "86561503718923a5")),         # Markdown والخطّة والمتطلّبات
     "office-powerpoint": frozenset(("65ddef835b011e03",
                                     "d63d0fedb6314c9b",
                                     "248c77d172095565",     # التصميم والعدد

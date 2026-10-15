@@ -13,6 +13,7 @@ Excel.
 
     python3 office.py info  FILE [--find TEXT] [--rows N]
     python3 office.py build SPEC.json --out FILE.docx|.pptx|.xlsx
+    python3 office.py plan  SPEC.json      ⟵ كم كلمةً لعدد الصفحات المطلوب
     python3 office.py chart SPEC.json --out FILE.png
     python3 office.py chart SPEC.json --into FILE.docx|.pptx [--out NEW]
     python3 office.py edit  FILE OPS.json [--out NEW]
@@ -111,9 +112,12 @@ class Fail(Exception):
 
 
 def _load_json(path):
+    # strict=False: سطرٌ حقيقيٌّ داخل نصّ (لا \n) يُقبل. قِيس على الهاتف: أداةُ
+    # التعديل تكتب فواصلَ الأسطر حقيقيّة، فيُرفض الملفُّ كلُّه («Invalid control
+    # character at line 88») ويذهب نصفُ النوبة في إصلاحه بدل الكتابة.
     try:
         with open(path, encoding="utf-8") as f:
-            return json.load(f)
+            return json.load(f, strict=False)
     except FileNotFoundError:
         raise Fail("spec file not found: %s" % path)
     except json.JSONDecodeError as e:
@@ -563,30 +567,104 @@ def build_word_free(spec, out):
 #   وفحصٌ بعد البناء لِما يُنسى: المراجع، مطابقةُ الاستشهادات، الشرطات، الأسلوب
 # وكلُّه اختياريّ: مواصفةٌ بلا "format" تُبنى كما كانت حرفاً.
 
+_MD_EXTS = (".md", ".markdown", ".txt")
+
+
+def _md_sections(path):
+    """ملفُّ نصٍّ عاديّ (Markdown) ⟵ أقسام: «# » مبحث، «## » مطلب، «### » و«#### »
+    تقسيماتُه؛ وما تحت العنوان نصُّه كما هو (فقرات، نقاط، جداول). لا هروبَ لشيء —
+    فالنصُّ الطويلُ لا يُكتب داخل JSON أصلاً."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.read().replace("\r\n", "\n").split("\n")
+    except FileNotFoundError:
+        raise Fail("section file not found: %s" % path)
+    out, cur = [], None
+    for ln in lines:
+        m = re.match(r"^(#{1,4})\s+(.+?)\s*#*\s*$", ln)
+        if m:
+            if cur is not None:
+                out.append(cur)
+            cur = {"heading": m.group(2).strip(), "level": len(m.group(1)), "body": []}
+            continue
+        if cur is None:
+            if not ln.strip():
+                continue
+            cur = {"heading": "", "level": 1, "body": []}
+        cur["body"].append(ln)
+    if cur is not None:
+        out.append(cur)
+    for s_ in out:
+        s_["body"] = "\n".join(s_["body"]).strip()
+    return out
+
+
+def _md_references(path):
+    """مراجعُ من ملفٍّ نصّيّ: مرجعٌ في كلِّ سطر (يُحذف «- » و«1. » في أوّله)."""
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = f.read().splitlines()
+    except FileNotFoundError:
+        raise Fail("references file not found: %s" % path)
+    for ln in raw:
+        t = ln.strip()
+        if not t or t.startswith("#"):
+            continue
+        t = re.sub(r"^(?:[-*•]\s+|\d{1,3}[.)]\s+)", "", t).strip()
+        if t:
+            out.append(t)
+    return out
+
+
+def _section_paths(it, base):
+    """مسارٌ واحد، أو نمطٌ («sections/*.md») يُوسَّع مرتَّباً."""
+    p = it if os.path.isabs(it) else os.path.join(base, it)
+    if any(c in it for c in "*?["):
+        import glob
+        hits = sorted(glob.glob(p))
+        if not hits:
+            raise Fail("no files match %s" % it)
+        return hits
+    return [p]
+
+
 def _expand_sections(spec, base):
     """أقسامُ البحث من ملفّاتٍ منفصلة — كالكتل والشرائح (حدُّ طول الردّ الواحد):
-    عنصرٌ نصّيٌّ في "sections" مسارُ ملفٍّ فيه قسمٌ أو قائمةُ أقسام أو
-    {"sections": […]}. و"references" تقبل كذلك مسارَ ملفٍّ فيه قائمة."""
+    عنصرٌ نصّيٌّ في "sections" مسارُ ملفٍّ: نصٌّ عاديٌّ .md (عناوينُه # ## ### ####)،
+    أو JSON فيه قسمٌ أو قائمةُ أقسام أو {"sections": […]}؛ ويُقبل نمطٌ مثل
+    "sections/*.md". و"references" تقبل كذلك مسارَ ملفٍّ (.json قائمة، أو .md
+    مرجعٌ في كلِّ سطر)."""
     spec = dict(spec)
     items = spec.get("sections")
+    if isinstance(items, str):
+        items = [items]
     if isinstance(items, list) and any(isinstance(x, str) for x in items):
         out = []
-        for it in items:
-            if not isinstance(it, str):
-                out.append(it)
+        for it0 in items:
+            if not isinstance(it0, str):
+                out.append(it0)
                 continue
-            part = _load_json(it if os.path.isabs(it) else os.path.join(base, it))
-            if isinstance(part, dict) and isinstance(part.get("sections"), list):
-                part = part["sections"]
-            if isinstance(part, dict):
-                out.append(part)
-            elif isinstance(part, list):
-                out.extend(x for x in part if isinstance(x, dict))
-            else:
-                raise Fail("%s must hold a section or a list of sections" % it)
+            for path in _section_paths(it0, base):
+                if path.lower().endswith(_MD_EXTS):
+                    out.extend(_md_sections(path))
+                    continue
+                part = _load_json(path)
+                if isinstance(part, dict) and isinstance(part.get("sections"), list):
+                    part = part["sections"]
+                if isinstance(part, dict):
+                    out.append(part)
+                elif isinstance(part, list):
+                    out.extend(x for x in part if isinstance(x, dict))
+                else:
+                    raise Fail("%s must hold a section or a list of sections"
+                               % os.path.relpath(path, base))
         spec["sections"] = out
     refs = spec.get("references")
-    if isinstance(refs, str) and refs.strip().lower().endswith(".json"):
+    if isinstance(refs, str) and refs.strip().lower().endswith(_MD_EXTS):
+        spec["references"] = _md_references(
+            refs if os.path.isabs(refs) else os.path.join(base, refs))
+    elif isinstance(refs, str) and refs.strip().lower().endswith(".json"):
         part = _load_json(refs if os.path.isabs(refs) else os.path.join(base, refs))
         if isinstance(part, dict):
             part = part.get("references")
@@ -879,12 +957,72 @@ def _word_check(path, spec, sections, lang):
             lines.append("✓ outline: %s" % (shape or "ok"))
     elif chapters:
         lines.append("· outline: %s" % shape)
-    # ③ الشرطاتُ الطويلة
+    # ③ قواعدُ المستخدم القابلةُ للقياس ("rules" في المواصفة) — أيّاً كان ما طلبه
+    # مما يُقاس: طولُ الفقرة بالأسطر، والنقاطُ بجانب السرد، وعددُ المراجع.
+    rules = spec.get("rules") if isinstance(spec.get("rules"), dict) else {}
+    if rules:
+        rmin = _num(rules.get("references_min"))
+        if rmin and len(refs) < int(rmin):
+            bad += 1
+            lines.append("✗ references: %d, at least %d requested" % (len(refs), int(rmin)))
+        if rules.get("bullets"):
+            groups, cur_h = {}, None
+            for p in ps[start:end]:
+                lv = _heading_level(p)
+                if lv == 1:
+                    cur_h = p.text.strip()
+                    groups.setdefault(cur_h, 0)
+                elif not lv and p.text.strip() and (
+                        (p.style.name or "").startswith("List") or
+                        p._p.find(".//{http://schemas.openxmlformats.org/"
+                                  "wordprocessingml/2006/main}numPr") is not None):
+                    groups[cur_h] = groups.get(cur_h, 0) + 1
+            total = sum(groups.values())
+            chap_names = {c[0] for c in chapters}
+            dry = [h for h, n in groups.items() if h in chap_names and not n]
+            if not total:
+                bad += 1
+                lines.append("✗ bullets: none — the request asks for bullet points "
+                             "where the content calls for them, next to the prose")
+            elif dry:
+                lines.append("⚠ bullets: %d in total, none in: %s" % (
+                    total, " · ".join("«%s»" % h[:40] for h in dry[:6])))
+            else:
+                lines.append("✓ bullets: %d, in every chapter" % total)
+        pl = rules.get("paragraph_lines")
+        if isinstance(pl, (list, tuple)) and len(pl) == 2 and _num(pl[0]) and _num(pl[1]):
+            lo, hi = int(_num(pl[0])), int(_num(pl[1]))
+            try:
+                _paths()
+                from docx_pages import paragraph_lines
+                nl = paragraph_lines(path)
+            except Exception:
+                nl = []
+            if len(nl) == len(ps):
+                cand = [(i, nl[i]) for i in range(start, end)
+                        if not _heading_level(ps[i]) and len(ps[i].text.split()) >= 8
+                        and not (ps[i].style.name or "").startswith("List")]
+                off = [(i, n) for i, n in cand if n < lo or n > hi]
+                if off:
+                    share = len(off) / max(1, len(cand))
+                    ex = " · ".join("«%s…» %d" % (" ".join(ps[i].text.split()[:4]), n)
+                                    for i, n in off[:6])
+                    msg = ("paragraph length: %d of %d paragraphs are outside %d-%d "
+                           "lines (%s)" % (len(off), len(cand), lo, hi, ex))
+                    if share > 0.15:
+                        bad += 1
+                        lines.append("✗ " + msg + " — split or join them")
+                    else:
+                        lines.append("⚠ " + msg)
+                elif cand:
+                    lines.append("✓ paragraph length: all %d within %d-%d lines"
+                                 % (len(cand), lo, hi))
+    # ④ الشرطاتُ الطويلة
     nd = sum(p.text.count("—") + p.text.count("–") for p in body_ps)
     if nd:
         lines.append("⚠ %d long dash%s (— –) in the text — use \"-\" or a comma, or set "
                      "\"format\": {\"dashes\": \"-\"}" % (nd, "" if nd == 1 else "es"))
-    # ④ الأسلوب (دستورُ الكتابة) وتنويعُ الفقرات
+    # ⑤ الأسلوب (دستورُ الكتابة) وتنويعُ الفقرات
     try:
         from pipeline import soul_check as sc
     except Exception:
@@ -907,6 +1045,29 @@ def _word_check(path, spec, sections, lang):
             lines.append("⚠ style: 3 consecutive paragraphs of near-equal length "
                          "(%d/%d/%d words) — vary them" % (a, b, c))
             break
+    # ⑥ متطلّباتُ المستخدم كلُّها (REQUEST.md بجانب المواصفة) — ما لا يُقاس آليّاً
+    # يُعرض هنا ليؤكّده النموذجُ بنداً بنداً، فلا يسقط شيءٌ ممّا طلبه.
+    base = spec.get("_base") or ""
+    req = os.path.join(base, "REQUEST.md") if base else ""
+    if req and os.path.isfile(req):
+        items = []
+        try:
+            for ln in open(req, encoding="utf-8").read().splitlines():
+                t = ln.strip()
+                m = re.match(r"^(?:[-*•]\s+(?:\[[ xX✓]\]\s*)?|\d{1,3}[.)]\s+)(.+)$", t)
+                if m and m.group(1).strip():
+                    items.append(m.group(1).strip()[:160])
+        except Exception:
+            items = []
+        if items:
+            lines.append("📋 REQUEST.md — the user's requirements; check the file against "
+                         "EACH one and say ✓/✗ per item in your reply (fix every ✗ first):")
+            lines += ["   □ " + x for x in items[:40]]
+            if len(items) > 40:
+                lines.append("   … %d more in REQUEST.md" % (len(items) - 40))
+    elif base and len([x for x in (sections or []) if x.get("heading")]) >= 3:
+        lines.append("· no REQUEST.md next to the spec — write the user's requirements "
+                     "there (one per line) so none is dropped in later turns")
     head = ("✗ check: %d problem%s — fix and build again before you say it is done"
             % (bad, "" if bad == 1 else "s")) if bad else "✓ check"
     return "\n".join([head] + ["   " + x for x in lines])
@@ -1454,6 +1615,7 @@ def cmd_build(spec_path, out):
         spec = _expand_blocks(spec, os.path.dirname(os.path.abspath(spec_path)))
     elif _ext(out) == ".docx":
         spec = _expand_sections(spec, os.path.dirname(os.path.abspath(spec_path)))
+        spec["_base"] = os.path.dirname(os.path.abspath(spec_path))
     e = _ext(out)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     if e == ".docx":
@@ -1463,6 +1625,117 @@ def cmd_build(spec_path, out):
     if e == ".xlsx":
         return build_excel(spec, out)
     raise Fail("--out must end with .docx .pptx or .xlsx — got %s" % (e or "none"))
+
+
+# ── «كم أكتب؟» قبل الكتابة ─────────────────────────────────────────────────
+# قِيس على الهاتف: طُلبت ١٥ صفحة فكُتبت ٨، ثمّ وُسّعت على دفعاتٍ صغيرة («أحتاج
+# ~1527 كلمة» ثمّ «~1146» ثمّ «~914»…) حتى انتهت مهلةُ النوبة عند ١١. فالحجمُ
+# يُحسب أوّلاً من التنسيق المطلوب نفسِه (خطُّه وحجمُه وتباعدُه وورقُه)، بمقياس
+# الصفحات ذاتِه، ثمّ يُكتب مرّةً واحدةً على قدره — ولو كان ٥٠ صفحة.
+_PLAN_AR = ("يتناول هذا القسم مسألة محددة من موضوع البحث بالتحليل والمقارنة، "
+            "ويعرض آراء الفقهاء فيها مع بيان الأساس القانوني لكل رأي. وتظهر أهمية "
+            "المسألة في أثرها العملي على المؤسسات والأفراد. ")
+_PLAN_EN = ("This section examines one specific question of the topic through "
+            "analysis and comparison, and sets out the main positions with the "
+            "reasoning behind each. Its practical effect on institutions and people "
+            "explains why it matters. ")
+
+
+def _plan_mock(spec, lang, words, ch, per, sub, para_w):
+    """مستندٌ تجريبيٌّ بهيكل الطلب نفسِه (غلاف، مقدّمة، مباحث ومطالب وتقسيمات،
+    خاتمة، مراجع) ونصٍّ بعدد `words` في فقراتٍ من `para_w` كلمة."""
+    base = (_PLAN_AR if lang == "ar" else _PLAN_EN).split()
+
+    def text(n):
+        out, k = [], 0
+        while n > 0:
+            m = min(n, para_w)
+            out.append(" ".join(base[(k + t) % len(base)] for t in range(m)))
+            k += m
+            n -= m
+        return "\n\n".join(out)
+    units = 2 + ch * (1 + per * (1 + sub))
+    share = max(1, words // units)
+    secs = [{"heading": "x", "level": 1, "body": text(share)}]
+    for _c in range(ch):
+        secs.append({"heading": "x", "level": 1, "body": text(share)})
+        for _p in range(per):
+            secs.append({"heading": "x", "level": 2, "body": text(share)})
+            for _s in range(sub):
+                secs.append({"heading": "x", "level": 3, "body": text(share)})
+    secs.append({"heading": "x", "level": 1, "body": text(share)})
+    m = {k: v for k, v in spec.items()
+         if k in ("font", "font_en", "format", "page", "page_size", "theme", "cover",
+                  "toc", "header")}
+    rules = spec.get("rules") if isinstance(spec.get("rules"), dict) else {}
+    refs = spec.get("references")
+    n_refs = (len(refs) if isinstance(refs, list) else 0) or \
+        int(_num(rules.get("references_min")) or 0) or 10
+    m.update({"title": spec.get("title") or "x", "lang": lang, "sections": secs,
+              "references": [" ".join(base[:18])] * n_refs})
+    return m
+
+
+def plan_word(spec):
+    """{"pages", "text_words", …} لمواصفةٍ فيها "pages": يُبنى مستندٌ تجريبيٌّ
+    بالهيكل والتنسيق المطلوبَين ويُقاس بمقياس الفحص نفسِه، ثمّ يُصحَّح العددُ
+    حتى يطابق (فلا يقول الفحصُ بعد الكتابة «أضف» أو «احذف» كثيراً)."""
+    pages = _num(spec.get("pages"))
+    if not pages:
+        raise Fail('plan needs "pages" in the spec (the length the user asked for)')
+    lang = _lang_of(spec, spec.get("title"))
+    ol = spec.get("outline") if isinstance(spec.get("outline"), dict) else {}
+    ch = int(_num(ol.get("chapters")) or 3)
+    per = int(_num(ol.get("per_chapter")) or 3)
+    sub = int(_num(ol.get("sub_min")) or 0)
+    para_w = 70
+    _paths()
+    from docx_pages import estimate_pages
+    words = int(pages * 260)
+    wpp = 260
+    for _round in range(3):
+        fd, tmp = tempfile.mkstemp(prefix="weaver-plan-", suffix=".docx")
+        os.close(fd)
+        try:
+            build_word(_plan_mock(spec, lang, words, ch, per, sub, para_w), tmp)
+            e = estimate_pages(tmp)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        got = max(0.3, e["exact"])
+        wpp = max(60, int(e["words"] / got))
+        if abs(got - pages) <= 0.25:
+            break
+        words = max(100, int(words * pages / got))
+    front = (1 if spec.get("cover") not in (None, False, "no", "none") else 0) + \
+        (1 if spec.get("toc") else 0)
+    intro = int(words * 0.07)
+    concl = int(words * 0.06)
+    per_chapter = int((words - intro - concl) / max(1, ch))
+    per_section = int(per_chapter * 0.92 / max(1, per))
+    files = max(ch + 2, -(-words // 1200))
+    return {"pages": pages, "words_per_page": wpp, "text_words": words,
+            "front_pages": front, "intro": intro, "conclusion": concl,
+            "chapters": ch, "per_chapter": per_chapter, "per_section": per_section,
+            "sections_per_chapter": per, "files": files}
+
+
+def cmd_plan(spec_path):
+    spec = _load_json(spec_path)
+    pl = plan_word(spec)
+    return "\n".join([
+        "plan: %g pages ≈ %d words of text in total (measured on a mock document "
+        "with this structure, font, size, spacing, paper, cover and references; "
+        "≈ %d words/page overall)" % (pl["pages"], pl["text_words"],
+                                       pl["words_per_page"]),
+        "   introduction ≈ %d · each of %d chapters ≈ %d (≈ %d per section × %d) · "
+        "conclusion ≈ %d" % (pl["intro"], pl["chapters"], pl["per_chapter"],
+                             pl["per_section"], pl["sections_per_chapter"],
+                             pl["conclusion"]),
+        "   write it in %d+ section files (≤ ~1200 words each — one reply has a length "
+        "limit), then build once and read the check" % pl["files"]])
 
 
 def cmd_chart(spec_path, out=None, into=None):
@@ -2474,7 +2747,7 @@ def cmd_edit(path, ops_path, out=None, allow_loss=False):
 
 
 # ═════════════════════════════════ CLI ══════════════════════════════════
-USAGE = __doc__.split("قواعد:")[0].strip().splitlines()[-6:]
+USAGE = __doc__.split("قواعد:")[0].strip().splitlines()[-7:]
 
 
 def _opt(args, name, default=None):
@@ -2518,6 +2791,11 @@ def main(argv=None):
             print("✓ " + cmd_build(args[0], out))
             print("✓ saved: %s" % out)
             return 0
+        if cmd == "plan":
+            if not args:
+                raise Fail("usage: plan SPEC.json   (the spec needs \"pages\")")
+            print("✓ " + cmd_plan(args[0]))
+            return 0
         if cmd == "chart":
             out = _opt(args, "--out")
             into = _opt(args, "--into")
@@ -2541,7 +2819,7 @@ def main(argv=None):
             else:
                 print("✗ nothing applied — no file written")
             return 0 if not res["failed"] else (2 if res["done"] else 1)
-        raise Fail("unknown command %s — use info, build, chart, edit" % cmd)
+        raise Fail("unknown command %s — use info, build, plan, chart, edit" % cmd)
     except Refused as e:
         print("✗ REFUSED: %s" % e)
         return 3

@@ -406,8 +406,8 @@ try:
     _set.update({a[2]: a[3] for a in _w if a[:2] == ["config", "set"]})
     chk("كتابةٌ واحدةٌ لا ثمانٍ (config patch)",
         len([a for a in _w if a[:2] == ["config", "set"]]) == 0, _w)
-    chk("ومهلةُ النوبةِ فيها — ٦٠٠ كما عند المحرّك",
-        _set.get("agents.defaults.timeoutSeconds") == "600", _set)
+    chk("ومهلةُ النوبةِ فيها — agent_deadline() (١٨٠٠: بحثٌ طويلٌ على هاتف)",
+        _set.get("agents.defaults.timeoutSeconds") == str(W.agent_deadline()), _set)
     chk("منفذُ البوّابة يُكتب في الإعداد (وإلّا قصدت الأوامرُ منفذاً آخر)",
         _set.get("gateway.port") == str(W.OUR_PORT), _set.get("gateway.port"))
     chk("والمتصفّحُ يحتاج المفتاحين معاً (شرطُ التوثيق)",

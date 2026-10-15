@@ -480,7 +480,7 @@ for n in ("office-word", "office-powerpoint", "office-excel", "office-charts"):
        "{{WEAVER}}/pipeline/office.py" in t)
     cmds = set(re.findall(r"office\.py (\w+)", t))
     ok("  ⟵ أوامرُها موجودة (%s)" % ", ".join(sorted(cmds)),
-       cmds and cmds <= {"info", "build", "chart", "edit", "fonts"}, cmds)
+       cmds and cmds <= {"info", "build", "plan", "chart", "edit", "fonts"}, cmds)
     ops_ = set(re.findall(r'"op":\s*"(\w+)"', t))
     miss = [x for x in ops_ if '"%s"' % x not in _src]
     ok("  ⟵ وكلُّ عمليّةٍ تذكرها تعرفها الأداة", not miss, miss)

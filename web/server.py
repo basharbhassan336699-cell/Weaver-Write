@@ -2253,6 +2253,12 @@ def _chat_via_engine(message, history=None, timeout=120, context=None,
         # ما لا يُشغّله. صار السببُ يُسجَّل ليظهر بطاقةً في الواجهة.
         _engine_fail((r or {}).get("note") or ans or "المحرّك لم يُجب")
         return None                       # ليتولّى القديمُ ولا يضيع الطلب
+    # «MEDIA:<مسار>» سطرُ إرفاقٍ يعلّمه المحرّكُ للنموذج (لقنوات المراسلة)، ولا
+    # تفهمه الواجهة — فظهر للمستخدم نصّاً خاماً («MEDIA:حقوق الطفل….docx»)
+    # والملفُّ نفسُه ظاهرٌ بطاقةً. يصير سطراً مقروءاً باسم الملفّ.
+    ans = re.sub(r"(?m)^[ \t]*MEDIA:[ \t]*(\S[^\n]*?)[ \t]*$",
+                 lambda m: "📎 " + os.path.basename(m.group(1).strip().strip("`'\"")),
+                 ans)
     return {"reply": ans, "engine": "weaver-core",
             "provider": "weaver-core", "model": _wc.model_id() or "",
             "effort": "engine"}
@@ -3712,7 +3718,9 @@ def _engine_warmup():
         from pipeline import weaver_core as _wc
         if not (_wc.available() and _wc.node_bin() and _wc.gateway_on()):
             return
-        _wc.ensure_workspace()
+        # ما رُقّي من الدستور والمهارات وملفّات التعريف يُكتب في سجلّ الخادم
+        # (~/wsrv.log) — فيُرى إن بقي شيءٌ لم يُرقَّ (حرّرتَه أو حرّره النموذج).
+        _wc.ensure_workspace(say=lambda t: print("[workspace] " + str(t), flush=True))
         _wc.model_sync()
         ok, _why = _wc.gateway_start()
         if ok and _wc.worker_on():

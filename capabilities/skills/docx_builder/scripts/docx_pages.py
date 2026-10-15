@@ -499,6 +499,29 @@ def _blocks(body, S, width):
     return out
 
 
+def paragraph_lines(path_or_doc):
+    """عددُ أسطر كلِّ فقرةٍ في متن المستند (بترتيب doc.paragraphs) — بالقياس
+    نفسِه الذي تُقدَّر به الصفحات. لفحص «الفقرةُ من ٣ إلى ٦ أسطر». لا يرفع."""
+    try:
+        from docx import Document
+        doc = Document(path_or_doc) if isinstance(path_or_doc, str) else path_or_doc
+        S = _Styles(doc)
+        sec = doc.sections[-1]
+        pw = (sec.page_width or 7772400) / 12700
+        lm = (sec.left_margin if sec.left_margin is not None else 914400) / 12700
+        rm = (sec.right_margin if sec.right_margin is not None else 914400) / 12700
+        width = pw - lm - rm
+        out = []
+        for el in doc.element.body:
+            if el.tag == _W + "p":
+                props = _para_props(el, S)
+                n, _lh, _nw = _para_lines(el, S, width, props)
+                out.append(n)
+        return out
+    except Exception:
+        return []
+
+
 def estimate_pages(path_or_doc):
     from docx import Document
     doc = Document(path_or_doc) if isinstance(path_or_doc, str) else path_or_doc

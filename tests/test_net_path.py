@@ -30,13 +30,15 @@ def ok(name, cond, extra=""):
 
 
 print("\n— مهلةُ النوبة —")
-ok("الافتراضيُّ ٦٠٠ كما عند المحرّك", wc.agent_deadline() == 600,
+# الافتراضيُّ ١٨٠٠ (كانت ٦٠٠): بحثٌ طويلٌ على الهاتف لا تتّسع له عشرُ دقائق
+ok("الافتراضيُّ ١٨٠٠ (بحثٌ طويلٌ على هاتف)", wc.agent_deadline() == 1800,
    str(wc.agent_deadline()))
 ok("لا تنزل تحت ٦٠٠ ولو طُلب أقلّ",
-   wc._AGENT_DEADLINE_DEFAULT == 600)
+   wc._AGENT_DEADLINE_DEFAULT >= 600)
 _old = os.environ.get("WEAVER_AGENT_DEADLINE")
 os.environ["WEAVER_AGENT_DEADLINE"] = "30"
-ok("قيمةٌ سخيفةٌ في البيئة تُرَدّ إلى ٦٠٠", wc.agent_deadline() == 600)
+ok("قيمةٌ سخيفةٌ في البيئة تُرَدّ إلى الافتراضيّ",
+   wc.agent_deadline() == wc._AGENT_DEADLINE_DEFAULT)
 os.environ["WEAVER_AGENT_DEADLINE"] = "1200"
 ok("قيمةٌ أوسعُ في البيئة تُحترم", wc.agent_deadline() == 1200)
 if _old is None:
